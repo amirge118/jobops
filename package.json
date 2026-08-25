@@ -1,0 +1,55 @@
+{
+  "name": "jobops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first job search automation for ATS boards and WhatsApp groups",
+  "author": "amirge118",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amirge118/jobops.git"
+  },
+  "homepage": "https://github.com/amirge118/jobops#readme",
+  "keywords": [
+    "job-search",
+    "automation",
+    "whatsapp",
+    "ats",
+    "codex",
+    "sqlite"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "demo": "node scripts/web.mjs --demo --open",
+    "demo:no-open": "node scripts/web.mjs --demo",
+    "check": "for f in scripts/*.mjs scripts/jobs/*.mjs scripts/jobs/sources/*.mjs scripts/providers/*.mjs web/*.js; do node --check \"$f\" || exit 1; done",
+    "test": "node --test tests/*.test.mjs",
+    "jobs": "node scripts/jobs.mjs",
+    "jobs:open": "node scripts/jobs/open.mjs",
+    "jobs:verify-groups": "node scripts/jobs/verify-groups.mjs",
+    "jobs:mark-read": "node scripts/jobs/mark-groups-read.mjs",
+    "jobs:migrate-whatsapp": "node scripts/migrate-whatsapp-state.mjs",
+    "web": "node scripts/web.mjs --open",
+    "web:no-open": "node scripts/web.mjs",
+    "scan": "node scripts/scan.mjs",
+    "scan:dry": "node scripts/scan.mjs --dry-run",
+    "pdf": "node scripts/generate-pdf.mjs",
+    "liveness": "node scripts/check-liveness.mjs",
+    "dedup": "node scripts/dedup-tracker.mjs",
+    "normalize": "node scripts/normalize-statuses.mjs"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.9",
+    "better-sqlite3": "^11.7.0",
+    "js-yaml": "^5.3.0",
+    "pino": "^9.5.0",
+    "playwright": "^1.60.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

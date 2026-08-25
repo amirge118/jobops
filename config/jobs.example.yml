@@ -1,0 +1,48 @@
+# Public template for the unified job search.
+# Copy to config/jobs.yml and replace the placeholder groups/JIDs.
+
+scan:
+  defaultLookbackDays: 2
+  maxLookbackDays: 14
+  overlapHours: 12
+  pageCacheHours: 24
+
+sources:
+  ats:
+    enabled: true
+  whatsapp:
+    enabled: false
+    authPath: "auth"
+    # Opt in only if processed group messages should be marked as read.
+    markRead: false
+    groups:
+      - name: "Example jobs group"
+        jid: "000000000000000000@g.us"
+
+filters:
+  domains:
+    - backend
+    - data
+  acceptedLocations:
+    - "Tel Aviv"
+    - "Ramat Gan"
+    - "Herzliya"
+    - "Petah Tikva"
+  preferredSectors:
+    - fintech
+    - ai/ml
+
+decision:
+  minimumScore: 4.0
+  exactMatchScore: 4.5
+  criteriaVersion: "simple-v3-explainable"
+
+scoring:
+  provider: "codex"
+  batchSize: 8
+  # Optional: omit model to use the model selected in your signed-in Codex CLI.
+  # model: "gpt-5.6-luna"
+
+browser:
+  application: "Google Chrome"
+  openOnlyNew: true

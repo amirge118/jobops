@@ -1,0 +1,281 @@
+# Portal Scanner Configuration — jobOps (Israel market)
+# Used by: node scripts/scan.mjs   (zero-token scanner, hits ATS JSON APIs directly)
+#
+# NOTE: title_filter.positive is a broad starting set — /setup updates it
+# to match your actual target roles after your CV is imported.
+# Company board tokens are best-effort; run `node scripts/scan.mjs --dry-run`
+# and disable/fix any company that errors.
+
+location_filter:
+  always_allow:
+    - "Israel"
+    - "Tel Aviv"
+    - "Tel-Aviv"
+    - "Herzliya"
+    - "Ramat Gan"
+    - "Jerusalem"
+    - "Haifa"
+  allow:
+    - "Israel"
+    - "Tel Aviv"
+    - "Tel-Aviv"
+    - "Herzliya"
+    - "Ramat Gan"
+    - "Jerusalem"
+    - "Haifa"
+    - "Remote"
+  block:
+    - "United States"
+    - "New York"
+    - "San Francisco"
+    - "United Kingdom"
+    - "London"
+    - "India"
+    - "Poland"
+    - "Portugal"
+    - "Ukraine"
+
+# -- Recency filter (optional) --
+# Uncomment to only keep postings within N hours of their posting date (Greenhouse/
+# Lever/Ashby only, for now — other providers don't expose a date yet). Off by
+# default. For a one-off check without editing this file, use
+# `node scripts/scan.mjs --max-age=48` instead — it overrides this setting.
+# recency_filter:
+#   max_age_hours: 48
+
+# -- Title filter --
+# At least 1 positive must match AND 0 negatives (case-insensitive).
+# Set via /setup 2026-07-28 — target roles: Backend Engineer, Data Engineer.
+title_filter:
+  positive:
+    - "Software Engineer"
+    - "Backend"
+    - "Data Engineer"
+    - "Python"
+  negative:
+    - "Intern"
+    - "Student"
+    - "Embedded"
+    - "Firmware"
+    - "QA"
+    - "Manual"
+  seniority_boost:
+    - "Senior"
+    - "Staff"
+    - "Principal"
+    - "Lead"
+    - "Head"
+
+# -- Search queries (WebSearch-based, used by /search skill agents) --
+search_queries:
+  - name: Greenhouse — Israel
+    query: 'site:boards.greenhouse.io OR site:job-boards.greenhouse.io "Tel Aviv" OR "Israel" software engineer'
+    enabled: true
+
+  - name: Lever — Israel
+    query: 'site:jobs.lever.co "Tel Aviv" OR "Israel" engineer'
+    enabled: true
+
+  - name: Comeet — Israel
+    query: 'site:comeet.com "Tel Aviv" OR "Israel" engineer'
+    enabled: true
+
+  - name: Drushim
+    query: 'site:drushim.co.il מהנדס תוכנה OR מפתח'
+    enabled: true
+
+  - name: AllJobs
+    query: 'site:alljobs.co.il מפתח OR מהנדס תוכנה'
+    enabled: true
+
+  - name: JobMaster
+    query: 'site:jobmaster.co.il מפתח תוכנה'
+    enabled: true
+
+# -- Tracked companies (Israeli tech on supported ATSs) --
+# Supported providers: greenhouse, lever, ashby, workable, recruitee, smartrecruiters
+# Verify with: node scripts/scan.mjs --dry-run
+tracked_companies:
+
+  - name: Wiz
+    careers_url: https://job-boards.greenhouse.io/wizinc
+    api: https://boards-api.greenhouse.io/v1/boards/wizinc/jobs
+    notes: "Cloud security. TLV HQ."
+    enabled: true
+
+  - name: monday.com
+    careers_url: https://monday.com/careers
+    notes: "Work OS. TLV HQ. Uses Comeet — no API provider yet, covered by /search web sweep."
+    enabled: false
+
+  - name: Gong
+    careers_url: https://job-boards.greenhouse.io/gongio
+    api: https://boards-api.greenhouse.io/v1/boards/gongio/jobs
+    notes: "Revenue intelligence. Ramat Gan R&D."
+    enabled: true
+
+  - name: Lemonade
+    careers_url: https://www.lemonade.com/careers
+    notes: "Insurtech. TLV R&D. Uses Comeet — no API provider yet, covered by /search web sweep."
+    enabled: false
+
+  - name: Riskified
+    careers_url: https://job-boards.greenhouse.io/riskified
+    api: https://boards-api.greenhouse.io/v1/boards/riskified/jobs
+    notes: "Fraud prevention. TLV HQ."
+    enabled: true
+
+  - name: AppsFlyer
+    careers_url: https://job-boards.greenhouse.io/appsflyer
+    api: https://boards-api.greenhouse.io/v1/boards/appsflyer/jobs
+    notes: "Mobile attribution. Herzliya HQ."
+    enabled: true
+
+  - name: Similarweb
+    careers_url: https://job-boards.greenhouse.io/similarweb
+    api: https://boards-api.greenhouse.io/v1/boards/similarweb/jobs
+    notes: "Digital intelligence. TLV HQ."
+    enabled: true
+
+  - name: Forter
+    careers_url: https://job-boards.greenhouse.io/forter
+    api: https://boards-api.greenhouse.io/v1/boards/forter/jobs
+    notes: "Fraud prevention. TLV R&D."
+    enabled: true
+
+  - name: Melio
+    careers_url: https://job-boards.greenhouse.io/melio
+    api: https://boards-api.greenhouse.io/v1/boards/melio/jobs
+    notes: "B2B payments. TLV HQ."
+    enabled: true
+
+  - name: Snyk
+    careers_url: https://jobs.ashbyhq.com/snyk
+    notes: "Dev security. TLV R&D. Ashby board."
+    enabled: true
+
+  - name: Island
+    careers_url: https://www.island.io/careers
+    notes: "Enterprise browser. TLV R&D. Not on a supported ATS — covered by /search web sweep."
+    enabled: false
+
+  - name: Cato Networks
+    careers_url: https://job-boards.greenhouse.io/catonetworks
+    api: https://boards-api.greenhouse.io/v1/boards/catonetworks/jobs
+    notes: "SASE. TLV HQ."
+    enabled: true
+
+  - name: Via
+    careers_url: https://job-boards.greenhouse.io/via
+    api: https://boards-api.greenhouse.io/v1/boards/via/jobs
+    notes: "Transit tech. TLV R&D."
+    enabled: true
+
+  - name: Navan
+    careers_url: https://job-boards.greenhouse.io/tripactions
+    api: https://boards-api.greenhouse.io/v1/boards/tripactions/jobs
+    notes: "Travel & expense. TLV R&D. Board still under legacy name tripactions."
+    enabled: true
+
+  - name: Papaya Global
+    careers_url: https://www.papayaglobal.com/careers/
+    notes: "Global payroll. TLV HQ. Greenhouse board 'papaya' exists but is empty — likely Comeet."
+    enabled: false
+
+  - name: Fiverr
+    careers_url: https://www.fiverr.com/jobs
+    notes: "Marketplace. TLV HQ. Uses Comeet — no API provider yet, covered by /search web sweep."
+    enabled: false
+
+  - name: JFrog
+    careers_url: https://job-boards.greenhouse.io/jfrog
+    api: https://boards-api.greenhouse.io/v1/boards/jfrog/jobs
+    notes: "DevOps platform. Netanya HQ."
+    enabled: true
+
+  - name: HoneyBook
+    careers_url: https://www.honeybook.com/careers
+    notes: "SMB management. TLV R&D. Uses Comeet — no API provider yet, covered by /search web sweep."
+    enabled: false
+
+  - name: Fireblocks
+    careers_url: https://job-boards.greenhouse.io/fireblocks
+    api: https://boards-api.greenhouse.io/v1/boards/fireblocks/jobs
+    notes: "Crypto custody/DeFi infra. TLV HQ. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Pagaya
+    careers_url: https://job-boards.greenhouse.io/pagayais
+    api: https://boards-api.greenhouse.io/v1/boards/pagayais/jobs
+    notes: "AI-driven consumer lending/asset fintech. TLV R&D. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Lendbuzz
+    careers_url: https://jobs.lever.co/lendbuzz
+    notes: "AI-driven auto lending fintech. TLV. Lever board. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Traild
+    careers_url: https://jobs.lever.co/traildsoftware
+    notes: "Payments infrastructure fintech. TLV. Lever board. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Payzen
+    careers_url: https://jobs.lever.co/payzen
+    notes: "Healthcare BNPL fintech. TLV. Lever board token 404s (tried payzen/getpayzen/payzenhq) — no working API found, covered by /search web sweep."
+    enabled: false
+
+  - name: Tavily
+    careers_url: https://jobs.ashbyhq.com/tavily
+    notes: "AI search/RAG infra for LLM agents. TLV. Ashby board. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Semperis
+    careers_url: https://jobs.ashbyhq.com/semperis
+    notes: "Identity security platform with AI detection. TLV R&D. Ashby board. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: PointFive
+    careers_url: https://jobs.ashbyhq.com/pointfive
+    notes: "AI-driven cloud cost optimization. TLV. Ashby board. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Torq
+    careers_url: https://job-boards.greenhouse.io/torq
+    api: https://boards-api.greenhouse.io/v1/boards/torq/jobs
+    notes: "AI-native SecOps automation. TLV hybrid. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: PhaseV
+    careers_url: https://job-boards.greenhouse.io/phasev
+    api: https://boards-api.greenhouse.io/v1/boards/phasev/jobs
+    notes: "AI clinical-trials platform. TLV. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Nexxen
+    careers_url: https://boards.greenhouse.io/nexxen
+    notes: "Adtech data platform. TLV hybrid. Board token 404s (tried nexxen/nexxeninc/nexxenholdings) — no working API found, covered by /search web sweep."
+    enabled: false
+
+  - name: Tipalti
+    careers_url: https://tipalti.com/company/careers/
+    notes: "Finance automation/AP fintech. TLV. Board token 404s (tried tipalti/tipaltiinc) — no working API found, covered by /search web sweep."
+    enabled: false
+
+  - name: Payoneer
+    careers_url: https://www.payoneer.com/careers/
+    api: https://boards-api.greenhouse.io/v1/boards/payoneer/jobs
+    notes: "Cross-border payments fintech. Herzliya. Added via /search 2026-07-28."
+    enabled: true
+
+  - name: Eleos Health
+    careers_url: https://job-boards.greenhouse.io/eleoshealth
+    api: https://boards-api.greenhouse.io/v1/boards/eleoshealth/jobs
+    notes: "AI behavioral-health platform. TLV. Strong Python/Kafka/K8s/AWS fit. Added via /search 2026-08-20."
+    enabled: true
+
+  - name: Armis
+    careers_url: https://job-boards.greenhouse.io/armissecurity
+    api: https://boards-api.greenhouse.io/v1/boards/armissecurity/jobs
+    notes: "Cybersecurity asset-intelligence platform. TLV-Yafo. AWS-native data/backend roles. Added via /search 2026-08-20."
+    enabled: true

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "jobKey": { "type": "string" },
+          "company": { "type": "string" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "domainMatches": { "type": "boolean" },
+          "locationMatches": { "type": "boolean" },
+          "cvMatch": { "type": "number", "minimum": 1, "maximum": 5 },
+          "seniority": { "type": "number", "minimum": 1, "maximum": 5 },
+          "roleScope": { "type": "number", "minimum": 1, "maximum": 5 },
+          "location": { "type": "number", "minimum": 1, "maximum": 5 },
+          "sector": { "type": "number", "minimum": 1, "maximum": 5 },
+          "decisionReason": { "type": "string" },
+          "uncertainties": {
+            "type": "array",
+            "maxItems": 3,
+            "items": { "type": "string" }
+          }
+        },
+        "required": [
+          "jobKey",
+          "company",
+          "title",
+          "summary",
+          "domainMatches",
+          "locationMatches",
+          "cvMatch",
+          "seniority",
+          "roleScope",
+          "location",
+          "sector",
+          "decisionReason",
+          "uncertainties"
+        ]
+      }
+    }
+  },
+  "required": ["results"]
+}

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="לוח הבקרה המקומי של jobOps">
+    <title>jobOps — חיפוש משרות</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">JOB SEARCH COMMAND CENTER</p>
+          <h1>jobOps</h1>
+          <p class="subtitle">חיפוש, התאמה ופתיחת משרות — ממקום אחד.</p>
+        </div>
+        <div id="system-status" class="system-status" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-label">מוכן לעבודה</span>
+        </div>
+      </header>
+
+      <aside id="demo-banner" class="demo-banner" hidden>
+        <strong>מצב הדגמה</strong>
+        <span>כל החברות, המשרות והקבוצות במסך הזה סינתטיות. אין גישה ל-WhatsApp או לפרופיל אמיתי.</span>
+      </aside>
+
+      <section class="control-panel" aria-labelledby="scan-title">
+        <div class="section-heading">
+          <div>
+            <p class="step">01 / סריקה</p>
+            <h2 id="scan-title">מה לחפש היום?</h2>
+          </div>
+          <p>הסריקה משתמשת בפרופיל ובכללי ההתאמה הקיימים.</p>
+        </div>
+
+        <form id="scan-form" class="scan-form">
+          <label>
+            <span>טווח זמן</span>
+            <select id="days" name="days">
+              <option value="1">יום אחרון</option>
+              <option value="2" selected>יומיים אחרונים</option>
+              <option value="7">שבוע אחרון</option>
+              <option value="14">שבועיים אחרונים</option>
+            </select>
+          </label>
+          <label>
+            <span>מקור</span>
+            <select id="source" name="source">
+              <option value="all">ATS + WhatsApp</option>
+              <option value="ats">ATS בלבד</option>
+              <option value="whatsapp">WhatsApp בלבד</option>
+            </select>
+          </label>
+          <label class="toggle-row">
+            <input id="open-after" name="open" type="checkbox">
+            <span>פתח התאמות ב-Chrome בסיום</span>
+          </label>
+          <button class="button button-primary" type="submit">הפעל סריקה</button>
+        </form>
+
+        <div class="secondary-actions">
+          <button id="verify-groups" class="button button-secondary" type="button">אמת קבוצות WhatsApp</button>
+          <button id="open-jobs" class="button button-secondary" type="button">פתח התאמות חדשות ב-Chrome</button>
+        </div>
+        <div class="secondary-information">
+          <details>
+            <summary>איך מתקבלת החלטה?</summary>
+            <p>משרה פעילה בתחום ובמיקום המתאימים מקבלת ״מתאים״ מציון <strong id="minimum-score">4.0</strong>. מציון <strong id="exact-score">4.5</strong> היא ״בול מתאים״. שפה או framework שלא מופיעים בפרופיל אינם blocker אוטומטי.</p>
+          </details>
+          <details>
+            <summary>אילו קבוצות WhatsApp מוגדרות?</summary>
+            <ul id="groups-list"></ul>
+          </details>
+        </div>
+      </section>
+
+      <section class="summary-grid" aria-label="סיכום משרות">
+        <article><span>משרות מתאימות</span><strong id="suitable-count">0</strong></article>
+        <article><span>ממתינות לפתיחה</span><strong id="unopened-count">0</strong></article>
+        <article><span>קבוצות מוגדרות</span><strong id="groups-count">4</strong></article>
+      </section>
+
+      <section class="health-panel" aria-labelledby="health-title">
+        <div class="health-heading">
+          <div>
+            <p class="step">מצב מקורות</p>
+            <h2 id="health-title">האם הסריקה באמת עבדה?</h2>
+          </div>
+          <span id="health-time"></span>
+        </div>
+        <div class="health-grid">
+          <article><span class="health-dot" id="ats-health-dot"></span><div><strong>ATS</strong><span id="ats-health">טרם נסרק</span></div></article>
+          <article><span class="health-dot" id="whatsapp-health-dot"></span><div><strong>WhatsApp</strong><span id="whatsapp-health">טרם נסרק</span></div></article>
+          <article><span class="health-dot" id="groups-health-dot"></span><div><strong>קבוצות</strong><span id="groups-health">טרם אומתו</span></div></article>
+          <article><span class="health-dot" id="run-health-dot"></span><div><strong>ריצה אחרונה</strong><span id="run-health">אין מידע</span></div></article>
+        </div>
+      </section>
+
+      <section id="activity-card" class="activity-card" hidden aria-live="polite">
+        <div>
+          <span id="activity-kicker" class="step">פעילות אחרונה</span>
+          <strong id="activity-title"></strong>
+        </div>
+        <span id="activity-time"></span>
+        <details id="activity-details">
+          <summary>פלט הפעולה</summary>
+          <pre id="activity-output"></pre>
+        </details>
+      </section>
+
+      <section class="jobs-section" aria-labelledby="jobs-title">
+        <div class="section-heading jobs-heading">
+          <div>
+            <p class="step">02 / החלטות</p>
+            <h2 id="jobs-title">המשרות שמתאימות לך</h2>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>חברה ומשרה</th>
+                <th>תיאור קצר</th>
+                <th>ציון</th>
+                <th>התאמה</th>
+                <th>סיבת ההחלטה</th>
+                <th>קישור</th>
+                <th>פעולה</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-body"></tbody>
+          </table>
+          <div id="empty-state" class="empty-state">
+            <strong>עדיין אין משרות מתאימות להצגה</strong>
+            <span>משרה תופיע כאן רק לאחר שעברה את בדיקת ההתאמה.</span>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <span>המידע נשאר מקומי במחשב שלך.</span>
+        <span id="last-updated"></span>
+      </footer>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

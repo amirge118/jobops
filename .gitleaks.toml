@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local WhatsApp session credentials; auth/ is also gitignored"
+paths = [
+  '''^auth/''',
+]

@@ -1,0 +1,33 @@
+# Reference repos (cloned, not ours)
+refs/
+
+# Personal source documents (CV, diplomas, exports)
+documents/
+
+# Generated / private data
+output/
+reports/
+data/
+profile/
+auth/
+config/jobs.yml
+node_modules/
+logs/
+
+# Personal one-off helpers and local Claude state. Public agent workflows live in .agents/skills/.
+.claude/
+CLAUDE.md
+scripts/gen-cv-batch.mjs
+scripts/cv-batch-config.json
+
+# Local sync conflict copies; canonical files above remain the source of truth.
+README 2.md
+.agents/skills/search/SKILL 2.md
+.claude/skills/search/SKILL 2.md
+scripts/daily-run 2.sh
+
+# Local environment files
+.env
+.env.*
+!.env.example
+.DS_Store
