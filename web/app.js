@@ -146,6 +146,9 @@ function formatLastRun(lastRun) {
   }
   if (whatsapp) {
     lines.push(`WhatsApp: ${whatsapp.messages} הודעות, ${whatsapp.candidates} קישורים.`);
+    if (whatsapp.diagnostics) {
+      lines.push(`סנכרון WhatsApp: ${whatsapp.diagnostics.deliveredMessages} הודעות נמסרו מהשירות (${whatsapp.diagnostics.historyEvents} history, ${whatsapp.diagnostics.upsertEvents} live).`);
+    }
     for (const group of whatsapp.groups || []) {
       lines.push(`• ${group.name}: ${group.messages} הודעות, ${group.candidates} קישורים${group.error ? ` — ${group.error}` : ''}`);
     }

@@ -2,7 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { scanAts } from '../scripts/jobs/sources/ats.mjs';
-import { markConfiguredGroupsRead, verifyConfiguredGroups } from '../scripts/jobs/sources/whatsapp.mjs';
+import {
+  markConfiguredGroupsRead,
+  queueIncomingMessages,
+  verifyConfiguredGroups,
+} from '../scripts/jobs/sources/whatsapp.mjs';
+import {
+  createWhatsAppSocketOptions,
+  shouldRetryWhatsAppConnection,
+} from '../scripts/jobs/sources/whatsapp-client.mjs';
+import { fetchGroupMessagesSince } from '../scripts/jobs/sources/whatsapp-history.mjs';
 
 test('ATS source feeds portal offers into the shared store', async () => {
   const sightings = [];
@@ -82,4 +91,76 @@ test('WhatsApp read action uses collected message keys and chat timestamp fallba
     jid: 'b@g.us',
     modification: { markRead: true, lastMessages: { lastMessageTimestamp: 200 } },
   });
+});
+
+test('WhatsApp socket requests history as a supported web client', () => {
+  const options = createWhatsAppSocketOptions({ auth: { creds: {}, keys: {} }, logger: {} });
+
+  assert.equal(options.browser[0], 'Ubuntu');
+  assert.equal(options.browser[1], 'Chrome');
+  assert.equal(options.syncFullHistory, true);
+  assert.equal(options.markOnlineOnConnect, false);
+});
+
+test('WhatsApp retries transient disconnects but not logout or replacement', () => {
+  assert.equal(shouldRetryWhatsAppConnection(428), true);
+  assert.equal(shouldRetryWhatsAppConnection(408), true);
+  assert.equal(shouldRetryWhatsAppConnection(503), true);
+  assert.equal(shouldRetryWhatsAppConnection(401), false);
+  assert.equal(shouldRetryWhatsAppConnection(440), false);
+});
+
+test('WhatsApp ingress queues only bounded text from configured groups', () => {
+  const queued = [];
+  const store = {
+    queueWhatsAppMessage(message) {
+      queued.push(message);
+      return true;
+    },
+  };
+  const messages = [
+    {
+      key: { id: 'allowed', remoteJid: 'a@g.us', fromMe: false },
+      messageTimestamp: 100,
+      message: { ephemeralMessage: { message: { conversation: 'Backend role https://example.com/job/1' } } },
+    },
+    {
+      key: { id: 'other-group', remoteJid: 'b@g.us', fromMe: false },
+      messageTimestamp: 101,
+      message: { conversation: 'https://example.com/job/2' },
+    },
+    {
+      key: { id: 'too-large', remoteJid: 'a@g.us', fromMe: false },
+      messageTimestamp: 102,
+      message: { conversation: 'x'.repeat(40_000) },
+    },
+  ];
+
+  const result = queueIncomingMessages({
+    messages,
+    configuredGroupJids: new Set(['a@g.us']),
+    store,
+    sinceMs: 0,
+  });
+
+  assert.deepEqual(result, { queued: 1, duplicates: 0, ignored: 1, rejected: 1 });
+  assert.deepEqual(queued, [{
+    messageId: 'allowed',
+    groupJid: 'a@g.us',
+    timestamp: 100_000,
+    text: 'Backend role https://example.com/job/1',
+  }]);
+});
+
+test('WhatsApp history fetch does not use a synthetic message anchor', async () => {
+  let fetchCalls = 0;
+  const sock = {
+    historyStore: new Map(),
+    async fetchMessageHistory() { fetchCalls += 1; },
+  };
+
+  const messages = await fetchGroupMessagesSince(sock, { jid: 'a@g.us', name: 'Group A' }, 0);
+
+  assert.deepEqual(messages, []);
+  assert.equal(fetchCalls, 0);
 });

@@ -1,10 +1,16 @@
+import { normalizeMessageContent } from '@whiskeysockets/baileys';
+
 import { connectWhatsApp, disconnectWhatsApp } from './whatsapp-client.mjs';
 import { fetchGroupMessagesSince } from './whatsapp-history.mjs';
 
 const URL_PATTERN = /https?:\/\/[^\s)]+/g;
+const MAX_INGRESS_MESSAGES = 2_000;
+const MAX_MESSAGE_ID_CHARS = 256;
+const MAX_GROUP_JID_CHARS = 128;
+const MAX_MESSAGE_TEXT_CHARS = 32_000;
 
 function messageText(message) {
-  const body = message.message;
+  const body = normalizeMessageContent(message.message);
   if (!body) return '';
   return body.conversation ||
     body.extendedTextMessage?.text ||
@@ -12,6 +18,42 @@ function messageText(message) {
     body.videoMessage?.caption ||
     body.documentMessage?.caption ||
     '';
+}
+
+export function queueIncomingMessages({ messages = [], configuredGroupJids, store, sinceMs = 0 }) {
+  const result = { queued: 0, duplicates: 0, ignored: 0, rejected: 0 };
+  const boundedMessages = messages.slice(0, MAX_INGRESS_MESSAGES);
+  result.rejected += Math.max(0, messages.length - boundedMessages.length);
+
+  for (const message of boundedMessages) {
+    const messageId = message.key?.id;
+    const groupJid = message.key?.remoteJid;
+    if (!configuredGroupJids.has(groupJid)) {
+      result.ignored += 1;
+      continue;
+    }
+
+    const timestamp = Number(message.messageTimestamp) * 1_000;
+    const text = messageText(message);
+    if (
+      typeof messageId !== 'string' || messageId.length === 0 || messageId.length > MAX_MESSAGE_ID_CHARS ||
+      typeof groupJid !== 'string' || groupJid.length > MAX_GROUP_JID_CHARS ||
+      !Number.isFinite(timestamp) || timestamp <= 0 ||
+      typeof text !== 'string' || text.length > MAX_MESSAGE_TEXT_CHARS
+    ) {
+      result.rejected += 1;
+      continue;
+    }
+    if (timestamp < sinceMs) {
+      result.ignored += 1;
+      continue;
+    }
+
+    const queued = store.queueWhatsAppMessage({ messageId, groupJid, timestamp, text });
+    result[queued ? 'queued' : 'duplicates'] += 1;
+  }
+
+  return result;
 }
 
 function messageUrls(text) {
@@ -80,18 +122,21 @@ export async function markConfiguredGroupsRead(config, sock) {
 
 async function scanGroup({ sock, group, store, sinceMs, untilMs }) {
   const messages = await fetchGroupMessagesSince(sock, group, sinceMs);
+  queueIncomingMessages({
+    messages,
+    configuredGroupJids: new Set([group.jid]),
+    store,
+    sinceMs,
+  });
+  const pendingMessages = store.listPendingWhatsAppMessages(group.jid, { untilMs });
   const candidates = [];
   let latestTimestamp = store.getCheckpoint(`whatsapp:${group.jid}`) ?? 0;
 
-  for (const message of messages) {
-    const messageId = message.key?.id;
-    if (!messageId || !store.shouldProcessMessage(messageId)) continue;
-    const timestamp = Number(message.messageTimestamp) * 1000;
-    if (timestamp > untilMs) continue;
+  for (const message of pendingMessages) {
+    const { messageId, timestamp, text } = message;
     latestTimestamp = Math.max(latestTimestamp, timestamp);
 
     try {
-      const text = messageText(message);
       for (const url of messageUrls(text)) {
         const sighting = store.recordSighting({
           url,
@@ -112,7 +157,7 @@ async function scanGroup({ sock, group, store, sinceMs, untilMs }) {
   }
 
   if (latestTimestamp) store.setCheckpoint(`whatsapp:${group.jid}`, latestTimestamp);
-  return { group: group.name, messages: messages.length, candidates };
+  return { group: group.name, messages: pendingMessages.length, candidates };
 }
 
 export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now() }) {
@@ -120,8 +165,18 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
   if (!whatsapp?.enabled) return { source: 'whatsapp', candidates: [], groups: [] };
   if (!whatsapp.authAbsPath) throw new Error('WhatsApp authPath is not configured');
 
-  const sock = await connectWhatsApp(whatsapp.authAbsPath);
+  const configuredGroupJids = new Set(whatsapp.groups.map((group) => group.jid));
+  const ingress = { queued: 0, duplicates: 0, ignored: 0, rejected: 0 };
+  const sock = await connectWhatsApp(whatsapp.authAbsPath, {
+    onMessages(messages) {
+      const batch = queueIncomingMessages({ messages, configuredGroupJids, store, sinceMs });
+      for (const key of Object.keys(ingress)) ingress[key] += batch[key];
+    },
+  });
   try {
+    if (sock.ingressError) {
+      throw new Error(`WhatsApp message persistence failed: ${sock.ingressError.message}`);
+    }
     const verification = await verifyConfiguredGroups(config, sock);
     const missing = verification.filter((group) => !group.found);
     if (missing.length) {
@@ -152,11 +207,16 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
         });
       }
     }
+    if (sock.ingressError) {
+      throw new Error(`WhatsApp message persistence failed: ${sock.ingressError.message}`);
+    }
     const readResults = whatsapp.markRead ? await markConfiguredGroupsRead(config, sock) : [];
     const readByName = new Map(readResults.map((result) => [result.name, result]));
     return {
       source: 'whatsapp',
       candidates,
+      ingress,
+      diagnostics: sock.historyDiagnostics,
       groups: groups.map((group) => ({ ...group, read: readByName.get(group.name) || null })),
     };
   } finally {

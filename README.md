@@ -124,9 +124,17 @@ never moves a newer checkpoint backwards. After migration, avoid running both sc
 same time so two copies of the same linked-device session do not update independently.
 
 Each run reports ATS counts and, for every configured WhatsApp group, the number of messages and
-job links collected. WhatsApp history retrieval is best-effort: if the service returns no history,
-the run displays a clear warning instead of treating an empty result as proof that no messages
-exist. New messages and dedup state continue to be tracked locally.
+job links collected. It also reports how many messages WhatsApp delivered through history and live
+events, so a zero result can be distinguished from a real empty inbox. Messages are accepted only
+from the configured group JIDs. Their bounded text is kept in the local SQLite inbox only while the
+message is pending or failed; after successful processing, the text is erased and only dedup
+metadata remains.
+
+“New” in the phone UI and “history” in the scanner are not opposites. A message that arrives while
+JobOps is stopped is new to the user, but on the next scanner connection it is an offline gap that
+WhatsApp must sync. A freshly linked Web session is recommended when migrating from an older auth
+directory. Current WhatsApp servers reject Baileys clients that advertise the native Desktop
+sub-platform, so JobOps uses a Web Browser identity with `syncFullHistory: true`.
 
 ## Codex scoring without API billing
 

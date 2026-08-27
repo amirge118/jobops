@@ -75,6 +75,7 @@ export function createJobStore(databasePath) {
       message_id    TEXT PRIMARY KEY,
       group_jid     TEXT NOT NULL,
       wa_timestamp  INTEGER,
+      message_text  TEXT,
       status        TEXT NOT NULL,
       retry_count   INTEGER NOT NULL DEFAULT 0,
       last_error    TEXT,
@@ -112,6 +113,15 @@ export function createJobStore(databasePath) {
     db.exec('ALTER TABLE jobs ADD COLUMN fit_breakdown_json TEXT');
   }
   db.exec('CREATE INDEX IF NOT EXISTS jobs_archived_idx ON jobs(archived_at)');
+
+  const processedMessageColumns = db.prepare('PRAGMA table_info(processed_messages)').all();
+  if (!processedMessageColumns.some((column) => column.name === 'message_text')) {
+    db.exec('ALTER TABLE processed_messages ADD COLUMN message_text TEXT');
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS processed_messages_pending_idx
+    ON processed_messages(group_jid, status, wa_timestamp)
+  `);
 
   // Rejected jobs keep only identity/cache fields needed to avoid repeat work.
   db.exec(`
@@ -397,13 +407,58 @@ export function createJobStore(databasePath) {
       return !row || row.status !== 'done';
     },
 
+    queueWhatsAppMessage({ messageId, groupJid, timestamp, text }) {
+      const result = db.prepare(`
+        INSERT INTO processed_messages (
+          message_id, group_jid, wa_timestamp, message_text, status, retry_count, updated_at
+        ) VALUES (?, ?, ?, ?, 'pending', 0, ?)
+        ON CONFLICT(message_id) DO UPDATE SET
+          group_jid = excluded.group_jid,
+          wa_timestamp = excluded.wa_timestamp,
+          message_text = excluded.message_text,
+          status = 'pending',
+          last_error = NULL,
+          updated_at = excluded.updated_at
+        WHERE processed_messages.status <> 'done'
+          AND processed_messages.message_text IS NULL
+      `).run(messageId, groupJid, timestamp, text, Date.now());
+      return result.changes === 1;
+    },
+
+    listPendingWhatsAppMessages(groupJid, { untilMs = Date.now(), limit = 2_000 } = {}) {
+      const boundedLimit = Math.max(1, Math.min(Number(limit) || 2_000, 5_000));
+      return db.prepare(`
+        SELECT
+          message_id AS messageId,
+          group_jid AS groupJid,
+          wa_timestamp AS timestamp,
+          message_text AS text
+        FROM processed_messages
+        WHERE group_jid = ?
+          AND status IN ('pending', 'failed')
+          AND message_text IS NOT NULL
+          AND wa_timestamp <= ?
+        ORDER BY wa_timestamp ASC
+        LIMIT ?
+      `).all(groupJid, untilMs, boundedLimit);
+    },
+
+    getMessageState(messageId) {
+      const row = db.prepare(`
+        SELECT status, message_text IS NOT NULL AS has_text
+        FROM processed_messages
+        WHERE message_id = ?
+      `).get(messageId);
+      return row ? { status: row.status, hasText: Boolean(row.has_text) } : null;
+    },
+
     markMessageDone({ messageId, groupJid, timestamp = null }) {
       db.prepare(`
-        INSERT INTO processed_messages (message_id, group_jid, wa_timestamp, status, updated_at)
-        VALUES (?, ?, ?, 'done', ?)
+        INSERT INTO processed_messages (message_id, group_jid, wa_timestamp, message_text, status, updated_at)
+        VALUES (?, ?, ?, NULL, 'done', ?)
         ON CONFLICT(message_id) DO UPDATE SET
           status = 'done', wa_timestamp = excluded.wa_timestamp,
-          last_error = NULL, updated_at = excluded.updated_at
+          message_text = NULL, last_error = NULL, updated_at = excluded.updated_at
       `).run(messageId, groupJid, timestamp, Date.now());
     },
 

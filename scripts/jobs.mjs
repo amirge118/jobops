@@ -62,6 +62,11 @@ export function summarizeSourceResults(sourceResults) {
     error: group.error || null,
   }));
   const whatsappMessages = groups.reduce((total, group) => total + group.messages, 0);
+  const whatsappDiagnostics = {
+    historyEvents: Number(whatsapp?.diagnostics?.historyEvents || 0),
+    upsertEvents: Number(whatsapp?.diagnostics?.upsertEvents || 0),
+    deliveredMessages: Number(whatsapp?.diagnostics?.messages || 0),
+  };
 
   return {
     ats: ats ? {
@@ -79,6 +84,13 @@ export function summarizeSourceResults(sourceResults) {
       candidates: whatsapp.candidates.length,
       messages: whatsappMessages,
       groups,
+      ingress: {
+        queued: Number(whatsapp.ingress?.queued || 0),
+        duplicates: Number(whatsapp.ingress?.duplicates || 0),
+        ignored: Number(whatsapp.ingress?.ignored || 0),
+        rejected: Number(whatsapp.ingress?.rejected || 0),
+      },
+      diagnostics: whatsappDiagnostics,
       warning: groups.length > 0 && whatsappMessages === 0
         ? 'WhatsApp history לא הוחזרה באף קבוצה; החיבור תקין אך כיסוי הודעות עבר אינו מובטח.'
         : null,
@@ -98,6 +110,8 @@ function printSourceSummary(summary) {
       const suffix = group.error ? ` — ${group.error}` : '';
       console.log(`  ${marker} ${group.name}: ${group.messages} הודעות, ${group.candidates} קישורים${suffix}`);
     }
+    const diagnostics = summary.whatsapp.diagnostics;
+    console.log(`  סנכרון: ${diagnostics.deliveredMessages} הודעות נמסרו מהשירות (${diagnostics.historyEvents} אירועי history, ${diagnostics.upsertEvents} אירועי live).`);
     if (summary.whatsapp.warning) console.warn(`⚠️ ${summary.whatsapp.warning}`);
   }
 }

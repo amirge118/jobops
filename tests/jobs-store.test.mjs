@@ -64,6 +64,31 @@ test('failed messages remain retryable while completed messages do not', () => {
   store.close();
 });
 
+test('WhatsApp inbox is idempotent and erases message text after processing', () => {
+  const store = newStore();
+  const message = {
+    messageId: 'queued-message',
+    groupJid: 'group-a@g.us',
+    timestamp: 1_000,
+    text: 'Backend job https://example.com/jobs/backend',
+  };
+
+  assert.equal(store.queueWhatsAppMessage(message), true);
+  assert.equal(store.queueWhatsAppMessage(message), false);
+  assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), [{
+    messageId: 'queued-message',
+    groupJid: 'group-a@g.us',
+    timestamp: 1_000,
+    text: message.text,
+  }]);
+  assert.deepEqual(store.getMessageState('queued-message'), { status: 'pending', hasText: true });
+
+  store.markMessageDone({ messageId: 'queued-message', groupJid: 'group-a@g.us', timestamp: 1_000 });
+  assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), []);
+  assert.deepEqual(store.getMessageState('queued-message'), { status: 'done', hasText: false });
+  store.close();
+});
+
 test('cached pages expire according to TTL', () => {
   const store = newStore();
   store.savePage({

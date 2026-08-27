@@ -10,16 +10,6 @@ export async function fetchGroupMessagesSince(sock, group, sinceMs) {
     (left, right) => Number(left.messageTimestamp) - Number(right.messageTimestamp),
   )[0];
 
-  if (!oldest()) {
-    const anchor = { remoteJid: group.jid, fromMe: false, id: 'SYNTHETIC_JOBOPS_ANCHOR' };
-    try {
-      await sock.fetchMessageHistory(HISTORY_BATCH, anchor, Math.floor(Date.now() / 1000));
-      await sleep(HISTORY_WAIT_MS);
-    } catch (error) {
-      console.warn(`⚠️ ${group.name}: WhatsApp history bootstrap failed (${error.message}).`);
-    }
-  }
-
   let cursor = oldest();
   let batches = 0;
   while (cursor && Number(cursor.messageTimestamp) * 1000 > sinceMs && batches < MAX_BATCHES) {
