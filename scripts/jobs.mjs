@@ -24,12 +24,16 @@ export function parseArgs(argv) {
   if (argv.includes('--ats-only') && argv.includes('--whatsapp-only')) {
     throw new Error('Use either --ats-only or --whatsapp-only, not both');
   }
+  if (argv.includes('--retry-only') && (argv.includes('--ats-only') || argv.includes('--whatsapp-only'))) {
+    throw new Error('--retry-only cannot be combined with source-only flags');
+  }
   return {
     days,
     atsOnly: argv.includes('--ats-only'),
     whatsappOnly: argv.includes('--whatsapp-only'),
     open: argv.includes('--open'),
     dryRun: argv.includes('--dry-run'),
+    retryOnly: argv.includes('--retry-only'),
   };
 }
 
@@ -51,21 +55,127 @@ function uniqueCandidates(candidates) {
   return [...new Map(candidates.map((candidate) => [candidate.jobKey, candidate])).values()];
 }
 
+export function filterPendingCandidatesForSources(candidates, sources) {
+  if (sources.includes('retry') || (sources.includes('ats') && sources.includes('whatsapp'))) {
+    return candidates;
+  }
+  if (sources.includes('ats')) {
+    return candidates.filter((candidate) => String(candidate.source || '').startsWith('ATS:'));
+  }
+  if (sources.includes('whatsapp')) {
+    return candidates.filter((candidate) => String(candidate.source || '').startsWith('WhatsApp:'));
+  }
+  return [];
+}
+
+function processingScope(candidate) {
+  const source = String(candidate.source || '');
+  if (source.startsWith('WhatsApp: ')) {
+    return { source: 'whatsapp', name: source.slice('WhatsApp: '.length).trim() || 'WhatsApp' };
+  }
+  return { source: 'ats', name: 'ATS' };
+}
+
+export function summarizeProcessingResults(candidates, outcomes) {
+  const scopes = new Map();
+  const seen = new Set();
+
+  for (const candidate of candidates) {
+    const scope = processingScope(candidate);
+    const sightingKey = `${scope.source}:${scope.name}:${candidate.jobKey}`;
+    if (seen.has(sightingKey)) continue;
+    seen.add(sightingKey);
+
+    const scopeKey = `${scope.source}:${scope.name}`;
+    const row = scopes.get(scopeKey) || {
+      source: scope.source,
+      name: scope.name,
+      links: 0,
+      processed: 0,
+      suitable: 0,
+      notSuitable: 0,
+      failed: 0,
+      alreadyProcessed: 0,
+      failureReasons: {},
+    };
+    row.links += 1;
+
+    const outcome = outcomes.get(candidate.jobKey);
+    if (!outcome || outcome.status === 'failed') {
+      row.failed += 1;
+      const code = outcome?.code || 'unknown_failure';
+      row.failureReasons[code] = Number(row.failureReasons[code] || 0) + 1;
+    } else if (outcome.status === 'already-processed') {
+      row.alreadyProcessed += 1;
+    } else {
+      row.processed += 1;
+      if (outcome.status === 'suitable') row.suitable += 1;
+      else row.notSuitable += 1;
+    }
+    scopes.set(scopeKey, row);
+  }
+
+  const rows = [...scopes.values()];
+  const totals = rows.reduce((summary, row) => {
+    for (const field of ['links', 'processed', 'suitable', 'notSuitable', 'failed', 'alreadyProcessed']) {
+      summary[field] += row[field];
+    }
+    for (const [code, count] of Object.entries(row.failureReasons)) {
+      summary.failureReasons[code] = Number(summary.failureReasons[code] || 0) + Number(count);
+    }
+    return summary;
+  }, { links: 0, processed: 0, suitable: 0, notSuitable: 0, failed: 0, alreadyProcessed: 0, failureReasons: {} });
+
+  return { totals, scopes: rows };
+}
+
 export function summarizeSourceResults(sourceResults) {
   const ats = sourceResults.find((result) => result.source === 'ats');
   const whatsapp = sourceResults.find((result) => result.source === 'whatsapp');
-  const groups = (whatsapp?.groups || []).map((group) => ({
-    name: group.name,
-    found: Boolean(group.found),
-    messages: Number(group.messages || 0),
-    candidates: Number(group.candidates || 0),
-    error: group.error || null,
-  }));
+  const groups = (whatsapp?.groups || []).map((group) => {
+    const messages = Number(group.messages || 0);
+    const fallbackCoverage = group.error ? 'failed' : messages > 0 ? 'partial' : 'unknown';
+    return {
+      name: group.name,
+      found: Boolean(group.found),
+      messages,
+      candidates: Number(group.candidates || 0),
+      coverage: {
+        status: group.coverage?.status || fallbackCoverage,
+        requestedFrom: group.coverage?.requestedFrom ?? null,
+        oldestAt: group.coverage?.oldestAt ?? null,
+        newestAt: group.coverage?.newestAt ?? null,
+        delivered: Number(group.coverage?.delivered ?? messages),
+        collected: Number(group.coverage?.collected ?? messages),
+        batches: Number(group.coverage?.batches ?? 0),
+      },
+      read: group.read ? {
+        marked: Boolean(group.read.marked),
+        method: group.read.method || null,
+        messages: Number(group.read.messages || 0),
+        unreadBefore: group.read.unreadBefore == null ? null : Number(group.read.unreadBefore),
+        error: group.read.error || null,
+      } : null,
+      error: group.error || null,
+    };
+  });
   const whatsappMessages = groups.reduce((total, group) => total + group.messages, 0);
+  const whatsappReceivedMessages = groups.reduce(
+    (total, group) => total + group.coverage.delivered,
+    0,
+  );
+  const whatsappCoverageStatus = groups.length > 0 && groups.every(
+    (group) => group.coverage.status === 'complete',
+  ) ? 'complete' : 'incomplete';
   const whatsappDiagnostics = {
     historyEvents: Number(whatsapp?.diagnostics?.historyEvents || 0),
+    historyNotifications: Number(whatsapp?.diagnostics?.historyNotifications || 0),
     upsertEvents: Number(whatsapp?.diagnostics?.upsertEvents || 0),
     deliveredMessages: Number(whatsapp?.diagnostics?.messages || 0),
+    processedHistoryMessages: Number(whatsapp?.diagnostics?.processedHistoryMessages || 0),
+    accountSyncCounter: Number(whatsapp?.diagnostics?.accountSyncCounter || 0),
+    waitOutcome: whatsapp?.diagnostics?.waitOutcome || null,
+    waitMs: Number(whatsapp?.diagnostics?.waitMs || 0),
   };
 
   return {
@@ -83,6 +193,7 @@ export function summarizeSourceResults(sourceResults) {
     whatsapp: whatsapp ? {
       candidates: whatsapp.candidates.length,
       messages: whatsappMessages,
+      receivedMessages: whatsappReceivedMessages,
       groups,
       ingress: {
         queued: Number(whatsapp.ingress?.queued || 0),
@@ -91,11 +202,88 @@ export function summarizeSourceResults(sourceResults) {
         rejected: Number(whatsapp.ingress?.rejected || 0),
       },
       diagnostics: whatsappDiagnostics,
-      warning: groups.length > 0 && whatsappMessages === 0
-        ? 'WhatsApp history לא הוחזרה באף קבוצה; החיבור תקין אך כיסוי הודעות עבר אינו מובטח.'
+      coverageStatus: whatsappCoverageStatus,
+      warning: whatsappCoverageStatus !== 'complete'
+        ? 'WhatsApp history לא סיפק כיסוי מוכח לכל הקבוצות; אין להסיק ממספר ההודעות שכל החלון נסרק.'
         : null,
     } : null,
   };
+}
+
+export function completionStatusFor(summary) {
+  return (summary?.whatsapp && summary.whatsapp.coverageStatus !== 'complete') ||
+    Number(summary?.processing?.totals?.failed || 0) > 0
+    ? 'incomplete'
+    : 'success';
+}
+
+function recordRunAudit(store, runId, summary) {
+  if (summary.ats) {
+    store.recordRunEvent(runId, {
+      source: 'ats',
+      scope: 'source',
+      scopeKey: 'ATS',
+      stage: 'collection',
+      status: summary.ats.errors > 0 ? 'partial' : 'complete',
+      count: summary.ats.candidates,
+      details: {
+        found: summary.ats.found,
+        errors: summary.ats.errors,
+        filtered: summary.ats.filtered,
+      },
+    });
+  }
+  if (summary.whatsapp) {
+    store.recordRunEvent(runId, {
+      source: 'whatsapp',
+      scope: 'source',
+      scopeKey: 'WhatsApp',
+      stage: 'history-coverage',
+      status: summary.whatsapp.coverageStatus,
+      count: summary.whatsapp.messages,
+      details: {
+        receivedMessages: summary.whatsapp.receivedMessages,
+        candidates: summary.whatsapp.candidates,
+        diagnostics: summary.whatsapp.diagnostics,
+        ingress: summary.whatsapp.ingress,
+      },
+    });
+    for (const group of summary.whatsapp.groups) {
+      store.recordRunEvent(runId, {
+        source: 'whatsapp',
+        scope: 'group',
+        scopeKey: group.name,
+        stage: 'history-coverage',
+        status: group.coverage.status,
+        count: group.messages,
+        details: {
+          found: group.found,
+          candidates: group.candidates,
+          coverage: group.coverage,
+          read: group.read,
+          failed: Boolean(group.error),
+        },
+      });
+    }
+  }
+  for (const processing of summary.processing?.scopes || []) {
+    store.recordRunEvent(runId, {
+      source: processing.source,
+      scope: processing.source === 'whatsapp' ? 'group' : 'source',
+      scopeKey: processing.name,
+      stage: 'link-processing',
+      status: processing.failed > 0 ? 'partial' : 'complete',
+      count: processing.processed,
+      details: {
+        links: processing.links,
+        suitable: processing.suitable,
+        notSuitable: processing.notSuitable,
+        failed: processing.failed,
+        alreadyProcessed: processing.alreadyProcessed,
+        failureReasons: processing.failureReasons,
+      },
+    });
+  }
 }
 
 function printSourceSummary(summary) {
@@ -108,11 +296,25 @@ function printSourceSummary(summary) {
     for (const group of summary.whatsapp.groups) {
       const marker = group.error ? '✗' : '✓';
       const suffix = group.error ? ` — ${group.error}` : '';
-      console.log(`  ${marker} ${group.name}: ${group.messages} הודעות, ${group.candidates} קישורים${suffix}`);
+      const read = group.read?.marked ? ', סומן כנקרא' : group.read ? ', לא סומן כנקרא' : '';
+      console.log(`  ${marker} ${group.name}: ${group.coverage.delivered} התקבלו, ${group.messages} עובדו, ${group.candidates} קישורים, כיסוי ${group.coverage.status}${read}${suffix}`);
     }
     const diagnostics = summary.whatsapp.diagnostics;
-    console.log(`  סנכרון: ${diagnostics.deliveredMessages} הודעות נמסרו מהשירות (${diagnostics.historyEvents} אירועי history, ${diagnostics.upsertEvents} אירועי live).`);
+    console.log(`  סנכרון: ${diagnostics.deliveredMessages} הודעות נמסרו מהשירות (${diagnostics.historyNotifications} חבילות history הוכרזו, ${diagnostics.historyEvents} הושלמו, ${diagnostics.upsertEvents} אירועי live; המתנה ${diagnostics.waitOutcome || 'לא ידוע'}).`);
     if (summary.whatsapp.warning) console.warn(`⚠️ ${summary.whatsapp.warning}`);
+  }
+}
+
+function printProcessingSummary(processing) {
+  console.log('עיבוד קישורים:');
+  for (const scope of processing.scopes) {
+    console.log(`  ${scope.name}: ${scope.links} קישורים, ${scope.processed} נקראו, ${scope.suitable} מתאימים, ${scope.notSuitable} לא מתאימים, ${scope.failed} נכשלו, ${scope.alreadyProcessed} כבר נבדקו.`);
+    if (scope.failed > 0) {
+      const reasons = Object.entries(scope.failureReasons)
+        .map(([code, count]) => `${code}: ${count}`)
+        .join(', ');
+      console.log(`    סיבות כשל: ${reasons}`);
+    }
   }
 }
 
@@ -124,18 +326,57 @@ function reportPaths(reportsDir, generatedAt) {
   };
 }
 
-async function evaluateCandidates({ candidates, config, store, fetcher, scorer }) {
+export async function evaluateCandidates({ candidates, config, store, fetcher, scorer }) {
+  const outcomes = new Map();
   const pendingScores = [];
+  const recordFailure = (candidate, code, reason) => {
+    const outcome = {
+      status: 'failed',
+      code: String(code || 'unknown_failure').slice(0, 64),
+      reason: String(reason || 'Unknown failure').slice(0, 500),
+    };
+    outcomes.set(candidate.jobKey, outcome);
+    store.markEvaluationFailure(candidate.jobKey, outcome);
+  };
+
+  let fetched = 0;
   for (const candidate of candidates) {
-    const page = await fetcher.fetch(candidate.url);
+    const existing = store.getJob(candidate.jobKey);
+    const evaluationIsCurrent = existing?.evaluated_at &&
+      existing.profile_hash === scorer.profileHash &&
+      existing.criteria_version === config.decision.criteriaVersion;
+    if (evaluationIsCurrent || existing?.archived_at) {
+      outcomes.set(candidate.jobKey, { status: 'already-processed' });
+      continue;
+    }
+
+    let page;
+    try {
+      page = await fetcher.fetch(candidate.url);
+    } catch (error) {
+      recordFailure(candidate, 'page_fetch_failed', error?.message || 'Job page fetch failed.');
+      continue;
+    } finally {
+      fetched += 1;
+      if (fetched % 20 === 0 || fetched === candidates.length) {
+        console.log(`פתיחת קישורים: ${fetched}/${candidates.length}; ${pendingScores.length} עמודים פעילים ממתינים לציון.`);
+      }
+    }
     if (!store.needsEvaluation(candidate.jobKey, {
       contentHash: page.contentHash,
       profileHash: scorer.profileHash,
       criteriaVersion: config.decision.criteriaVersion,
       activeStatus: page.status,
-    })) continue;
+    })) {
+      outcomes.set(candidate.jobKey, { status: 'already-processed' });
+      continue;
+    }
 
     if (page.status !== 'active') {
+      if (page.status === 'uncertain') {
+        recordFailure(candidate, page.code || 'page_uncertain', page.reason || 'The job page could not be verified.');
+        continue;
+      }
       store.saveEvaluation(candidate.jobKey, {
         company: candidate.company || 'חברה לא ידועה',
         title: candidate.title || 'משרה לא ידועה',
@@ -151,14 +392,14 @@ async function evaluateCandidates({ candidates, config, store, fetcher, scorer }
         criteriaVersion: config.decision.criteriaVersion,
         evaluatedAt: Date.now(),
       });
+      outcomes.set(candidate.jobKey, { status: 'not-suitable' });
       continue;
     }
 
     pendingScores.push({ candidate, page });
   }
 
-  const results = await scorer.scoreBatch(pendingScores);
-  for (const result of results) {
+  const persistResult = (result) => {
     const item = pendingScores.find(({ candidate }) => candidate.jobKey === result.jobKey);
     if (!item) throw new Error(`Scorer returned an unexpected job: ${result.jobKey}`);
     store.saveEvaluation(result.jobKey, {
@@ -168,7 +409,20 @@ async function evaluateCandidates({ candidates, config, store, fetcher, scorer }
       criteriaVersion: config.decision.criteriaVersion,
       evaluatedAt: Date.now(),
     });
-  }
+    outcomes.set(result.jobKey, { status: result.suitable ? 'suitable' : 'not-suitable' });
+  };
+
+  await scorer.scoreBatchSettled(pendingScores, {
+    onProgress: ({ completed, total, failed, results, failures }) => {
+      for (const failure of failures) {
+        const item = pendingScores.find(({ candidate }) => candidate.jobKey === failure.jobKey);
+        if (item) recordFailure(item.candidate, failure.code, failure.reason);
+      }
+      for (const result of results) persistResult(result);
+      console.log(`ציון משרות: ${completed}/${total}; ${failed} נכשלו עד כה.`);
+    },
+  });
+  return outcomes;
 }
 
 export async function runJobs(argv = process.argv.slice(2)) {
@@ -185,11 +439,22 @@ export async function runJobs(argv = process.argv.slice(2)) {
 
   try {
     const sources = [];
-    if (!options.whatsappOnly && config.sources.ats?.enabled) sources.push('ats');
-    if (!options.atsOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    if (!options.retryOnly && !options.whatsappOnly && config.sources.ats?.enabled) sources.push('ats');
+    if (!options.retryOnly && !options.atsOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    if (options.retryOnly) sources.push('retry');
     if (sources.length === 0) throw new Error('No job sources are enabled for this run');
     const window = scanWindow({ config, store, requestedDays: options.days, sources });
-    if (!options.dryRun) runId = store.startRun({ fromTs: window.from, toTs: window.to, sources });
+    if (!options.dryRun) {
+      runId = store.startRun({ fromTs: window.from, toTs: window.to, sources });
+      store.recordRunEvent(runId, {
+        source: 'system',
+        scope: 'run',
+        scopeKey: String(runId),
+        stage: 'run',
+        status: 'started',
+        details: { sources },
+      });
+    }
 
     const sourceResults = [];
     if (sources.includes('ats')) {
@@ -208,10 +473,21 @@ export async function runJobs(argv = process.argv.slice(2)) {
     }
 
     runDetails = summarizeSourceResults(sourceResults);
+    if (options.retryOnly) console.log('ניסיון חוזר: מעבד רק קישורים שנכשלו או טרם קיבלו החלטה; המקורות לא נסרקים מחדש.');
     printSourceSummary(runDetails);
-    const candidates = uniqueCandidates(sourceResults.flatMap((result) => result.candidates));
+    const candidateSightings = sourceResults.flatMap((result) => result.candidates);
+    const retryCandidates = filterPendingCandidatesForSources(store.listPendingEvaluation(), sources);
+    const currentJobKeys = new Set(candidateSightings.map((candidate) => candidate.jobKey));
+    const processingCandidates = [
+      ...candidateSightings,
+      ...retryCandidates.filter((candidate) => !currentJobKeys.has(candidate.jobKey)),
+    ];
+    const candidates = uniqueCandidates([...candidateSightings, ...retryCandidates]);
     const scorer = createJobScorer(config);
-    await evaluateCandidates({ candidates, config, store, fetcher, scorer });
+    const outcomes = await evaluateCandidates({ candidates, config, store, fetcher, scorer });
+    runDetails.processing = summarizeProcessingResults(processingCandidates, outcomes);
+    printProcessingSummary(runDetails.processing);
+    if (runId) recordRunAudit(store, runId, runDetails);
 
     const unpresentedJobs = store.listUnpresentedSuitable();
     const matchingJobs = deduplicateJobs(unpresentedJobs);
@@ -237,10 +513,33 @@ export async function runJobs(argv = process.argv.slice(2)) {
       console.log(`נפתחו ${openResult.opened} משרות ב-${config.browser?.application || 'Google Chrome'}.`);
     }
 
-    if (runId) store.finishRun(runId, { status: 'success', details: runDetails });
+    const completionStatus = completionStatusFor(runDetails);
+    if (runId) {
+      store.recordRunEvent(runId, {
+        source: 'system',
+        scope: 'run',
+        scopeKey: String(runId),
+        stage: 'run',
+        status: completionStatus,
+      });
+      store.finishRun(runId, { status: completionStatus, details: runDetails });
+    }
+    if (completionStatus === 'incomplete') {
+      console.warn('⚠️ הריצה הסתיימה עם כיסוי חלקי; יש לעיין במשפך הקבוצות לפני הסקת מסקנות.');
+    }
     console.log(`נסרקו ${candidates.length} מועמדות; נמצאו ${matchingJobs.length} משרות חדשות מתאימות.`);
   } catch (error) {
-    if (runId) store.finishRun(runId, { status: 'failed', error: error.message, details: runDetails });
+    if (runId) {
+      store.recordRunEvent(runId, {
+        source: 'system',
+        scope: 'run',
+        scopeKey: String(runId),
+        stage: 'run',
+        status: 'failed',
+        details: { errorType: error.name || 'Error' },
+      });
+      store.finishRun(runId, { status: 'failed', error: error.message, details: runDetails });
+    }
     throw error;
   } finally {
     await fetcher.close();

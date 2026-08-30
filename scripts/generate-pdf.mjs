@@ -18,9 +18,6 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Ensure output directory exists (fresh setup)
-mkdirSync(resolve(__dirname, '..', 'output'), { recursive: true });
-
 /**
  * Normalize text for ATS compatibility by converting problematic Unicode.
  *
@@ -111,6 +108,7 @@ async function generatePDF() {
 
   inputPath = resolve(inputPath);
   outputPath = resolve(outputPath);
+  mkdirSync(dirname(outputPath), { recursive: true });
 
   // Validate format
   const validFormats = ['a4', 'letter'];

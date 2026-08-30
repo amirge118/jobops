@@ -26,7 +26,26 @@ export async function fetchGroupMessagesSince(sock, group, sinceMs) {
     cursor = oldest();
   }
 
-  return [...collected().values()]
+  const allMessages = [...collected().values()];
+  const timestamps = allMessages
+    .map((message) => Number(message.messageTimestamp) * 1_000)
+    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0);
+  const oldestAt = timestamps.length ? Math.min(...timestamps) : null;
+  const newestAt = timestamps.length ? Math.max(...timestamps) : null;
+  const messages = allMessages
     .filter((message) => Number(message.messageTimestamp) * 1000 >= sinceMs)
     .sort((left, right) => Number(left.messageTimestamp) - Number(right.messageTimestamp));
+
+  if (!sock.groupHistoryDiagnostics) sock.groupHistoryDiagnostics = new Map();
+  sock.groupHistoryDiagnostics.set(group.jid, {
+    status: oldestAt == null ? 'unknown' : oldestAt <= sinceMs ? 'complete' : 'partial',
+    requestedFrom: sinceMs,
+    oldestAt,
+    newestAt,
+    delivered: messages.length,
+    collected: allMessages.length,
+    batches,
+  });
+
+  return messages;
 }

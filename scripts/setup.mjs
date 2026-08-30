@@ -11,7 +11,7 @@ const COPIES = [
   ['templates/candidate-profile.example.md', 'profile/01-candidate-profile.md'],
   ['templates/preferences.example.md', 'profile/02-preferences.md'],
 ];
-const DIRECTORIES = ['auth', 'data', 'documents', 'output', 'profile', 'reports'];
+const DIRECTORIES = ['auth', 'data', 'documents', 'profile', 'reports'];
 
 export function setupProject({ rootDir = ROOT_DIR } = {}) {
   const created = [];

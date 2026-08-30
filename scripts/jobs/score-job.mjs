@@ -24,6 +24,7 @@ export async function runCodexExec({
   model,
   binary,
   spawnProcess = spawn,
+  timeoutMs = 120_000,
 }) {
   const args = [
     'exec',
@@ -52,12 +53,23 @@ export async function runCodexExec({
     });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch {}
+      finish(reject, new Error(`Codex scoring timed out after ${timeoutMs}ms`));
+    }, Math.max(1, Number(timeoutMs) || 120_000));
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.once('error', reject);
+    child.once('error', (error) => finish(reject, error));
     child.once('exit', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`codex exec exited with code ${code}: ${stderr.trim().slice(-1200)}`));
+      if (code === 0) finish(resolve, { stdout, stderr });
+      else finish(reject, new Error(`codex exec exited with code ${code}: ${stderr.trim().slice(-1200)}`));
     });
     child.stdin.end(prompt);
   });
@@ -102,9 +114,17 @@ function jobPayload({ candidate, page }) {
     knownCompany: candidate.company || 'unknown',
     knownTitle: candidate.title || 'unknown',
     url: page.finalUrl,
-    whatsappContext: candidate.messageText?.slice(0, 1500) || '',
     pageText: page.content.slice(0, 8000),
   };
+}
+
+function safeFailureReason(error) {
+  return String(error?.message || error || 'Unknown scoring failure')
+    .replace(/[\r\n\t\u0000-\u001f]+/g, ' ')
+    .replace(/([?&](?:token|key|code|session|auth)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
 }
 
 function finalizeResult(config, item, extracted) {
@@ -157,14 +177,14 @@ export function createJobScorer(config, {
     : DEFAULT_SCHEMA_PATH;
   const binary = resolveCodexBinary(config);
 
-  return {
-    provider: 'codex',
-    profileHash: context.profileHash,
-
-    async scoreBatch(items) {
-      const finalized = [];
-      for (let start = 0; start < items.length; start += batchSize) {
-        const batch = items.slice(start, start + batchSize);
+  async function scoreBatchSettled(items, { onProgress } = {}) {
+    const results = [];
+    const failures = [];
+    for (let start = 0; start < items.length; start += batchSize) {
+      const batch = items.slice(start, start + batchSize);
+      const batchResults = [];
+      const batchFailures = [];
+      try {
         const prompt = `${promptPrefix}\n\nJobs to score:\n${JSON.stringify(batch.map(jobPayload), null, 2)}`;
         const response = await runCodex({
           prompt,
@@ -172,15 +192,46 @@ export function createJobScorer(config, {
           cwd: config.rootDir,
           model: config.scoring?.model || null,
           binary,
+          timeoutMs: Math.max(1, Number(config.scoring?.timeoutSeconds || 120)) * 1000,
         });
         const byKey = new Map((response.results || []).map((result) => [result.jobKey, result]));
         for (const item of batch) {
           const extracted = byKey.get(item.candidate.jobKey);
           if (!extracted) throw new Error(`Codex scoring response is missing result for ${item.candidate.jobKey}`);
-          finalized.push(finalizeResult(config, item, extracted));
+          const finalized = finalizeResult(config, item, extracted);
+          results.push(finalized);
+          batchResults.push(finalized);
         }
+      } catch (error) {
+        const reason = safeFailureReason(error);
+        batchFailures.push(...batch.map((item) => ({
+          jobKey: item.candidate.jobKey,
+          code: 'scoring_failed',
+          reason,
+        })));
+        failures.push(...batchFailures);
       }
-      return finalized;
+      onProgress?.({
+        completed: Math.min(start + batch.length, items.length),
+        total: items.length,
+        failed: failures.length,
+        results: batchResults,
+        failures: batchFailures,
+      });
+    }
+    return { results, failures };
+  }
+
+  return {
+    provider: 'codex',
+    profileHash: context.profileHash,
+
+    scoreBatchSettled,
+
+    async scoreBatch(items) {
+      const settled = await scoreBatchSettled(items);
+      if (settled.failures.length > 0) throw new Error(settled.failures[0].reason);
+      return settled.results;
     },
 
     async score(item) {

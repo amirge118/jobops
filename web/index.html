@@ -61,7 +61,9 @@
         </form>
 
         <div class="secondary-actions">
+          <button id="retry-failed" class="button button-secondary" type="button">נסה שוב קישורים שנכשלו</button>
           <button id="verify-groups" class="button button-secondary" type="button">אמת קבוצות WhatsApp</button>
+          <button id="mark-read" class="button button-secondary" type="button">סמן קבוצות כנקראו</button>
           <button id="open-jobs" class="button button-secondary" type="button">פתח התאמות חדשות ב-Chrome</button>
         </div>
         <div class="secondary-information">
@@ -95,6 +97,35 @@
           <article><span class="health-dot" id="whatsapp-health-dot"></span><div><strong>WhatsApp</strong><span id="whatsapp-health">טרם נסרק</span></div></article>
           <article><span class="health-dot" id="groups-health-dot"></span><div><strong>קבוצות</strong><span id="groups-health">טרם אומתו</span></div></article>
           <article><span class="health-dot" id="run-health-dot"></span><div><strong>ריצה אחרונה</strong><span id="run-health">אין מידע</span></div></article>
+        </div>
+      </section>
+
+      <section class="audit-panel" aria-labelledby="audit-title">
+        <div class="health-heading">
+          <div>
+            <p class="step">דיבוג הריצה</p>
+            <h2 id="audit-title">מה באמת עבר בכל מקור?</h2>
+          </div>
+          <span>כיסוי לא ידוע לעולם אינו נחשב הצלחה.</span>
+        </div>
+        <div class="audit-table-wrap">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>מקור / קבוצה</th>
+                <th>כיסוי</th>
+                <th>הודעות / משרות</th>
+                <th>קישורים</th>
+                <th>תוצאת עיבוד הקישור</th>
+                <th>מצב</th>
+              </tr>
+            </thead>
+            <tbody id="run-audit-body"></tbody>
+          </table>
+          <div id="run-audit-empty" class="empty-state audit-empty">
+            <strong>עדיין אין נתוני דיבוג</strong>
+            <span>לאחר סריקה יוצגו כאן הספירות לפי מקור וקבוצה.</span>
+          </div>
         </div>
       </section>
 

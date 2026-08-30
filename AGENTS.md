@@ -10,14 +10,13 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 | `profile/01-candidate-profile.md` | Source of truth for ALL CV claims | user data |
 | `profile/02-preferences.md` | Targets, salary, deal-breakers | user data |
 | `config/jobs.yml` | Unified scan sources, windows, thresholds, and WhatsApp groups | user data |
-| `documents/` | Raw CV/exports the user drops in | user data |
+| `documents/` | The single current source CV | user data |
 | `portals.yml` | Scanner config: companies, title/location filters | user data |
 | `data/applications.md` | Application tracker | user data |
 | `data/pipeline.md` | Inbox of pending job URLs | user data |
 | `data/scan-history.tsv` | Scanner dedup history (auto) | user data |
 | `data/story-bank.md` | Accumulated STAR+R interview stories | user data |
 | `reports/` | Evaluation reports `{###}-{company-slug}-{YYYY-MM-DD}.md` | user data |
-| `output/` | Generated CV/cover-letter HTML + PDFs | generated |
 | `templates/` | CV HTML template, canonical states, portals example | system |
 | `scripts/jobs.mjs` | Unified ATS + WhatsApp scan, scoring, reporting, and optional Chrome opening | system |
 | `scripts/jobs/` | Shared job collection, storage, evaluation, and output modules | system |
@@ -28,7 +27,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 
 ## Workflow
 
-`/setup` (once) → `/search` → `/apply <url>` → `/track`.
+`/setup` (once) → `/search` → `/track`.
 `/upskill` and `/discover` run periodically.
 
 ## Hard Rules
@@ -43,6 +42,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 7. **README is a living doc.** Whenever capabilities, structure, or roadmap change, update README.md in the same session.
 8. **Israeli market conventions:** CVs in English, ≤ 2 pages, no photo needed; salaries quoted in ₪/month gross; comp research from Israeli sources (levels.fyi, Glassdoor IL, agency salary tables).
 9. **No scoring API keys.** Job scoring uses `codex exec` with the cached ChatGPT login. Never silently fall back to usage-based API authentication.
+10. **No per-job document archive.** Keep only the current source CV in `documents/`; job history belongs in SQLite and the application tracker, not in `output/{job}` folders.
 
 ## Scripts (run from project root)
 

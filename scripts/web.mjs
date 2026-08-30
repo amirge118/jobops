@@ -52,8 +52,14 @@ async function readJson(request) {
   }
 }
 
+export function sanitizeCommandOutput(value) {
+  return String(value)
+    .replace(/<Buffer(?:\s+[0-9a-f]{2})+(?:\s+\.\.\.\s+\d+\s+more\s+bytes)?\s*>/gi, '<redacted-buffer>')
+    .replace(/(['"])[A-Za-z0-9+/]{20,}={0,2}\1(?=\s*:\s*\{\s*chainKey)/g, "'[redacted-session]'");
+}
+
 function appendOutput(current, chunk) {
-  return `${current}${chunk}`.slice(-MAX_OUTPUT_CHARS);
+  return sanitizeCommandOutput(`${current}${chunk}`).slice(-MAX_OUTPUT_CHARS);
 }
 
 function runCommand({ command, args }, rootDir, onOutput) {
@@ -147,7 +153,7 @@ export function createDashboardServer({ config = loadJobsConfig(), execute = run
       }
 
       const actionMatch = request.method === 'POST'
-        ? url.pathname.match(/^\/api\/actions\/(scan|verify-groups|open-jobs)$/)
+        ? url.pathname.match(/^\/api\/actions\/(scan|verify-groups|open-jobs|retry-failed|mark-read)$/)
         : null;
       if (actionMatch) {
         const body = await readJson(request);

@@ -26,6 +26,23 @@ function parseJson(value, fallback = null) {
   }
 }
 
+function requiredAuditField(value, name, maxLength = 64) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized || normalized.length > maxLength) {
+    throw new Error(`${name} must contain between 1 and ${maxLength} characters`);
+  }
+  return normalized;
+}
+
+function serializeAuditDetails(details) {
+  if (details == null) return null;
+  const serialized = JSON.stringify(details);
+  if (Buffer.byteLength(serialized, 'utf8') > 16 * 1024) {
+    throw new Error('run event details exceed 16KB');
+  }
+  return serialized;
+}
+
 export function createJobStore(databasePath) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new Database(databasePath);
@@ -56,7 +73,10 @@ export function createJobStore(databasePath) {
       evaluated_at     INTEGER,
       presented_at     INTEGER,
       opened_at        INTEGER,
-      archived_at      INTEGER
+      archived_at      INTEGER,
+      last_error_code  TEXT,
+      last_error_reason TEXT,
+      last_attempted_at INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS jobs_company_role_idx ON jobs(company_role_key);
@@ -98,6 +118,22 @@ export function createJobStore(databasePath) {
       error       TEXT,
       details_json TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS run_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id      INTEGER NOT NULL,
+      source      TEXT NOT NULL,
+      scope       TEXT NOT NULL,
+      scope_key   TEXT,
+      stage       TEXT NOT NULL,
+      status      TEXT NOT NULL,
+      item_count  INTEGER,
+      details_json TEXT,
+      created_at  INTEGER NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS run_events_run_idx ON run_events(run_id, id);
   `);
 
   const runColumns = db.prepare('PRAGMA table_info(runs)').all();
@@ -111,6 +147,15 @@ export function createJobStore(databasePath) {
   }
   if (!jobColumns.some((column) => column.name === 'fit_breakdown_json')) {
     db.exec('ALTER TABLE jobs ADD COLUMN fit_breakdown_json TEXT');
+  }
+  if (!jobColumns.some((column) => column.name === 'last_error_code')) {
+    db.exec('ALTER TABLE jobs ADD COLUMN last_error_code TEXT');
+  }
+  if (!jobColumns.some((column) => column.name === 'last_error_reason')) {
+    db.exec('ALTER TABLE jobs ADD COLUMN last_error_reason TEXT');
+  }
+  if (!jobColumns.some((column) => column.name === 'last_attempted_at')) {
+    db.exec('ALTER TABLE jobs ADD COLUMN last_attempted_at INTEGER');
   }
   db.exec('CREATE INDEX IF NOT EXISTS jobs_archived_idx ON jobs(archived_at)');
 
@@ -136,6 +181,16 @@ export function createJobStore(databasePath) {
       apply_url = canonical_url,
       sources_json = '[]'
     WHERE suitable = 0 AND evaluated_at IS NOT NULL
+  `);
+
+  // A rejected role retains only job identity and evaluation hashes for dedup.
+  // Full fetched page text is unnecessary once the decision is final.
+  db.exec(`
+    DELETE FROM job_pages
+    WHERE canonical_url IN (
+      SELECT canonical_url FROM jobs
+      WHERE suitable = 0 AND evaluated_at IS NOT NULL
+    )
   `);
 
   db.exec(`
@@ -176,7 +231,7 @@ export function createJobStore(databasePath) {
       const existing = findByIdentity.get({ canonicalUrl, companyRoleKey });
 
       if (existing) {
-        if (existing.archived_at) {
+        if (existing.archived_at || (existing.evaluated_at && !existing.suitable)) {
           db.prepare('UPDATE jobs SET last_seen_at = ? WHERE job_key = ?').run(seenAt, existing.job_key);
           return { jobKey: existing.job_key, canonicalUrl: existing.canonical_url, isNew: false };
         }
@@ -220,6 +275,27 @@ export function createJobStore(databasePath) {
 
     countJobs() {
       return db.prepare('SELECT COUNT(*) AS count FROM jobs').get().count;
+    },
+
+    listPendingEvaluation({ limit = 5_000 } = {}) {
+      const boundedLimit = Math.max(1, Math.min(Number(limit) || 5_000, 10_000));
+      return db.prepare(`
+        SELECT
+          job_key AS jobKey,
+          canonical_url AS canonicalUrl,
+          apply_url AS url,
+          company,
+          title,
+          sources_json AS sourcesJson
+        FROM jobs
+        WHERE archived_at IS NULL
+          AND (evaluated_at IS NULL OR last_error_code IS NOT NULL)
+        ORDER BY first_seen_at ASC
+        LIMIT ?
+      `).all(boundedLimit).map(({ sourcesJson, ...job }) => ({
+        ...job,
+        source: parseSources(sourcesJson)[0] || 'retry',
+      }));
     },
 
     getDashboardSnapshot() {
@@ -277,6 +353,24 @@ export function createJobStore(databasePath) {
         (activeStatus && job.active_status !== activeStatus);
     },
 
+    markEvaluationFailure(jobKey, { code, reason, attemptedAt = Date.now() }) {
+      const safeCode = String(code || 'unknown_failure').trim();
+      if (!/^[a-z0-9_:-]{1,64}$/i.test(safeCode)) throw new Error('Invalid evaluation failure code');
+      const safeReason = String(reason || 'Unknown evaluation failure')
+        .replace(/[\r\n\t\u0000-\u001f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 500);
+      const result = db.prepare(`
+        UPDATE jobs SET
+          last_error_code = ?,
+          last_error_reason = ?,
+          last_attempted_at = ?
+        WHERE job_key = ? AND archived_at IS NULL
+      `).run(safeCode, safeReason, attemptedAt, jobKey);
+      if (result.changes !== 1) throw new Error(`Cannot record evaluation failure for job: ${jobKey}`);
+    },
+
     saveEvaluation(jobKey, evaluation) {
       const existing = this.getJob(jobKey);
       if (!existing) throw new Error(`Unknown job: ${jobKey}`);
@@ -298,7 +392,10 @@ export function createJobStore(databasePath) {
           profile_hash = @profileHash,
           criteria_version = @criteriaVersion,
           evaluated_at = @evaluatedAt,
-          sources_json = @sources
+          sources_json = @sources,
+          last_error_code = NULL,
+          last_error_reason = NULL,
+          last_attempted_at = @evaluatedAt
         WHERE job_key = @jobKey
       `).run({
         ...evaluation,
@@ -317,6 +414,9 @@ export function createJobStore(databasePath) {
         sources: suitable ? existing.sources_json : '[]',
         jobKey,
       });
+      if (!suitable) {
+        db.prepare('DELETE FROM job_pages WHERE canonical_url = ?').run(existing.canonical_url);
+      }
     },
 
     listUnpresentedSuitable() {
@@ -377,6 +477,9 @@ export function createJobStore(databasePath) {
           evaluated_at = NULL,
           presented_at = NULL,
           opened_at = NULL,
+          last_error_code = NULL,
+          last_error_reason = NULL,
+          last_attempted_at = NULL,
           archived_at = ?
         WHERE job_key = ? AND archived_at IS NULL
       `).run(at, jobKey);
@@ -400,6 +503,10 @@ export function createJobStore(databasePath) {
           content_hash = excluded.content_hash,
           fetched_at = excluded.fetched_at
       `).run({ canonicalUrl, finalUrl, status, content, contentHash, fetchedAt });
+    },
+
+    discardPage(canonicalUrl) {
+      db.prepare('DELETE FROM job_pages WHERE canonical_url = ?').run(canonicalUrl);
     },
 
     shouldProcessMessage(messageId) {
@@ -441,6 +548,17 @@ export function createJobStore(databasePath) {
         ORDER BY wa_timestamp ASC
         LIMIT ?
       `).all(groupJid, untilMs, boundedLimit);
+    },
+
+    listWhatsAppMessageKeys(groupJid, { limit = 2_000 } = {}) {
+      const boundedLimit = Math.max(1, Math.min(Number(limit) || 2_000, 5_000));
+      return db.prepare(`
+        SELECT message_id AS id, group_jid AS remoteJid
+        FROM processed_messages
+        WHERE group_jid = ? AND message_id IS NOT NULL
+        ORDER BY wa_timestamp DESC
+        LIMIT ?
+      `).all(groupJid, boundedLimit).map((key) => ({ ...key, fromMe: false }));
     },
 
     getMessageState(messageId) {
@@ -528,11 +646,66 @@ export function createJobStore(databasePath) {
         .run(finishedAt, status, error, details ? JSON.stringify(details) : null, runId);
     },
 
+    recordRunEvent(runId, {
+      source,
+      scope,
+      scopeKey = null,
+      stage,
+      status,
+      count = null,
+      details = null,
+      createdAt = Date.now(),
+    }) {
+      const normalizedCount = count == null ? null : Number(count);
+      if (normalizedCount != null && (!Number.isInteger(normalizedCount) || normalizedCount < 0)) {
+        throw new Error('run event count must be a non-negative integer');
+      }
+      return db.prepare(`
+        INSERT INTO run_events (
+          run_id, source, scope, scope_key, stage, status, item_count, details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        runId,
+        requiredAuditField(source, 'run event source', 32),
+        requiredAuditField(scope, 'run event scope', 32),
+        scopeKey == null ? null : requiredAuditField(scopeKey, 'run event scope key', 200),
+        requiredAuditField(stage, 'run event stage', 64),
+        requiredAuditField(status, 'run event status', 32),
+        normalizedCount,
+        serializeAuditDetails(details),
+        Number(createdAt),
+      ).lastInsertRowid;
+    },
+
+    listRunEvents(runId, { limit = 500 } = {}) {
+      const boundedLimit = Math.max(1, Math.min(Number(limit) || 500, 2_000));
+      return db.prepare(`
+        SELECT
+          id,
+          run_id AS runId,
+          source,
+          scope,
+          scope_key AS scopeKey,
+          stage,
+          status,
+          item_count AS count,
+          details_json AS detailsJson,
+          created_at AS createdAt
+        FROM run_events
+        WHERE run_id = ?
+        ORDER BY id ASC
+        LIMIT ?
+      `).all(runId, boundedLimit).map(({ detailsJson, ...event }) => ({
+        ...event,
+        details: parseJson(detailsJson, null),
+      }));
+    },
+
     getLastRun() {
       const row = db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT 1').get();
       if (!row) return null;
       const { details_json: detailsJson, ...run } = row;
-      return { ...run, details: parseJson(detailsJson) };
+      return { ...run, details: parseJson(detailsJson), events: this.listRunEvents(row.id) };
     },
 
     getLastSuccessfulRun(requiredSources = []) {

@@ -82,6 +82,11 @@ test('WhatsApp inbox is idempotent and erases message text after processing', ()
     text: message.text,
   }]);
   assert.deepEqual(store.getMessageState('queued-message'), { status: 'pending', hasText: true });
+  assert.deepEqual(store.listWhatsAppMessageKeys('group-a@g.us'), [{
+    id: 'queued-message',
+    remoteJid: 'group-a@g.us',
+    fromMe: false,
+  }]);
 
   store.markMessageDone({ messageId: 'queued-message', groupJid: 'group-a@g.us', timestamp: 1_000 });
   assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), []);
@@ -102,6 +107,76 @@ test('cached pages expire according to TTL', () => {
 
   assert.ok(store.getFreshPage('https://example.com/jobs/42', { now: 1_500, ttlMs: 1_000 }));
   assert.equal(store.getFreshPage('https://example.com/jobs/42', { now: 2_001, ttlMs: 1_000 }), null);
+  store.close();
+});
+
+test('jobs whose page or scoring failed remain available for a later retry', () => {
+  const store = newStore();
+  const sighting = store.recordSighting({
+    url: 'https://example.com/jobs/retry-me',
+    source: 'WhatsApp: Group A',
+    seenAt: 1_000,
+  });
+
+  assert.deepEqual(store.listPendingEvaluation(), [{
+    jobKey: sighting.jobKey,
+    canonicalUrl: sighting.canonicalUrl,
+    url: 'https://example.com/jobs/retry-me',
+    company: '',
+    title: '',
+    source: 'WhatsApp: Group A',
+  }]);
+
+  store.markEvaluationFailure(sighting.jobKey, {
+    code: 'page_uncertain',
+    reason: 'Dynamic page could not be rendered.',
+    attemptedAt: 1_500,
+  });
+  const failed = store.getJob(sighting.jobKey);
+  assert.equal(failed.last_error_code, 'page_uncertain');
+  assert.equal(failed.last_error_reason, 'Dynamic page could not be rendered.');
+  assert.equal(failed.last_attempted_at, 1_500);
+  assert.equal(store.listPendingEvaluation().length, 1);
+
+  store.saveEvaluation(sighting.jobKey, {
+    company: 'Example', title: 'Backend Engineer', summary: 'Backend role.',
+    score: 4.2, fitLabel: 'מתאים', decisionReason: 'Relevant role.', suitable: true,
+    applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: 'content-v1',
+    profileHash: 'profile-v1', criteriaVersion: 'v1', evaluatedAt: 2_000,
+  });
+  const evaluated = store.getJob(sighting.jobKey);
+  assert.equal(evaluated.last_error_code, null);
+  assert.equal(evaluated.last_error_reason, null);
+  assert.deepEqual(store.listPendingEvaluation(), []);
+  store.close();
+});
+
+test('a failed re-evaluation keeps the previous decision and remains retryable', () => {
+  const store = newStore();
+  const sighting = store.recordSighting({
+    url: 'https://example.com/jobs/recheck-me',
+    company: 'Example',
+    title: 'Backend Engineer',
+    source: 'ATS: example',
+    seenAt: 1_000,
+  });
+  store.saveEvaluation(sighting.jobKey, {
+    company: 'Example', title: 'Backend Engineer', summary: 'Previous evaluation.',
+    score: 3.2, fitLabel: 'לא מתאים', decisionReason: 'Previous decision.', suitable: false,
+    applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: 'old-content',
+    profileHash: 'old-profile', criteriaVersion: 'old-criteria', evaluatedAt: 2_000,
+  });
+
+  store.markEvaluationFailure(sighting.jobKey, {
+    code: 'page_fetch_failed',
+    reason: 'Temporary upstream failure.',
+    attemptedAt: 3_000,
+  });
+
+  const failed = store.getJob(sighting.jobKey);
+  assert.equal(failed.evaluated_at, 2_000);
+  assert.equal(failed.last_error_code, 'page_fetch_failed');
+  assert.equal(store.listPendingEvaluation().some((job) => job.jobKey === sighting.jobKey), true);
   store.close();
 });
 
@@ -131,6 +206,39 @@ test('run source summary is persisted for the dashboard', () => {
   const run = store.getLastRun();
   assert.equal(run.id, Number(runId));
   assert.deepEqual(run.details, details);
+  store.close();
+});
+
+test('run audit events persist safe structured processing evidence', () => {
+  const store = newStore();
+  const runId = store.startRun({ fromTs: 10, toTs: 20, sources: ['whatsapp'], startedAt: 30 });
+
+  store.recordRunEvent(runId, {
+    source: 'whatsapp',
+    scope: 'group',
+    scopeKey: 'Group A',
+    stage: 'history-coverage',
+    status: 'incomplete',
+    count: 0,
+    details: { coverage: 'unknown', candidates: 0 },
+    createdAt: 35,
+  });
+  store.finishRun(runId, { status: 'incomplete', finishedAt: 40 });
+
+  const run = store.getLastRun();
+  assert.deepEqual(run.events, [{
+    id: 1,
+    runId: Number(runId),
+    source: 'whatsapp',
+    scope: 'group',
+    scopeKey: 'Group A',
+    stage: 'history-coverage',
+    status: 'incomplete',
+    count: 0,
+    details: { coverage: 'unknown', candidates: 0 },
+    createdAt: 35,
+  }]);
+  assert.equal(store.getLastSuccessfulRun(['whatsapp']), null);
   store.close();
 });
 
@@ -168,6 +276,14 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     title: 'Frontend Engineer',
     source: 'whatsapp',
     seenAt: 200,
+  });
+  store.savePage({
+    canonicalUrl: rejected.canonicalUrl,
+    finalUrl: rejected.canonicalUrl,
+    status: 'active',
+    content: 'private rejected job description',
+    contentHash: 'frontend-v1',
+    fetchedAt: 250,
   });
 
   store.saveEvaluation(matching.jobKey, {
@@ -228,6 +344,16 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
   assert.equal(rejectedRow.apply_url, rejected.canonicalUrl);
   assert.equal(rejectedRow.sources_json, '[]');
   assert.ok(rejectedRow.company_role_key, 'company-role identity is retained only for dedup');
+  assert.equal(store.getFreshPage(rejected.canonicalUrl, { now: 500, ttlMs: 1_000 }), null);
+
+  store.recordSighting({
+    url: rejected.canonicalUrl,
+    company: 'Example',
+    title: 'Frontend Engineer',
+    source: 'WhatsApp: another group',
+    seenAt: 600,
+  });
+  assert.equal(store.getJob(rejected.jobKey).sources_json, '[]');
   store.close();
 });
 

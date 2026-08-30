@@ -118,8 +118,32 @@ export function createDemoEnvironment({ rootDir, now = Date.now() }) {
       whatsapp: {
         candidates: 5,
         messages: 21,
+        coverageStatus: 'complete',
         warning: null,
-        groups: GROUPS.map((name, index) => ({ name, found: true, messages: 4 + index, candidates: index === 0 ? 2 : 1, error: null })),
+        groups: GROUPS.map((name, index) => ({
+          name,
+          found: true,
+          messages: 4 + index,
+          candidates: index === 0 ? 2 : 1,
+          coverage: {
+            status: 'complete',
+            requestedFrom: now - 24 * 60 * 60 * 1000,
+            oldestAt: now - 24 * 60 * 60 * 1000,
+            newestAt: now - 60 * 60 * 1000,
+            delivered: 4 + index,
+          },
+          error: null,
+        })),
+      },
+      processing: {
+        totals: { links: 13, processed: 11, suitable: 4, notSuitable: 7, failed: 0, alreadyProcessed: 2 },
+        scopes: [
+          { source: 'ats', name: 'ATS', links: 8, processed: 7, suitable: 2, notSuitable: 5, failed: 0, alreadyProcessed: 1 },
+          { source: 'whatsapp', name: GROUPS[0], links: 2, processed: 2, suitable: 1, notSuitable: 1, failed: 0, alreadyProcessed: 0 },
+          { source: 'whatsapp', name: GROUPS[1], links: 1, processed: 1, suitable: 1, notSuitable: 0, failed: 0, alreadyProcessed: 0 },
+          { source: 'whatsapp', name: GROUPS[2], links: 1, processed: 1, suitable: 0, notSuitable: 1, failed: 0, alreadyProcessed: 0 },
+          { source: 'whatsapp', name: GROUPS[3], links: 1, processed: 0, suitable: 0, notSuitable: 0, failed: 0, alreadyProcessed: 1 },
+        ],
       },
     },
   });

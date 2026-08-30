@@ -8,6 +8,7 @@ const MAX_INGRESS_MESSAGES = 2_000;
 const MAX_MESSAGE_ID_CHARS = 256;
 const MAX_GROUP_JID_CHARS = 128;
 const MAX_MESSAGE_TEXT_CHARS = 32_000;
+const READ_RECEIPT_BATCH_SIZE = 100;
 
 function messageText(message) {
   const body = normalizeMessageContent(message.message);
@@ -61,6 +62,23 @@ function messageUrls(text) {
   return [...new Set(urls)];
 }
 
+export function diagnoseUnavailableHistory(groups, diagnostics = {}, authDiagnostics = {}) {
+  const noEvents = Number(diagnostics.historyEvents || 0) === 0 &&
+    Number(diagnostics.upsertEvents || 0) === 0;
+  const existingSessionAlreadySynced = Number(authDiagnostics.processedHistoryMessages || 0) > 0;
+  const noAnchors = groups.length > 0 && groups.every(
+    (group) => group.coverage?.status === 'unknown' && Number(group.coverage?.delivered || 0) === 0,
+  );
+  if (!noEvents || !existingSessionAlreadySynced || !noAnchors) return groups;
+
+  const error = 'WhatsApp לא שלח היסטוריה לחיבור הקיים, שכבר צרך סנכרון קודם. נדרש לקשר session חדש כדי לקבל נקודת התחלה להודעות הישנות.';
+  return groups.map((group) => ({
+    ...group,
+    coverage: { ...group.coverage, status: 'failed', reason: 'stale-session-no-anchor' },
+    error: group.error || error,
+  }));
+}
+
 export async function verifyConfiguredGroups(config, sock) {
   const participating = await sock.groupFetchAllParticipating();
   return config.sources.whatsapp.groups.map((configured) => {
@@ -75,7 +93,7 @@ export async function verifyConfiguredGroups(config, sock) {
   });
 }
 
-export async function markConfiguredGroupsRead(config, sock) {
+export async function markConfiguredGroupsRead(config, sock, { store } = {}) {
   const groups = config.sources.whatsapp?.groups || [];
   const results = [];
 
@@ -90,20 +108,40 @@ export async function markConfiguredGroupsRead(config, sock) {
       }
 
       const chat = sock.chatStore?.get(group.jid);
-      const lastMessageTimestamp = Number(chat?.lastMessageRecvTimestamp || 0);
+      const liveTimestamp = Number(chat?.lastMessageRecvTimestamp || 0);
+      const checkpointMs = Number(store?.getCheckpoint(`whatsapp:${group.jid}`) || 0);
+      const storedTimestamp = checkpointMs > 0 ? Math.floor(checkpointMs / 1_000) : 0;
+      const lastMessageTimestamp = Math.max(liveTimestamp, storedTimestamp);
       if (lastMessageTimestamp > 0) {
-        await sock.chatModify({
-          markRead: true,
-          lastMessages: { lastMessageTimestamp },
-        }, group.jid);
-        results.push({
-          name: group.name,
-          marked: true,
-          method: 'chat-state',
-          messages: 0,
-          unreadBefore: Number(chat.unreadCount || 0),
-        });
-        continue;
+        try {
+          await sock.chatModify({
+            markRead: true,
+            lastMessages: { lastMessageTimestamp },
+          }, group.jid);
+          results.push({
+            name: group.name,
+            marked: true,
+            method: 'chat-state',
+            messages: 0,
+            unreadBefore: Number(chat?.unreadCount || 0),
+            anchor: liveTimestamp > 0 ? 'live-chat' : 'stored-checkpoint',
+          });
+          continue;
+        } catch (chatStateError) {
+          const storedKeys = store?.listWhatsAppMessageKeys(group.jid) || [];
+          if (storedKeys.length === 0) throw chatStateError;
+          for (let index = 0; index < storedKeys.length; index += READ_RECEIPT_BATCH_SIZE) {
+            await sock.readMessages(storedKeys.slice(index, index + READ_RECEIPT_BATCH_SIZE));
+          }
+          results.push({
+            name: group.name,
+            marked: true,
+            method: 'stored-message-receipts',
+            messages: storedKeys.length,
+            fallbackReason: String(chatStateError.message || chatStateError).slice(0, 200),
+          });
+          continue;
+        }
       }
 
       results.push({
@@ -122,6 +160,10 @@ export async function markConfiguredGroupsRead(config, sock) {
 
 async function scanGroup({ sock, group, store, sinceMs, untilMs }) {
   const messages = await fetchGroupMessagesSince(sock, group, sinceMs);
+  const coverage = sock.groupHistoryDiagnostics?.get(group.jid) || {
+    status: 'unknown', requestedFrom: sinceMs, oldestAt: null, newestAt: null,
+    delivered: messages.length, collected: messages.length, batches: 0,
+  };
   queueIncomingMessages({
     messages,
     configuredGroupJids: new Set([group.jid]),
@@ -147,7 +189,6 @@ async function scanGroup({ sock, group, store, sinceMs, untilMs }) {
           ...sighting,
           url,
           source: `WhatsApp: ${group.name}`,
-          messageText: text,
         });
       }
       store.markMessageDone({ messageId, groupJid: group.jid, timestamp });
@@ -157,7 +198,7 @@ async function scanGroup({ sock, group, store, sinceMs, untilMs }) {
   }
 
   if (latestTimestamp) store.setCheckpoint(`whatsapp:${group.jid}`, latestTimestamp);
-  return { group: group.name, messages: pendingMessages.length, candidates };
+  return { group: group.name, messages: pendingMessages.length, candidates, coverage };
 }
 
 export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now() }) {
@@ -195,6 +236,7 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
           ...verification[index],
           messages: result.value.messages,
           candidates: result.value.candidates.length,
+          coverage: result.value.coverage,
           error: null,
         });
         candidates.push(...result.value.candidates);
@@ -203,6 +245,7 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
           ...verification[index],
           messages: 0,
           candidates: 0,
+          coverage: { status: 'failed', requestedFrom: sinceMs, oldestAt: null, newestAt: null, delivered: 0 },
           error: result.reason?.message ?? String(result.reason),
         });
       }
@@ -210,14 +253,19 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
     if (sock.ingressError) {
       throw new Error(`WhatsApp message persistence failed: ${sock.ingressError.message}`);
     }
-    const readResults = whatsapp.markRead ? await markConfiguredGroupsRead(config, sock) : [];
+    const diagnosedGroups = diagnoseUnavailableHistory(
+      groups,
+      sock.historyDiagnostics,
+      sock.authDiagnostics,
+    );
+    const readResults = whatsapp.markRead ? await markConfiguredGroupsRead(config, sock, { store }) : [];
     const readByName = new Map(readResults.map((result) => [result.name, result]));
     return {
       source: 'whatsapp',
       candidates,
       ingress,
-      diagnostics: sock.historyDiagnostics,
-      groups: groups.map((group) => ({ ...group, read: readByName.get(group.name) || null })),
+      diagnostics: { ...sock.historyDiagnostics, ...sock.authDiagnostics },
+      groups: diagnosedGroups.map((group) => ({ ...group, read: readByName.get(group.name) || null })),
     };
   } finally {
     await disconnectWhatsApp(sock);

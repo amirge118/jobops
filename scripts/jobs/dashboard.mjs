@@ -34,6 +34,18 @@ export function buildActionCommand(action, options, rootDir) {
       args: [path.join(rootDir, 'scripts', 'jobs', 'open.mjs')],
     };
   }
+  if (action === 'retry-failed') {
+    return {
+      command: process.execPath,
+      args: [path.join(rootDir, 'scripts', 'jobs.mjs'), '--retry-only'],
+    };
+  }
+  if (action === 'mark-read') {
+    return {
+      command: process.execPath,
+      args: [path.join(rootDir, 'scripts', 'jobs', 'mark-groups-read.mjs')],
+    };
+  }
   throw new Error(`Unknown action: ${action}`);
 }
 
@@ -42,5 +54,7 @@ export function actionLabel(action) {
     scan: 'סריקת משרות',
     'verify-groups': 'אימות קבוצות WhatsApp',
     'open-jobs': 'פתיחת משרות ב-Chrome',
+    'retry-failed': 'ניסיון חוזר לקישורים שנכשלו',
+    'mark-read': 'סימון קבוצות WhatsApp כנקראו',
   }[action] || action;
 }

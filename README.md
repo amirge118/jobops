@@ -130,11 +130,29 @@ from the configured group JIDs. Their bounded text is kept in the local SQLite i
 message is pending or failed; after successful processing, the text is erased and only dedup
 metadata remains.
 
+The local dashboard includes a per-source and per-group audit funnel. WhatsApp coverage is marked
+`complete`, `partial`, `unknown`, or `failed`; a run with unproven coverage is persisted as
+`incomplete` rather than a successful empty scan. Safe structured audit events are stored in the
+local SQLite database with the run ID, stage, status, counts, and bounded metadata. Credentials,
+session material, and full message bodies are never copied into audit events.
+
+After URL extraction, scoring uses only the fetched job page—not the WhatsApp message text. The
+dashboard reports, for ATS and for each WhatsApp group, how many unique links were read, matched,
+rejected, failed, or had already been processed. Rejected roles retain only technical identity and
+evaluation hashes for deduplication; their description, decision details, source label, and cached
+page text are removed.
+
 “New” in the phone UI and “history” in the scanner are not opposites. A message that arrives while
 JobOps is stopped is new to the user, but on the next scanner connection it is an offline gap that
 WhatsApp must sync. A freshly linked Web session is recommended when migrating from an older auth
 directory. Current WhatsApp servers reject Baileys clients that advertise the native Desktop
 sub-platform, so JobOps uses a Web Browser identity with `syncFullHistory: true`.
+
+If all configured groups are found but a run receives zero history and live events, an existing
+linked-device session may already have consumed its one-time initial history before JobOps could
+persist it. The dashboard marks this as `failed` with `stale-session-no-anchor`; it is not an empty
+scan. Recover by linking a fresh private session, then run the WhatsApp scan while the initial sync
+is still available.
 
 ## Codex scoring without API billing
 
@@ -188,7 +206,7 @@ profile/                 private candidate profile (ignored)
 auth/                    private WhatsApp session (ignored)
 data/                    private SQLite state and application pipeline (ignored)
 reports/                 generated reports (ignored)
-documents/               private source CVs (ignored)
+documents/               the single current source CV (ignored)
 ```
 
 The older focused commands remain available for maintenance tasks:
@@ -198,7 +216,7 @@ npm run scan:dry
 npm run liveness
 npm run dedup
 npm run normalize
-npm run pdf -- input.html output.pdf --format=a4
+npm run pdf -- input.html /tmp/jobops-cv.pdf --format=a4
 ```
 
 ## Development

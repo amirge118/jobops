@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { buildActionCommand, parseDashboardOptions } from '../scripts/jobs/dashboard.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
-import { createDashboardServer } from '../scripts/web.mjs';
+import { createDashboardServer, sanitizeCommandOutput } from '../scripts/web.mjs';
 
 test('dashboard scan options become a shell-free jobs command', () => {
   const options = parseDashboardOptions({ days: 2, source: 'whatsapp', open: true }, 14);
@@ -32,7 +32,26 @@ test('dashboard actions use fixed scripts and reject unknown actions', () => {
     command: process.execPath,
     args: ['/project/scripts/jobs/open.mjs'],
   });
+  assert.deepEqual(buildActionCommand('retry-failed', {}, '/project'), {
+    command: process.execPath,
+    args: ['/project/scripts/jobs.mjs', '--retry-only'],
+  });
+  assert.deepEqual(buildActionCommand('mark-read', {}, '/project'), {
+    command: process.execPath,
+    args: ['/project/scripts/jobs/mark-groups-read.mjs'],
+  });
   assert.throws(() => buildActionCommand('delete-everything', {}, '/project'), /Unknown action/);
+});
+
+test('dashboard command output redacts cryptographic buffers and session identifiers', () => {
+  const output = sanitizeCommandOutput(
+    "Closing session: { privateKey: <Buffer aa bb cc>, 'AbCdEfGhIjKlMnOpQrStUv==': { chainKey: {} } }",
+  );
+
+  assert.equal(output.includes('aa bb cc'), false);
+  assert.equal(output.includes('AbCdEfGhIjKlMnOpQrStUv'), false);
+  assert.match(output, /redacted-buffer/);
+  assert.match(output, /redacted-session/);
 });
 
 test('dashboard API exposes state and prevents overlapping actions', async (context) => {

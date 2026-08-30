@@ -12,6 +12,9 @@ import qrcodeTerminal from 'qrcode-terminal';
 const logger = pino({ level: process.env.JOBOPS_WA_LOG_LEVEL || 'silent' });
 const MAX_RESTART_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 750;
+const HISTORY_INITIAL_WAIT_MS = 30_000;
+const HISTORY_MAX_WAIT_MS = 120_000;
+const HISTORY_QUIET_MS = 3_000;
 
 export function shouldRetryWhatsAppConnection(statusCode) {
   return statusCode === DisconnectReason.connectionClosed ||
@@ -31,17 +34,45 @@ export function createWhatsAppSocketOptions({ auth, logger: socketLogger }) {
   };
 }
 
+export function decideHistoryWait({
+  elapsedMs,
+  historyEvents,
+  historyNotifications,
+  lastActivityAgoMs,
+  initialWaitMs = HISTORY_INITIAL_WAIT_MS,
+  maxWaitMs = HISTORY_MAX_WAIT_MS,
+  quietMs = HISTORY_QUIET_MS,
+}) {
+  if (elapsedMs >= maxWaitMs) return 'timeout';
+  const hasActivity = historyEvents > 0 || historyNotifications > 0;
+  if (!hasActivity && elapsedMs >= initialWaitMs) return 'empty';
+  if (hasActivity && historyEvents >= historyNotifications && lastActivityAgoMs >= quietMs) {
+    return 'settled';
+  }
+  return 'wait';
+}
+
 export async function connectWhatsApp(authPath, {
-  historyWarmupMs = 10_000,
+  historyWarmupMs = HISTORY_INITIAL_WAIT_MS,
+  historyMaxWaitMs = HISTORY_MAX_WAIT_MS,
+  historyQuietMs = HISTORY_QUIET_MS,
   persistCredentials = true,
   onMessages = null,
 } = {}) {
   const { state, saveCreds } = await useMultiFileAuthState(authPath);
+  const authDiagnostics = {
+    processedHistoryMessages: Array.isArray(state.creds.processedHistoryMessages)
+      ? state.creds.processedHistoryMessages.length
+      : 0,
+    accountSyncCounter: Number(state.creds.accountSyncCounter || 0),
+  };
 
   return new Promise((resolve, reject) => {
     let attempts = 0;
+    let generation = 0;
 
     async function start() {
+      const socketGeneration = ++generation;
       const { version } = await fetchLatestBaileysVersion();
       const sock = makeWASocket({
         ...createWhatsAppSocketOptions({ auth: state, logger }),
@@ -51,13 +82,36 @@ export async function connectWhatsApp(authPath, {
       if (persistCredentials) sock.ev.on('creds.update', saveCreds);
       sock.historyStore = new Map();
       sock.chatStore = new Map();
-      sock.historyDiagnostics = { historyEvents: 0, upsertEvents: 0, messages: 0 };
+      sock.groupHistoryDiagnostics = new Map();
+      sock.historyDiagnostics = {
+        historyEvents: 0,
+        historyNotifications: 0,
+        upsertEvents: 0,
+        messages: 0,
+        waitOutcome: null,
+        waitMs: 0,
+      };
+      sock.authDiagnostics = authDiagnostics;
       sock.ingressError = null;
+      let lastHistoryActivityAt = Date.now();
+      const initialProcessedHistoryMessages = authDiagnostics.processedHistoryMessages;
+
+      sock.ev.on('creds.update', (update) => {
+        if (!Array.isArray(update.processedHistoryMessages)) return;
+        sock.historyDiagnostics.historyNotifications = Math.max(
+          0,
+          update.processedHistoryMessages.length - initialProcessedHistoryMessages,
+        );
+        lastHistoryActivityAt = Date.now();
+      });
 
       const collect = (messages = [], eventType) => {
         const boundedMessages = messages.slice(0, 5_000);
         sock.historyDiagnostics.messages += boundedMessages.length;
-        if (eventType === 'history') sock.historyDiagnostics.historyEvents += 1;
+        if (eventType === 'history') {
+          sock.historyDiagnostics.historyEvents += 1;
+          lastHistoryActivityAt = Date.now();
+        }
         if (eventType === 'upsert') sock.historyDiagnostics.upsertEvents += 1;
         for (const message of boundedMessages) {
           const jid = message.key?.remoteJid;
@@ -95,7 +149,28 @@ export async function connectWhatsApp(authPath, {
         }
 
         if (connection === 'open') {
-          setTimeout(() => resolve(sock), historyWarmupMs);
+          const openedAt = Date.now();
+          const waitForHistory = () => {
+            if (socketGeneration !== generation) return;
+            const now = Date.now();
+            const outcome = decideHistoryWait({
+              elapsedMs: now - openedAt,
+              historyEvents: sock.historyDiagnostics.historyEvents,
+              historyNotifications: sock.historyDiagnostics.historyNotifications,
+              lastActivityAgoMs: now - lastHistoryActivityAt,
+              initialWaitMs: historyWarmupMs,
+              maxWaitMs: historyMaxWaitMs,
+              quietMs: historyQuietMs,
+            });
+            if (outcome === 'wait') {
+              setTimeout(waitForHistory, 500);
+              return;
+            }
+            sock.historyDiagnostics.waitOutcome = outcome;
+            sock.historyDiagnostics.waitMs = now - openedAt;
+            resolve(sock);
+          };
+          setTimeout(waitForHistory, 500);
           return;
         }
 

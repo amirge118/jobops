@@ -38,6 +38,8 @@ test('setup creates private files from templates and never overwrites them', (co
   const first = setupProject({ rootDir });
   assert.equal(first.created.length, 3);
   assert.equal(first.directories.includes('auth'), true);
+  assert.equal(first.directories.includes('output'), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'output')), false);
   fs.writeFileSync(path.join(rootDir, 'profile', '01-candidate-profile.md'), 'my profile\n');
 
   const second = setupProject({ rootDir });
