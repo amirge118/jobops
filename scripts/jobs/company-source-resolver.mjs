@@ -3,6 +3,7 @@ import { lookup } from 'node:dns/promises';
 
 import ashby from '../providers/ashby.mjs';
 import comeet from '../providers/comeet.mjs';
+import embeddedJson from '../providers/embedded-json.mjs';
 import greenhouse from '../providers/greenhouse.mjs';
 import lever from '../providers/lever.mjs';
 import officialHtml from '../providers/official-html.mjs';
@@ -31,7 +32,7 @@ const MAX_REDIRECTS = 4;
 const PAGE_TIMEOUT_MS = 15_000;
 
 const PROVIDERS = new Map([
-  ashby, comeet, greenhouse, lever, officialHtml, recruitee, smartrecruiters, workable,
+  ashby, comeet, embeddedJson, greenhouse, lever, officialHtml, recruitee, smartrecruiters, workable,
   workday, zohoRecruit, teamme,
 ].map((provider) => [provider.id, provider]));
 
@@ -147,6 +148,29 @@ function canonicalSupportedSourceUrl(rawValue) {
   return detected?.careersUrl || null;
 }
 
+// Comeet's classic embed widget (`COMEET.init({token, company-uid, company-name, ...})`
+// loaded from //www.comeet.co/careers-api/api.js) renders a company's job list
+// entirely client-side on its own domain — there is no <a href> or <script src>
+// pointing at comeet.com for extractSupportedSourceCandidates' link scan above to
+// find. But the widget config embeds exactly what's needed to construct the real
+// public board URL (https://www.comeet.com/jobs/<slug>/<company-uid>), the same
+// shape already-configured Comeet companies use. The constructed URL is only ever
+// a candidate: it still goes through the same detect+probe verification as every
+// other source below, because a widget snippet left over from a since-migrated
+// ATS can point at a stale/inactive board.
+function extractComeetWidgetCandidates(html) {
+  const urls = [];
+  for (const match of String(html || '').matchAll(/COMEET\.init\(\s*\{([^}]*)\}/gi)) {
+    const block = match[1];
+    const uid = block.match(/["']company-uid["']\s*:\s*["']([a-z0-9]{2}\.[a-z0-9]{3})["']/i)?.[1];
+    const name = block.match(/["']company-name["']\s*:\s*["']([^"']+)["']/i)?.[1];
+    if (!uid || !name) continue;
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    if (slug) urls.push(`https://www.comeet.com/jobs/${slug}/${uid}`);
+  }
+  return urls;
+}
+
 export function extractSupportedSourceCandidates(html, baseUrl) {
   const markup = String(html || '').replaceAll('&amp;', '&');
   const values = [];
@@ -156,6 +180,7 @@ export function extractSupportedSourceCandidates(html, baseUrl) {
   for (const match of markup.matchAll(/https:\\?\/\\?\/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%\\-]+/g)) {
     values.push(match[0].replaceAll('\\/', '/'));
   }
+  values.push(...extractComeetWidgetCandidates(markup));
   const unique = [];
   const seen = new Set();
   for (const value of values) {
@@ -260,11 +285,13 @@ export function createCompanySourceResolver({
     [...candidates, ...evidence].forEach(addSupported);
 
     const pageFailures = [];
+    const fetchedPages = [];
     let fetchedPage = false;
     for (const url of candidates.filter((value) => !canonicalSupportedSourceUrl(value)).slice(0, 3)) {
       try {
         const page = await fetchPage(url);
         fetchedPage = true;
+        fetchedPages.push(page);
         addSupported(page.url);
         extractSupportedSourceCandidates(page.html, page.url).forEach(addSupported);
       } catch (error) {
@@ -279,6 +306,20 @@ export function createCompanySourceResolver({
       const source = configureDetectedSource(normalizeCompanySource(detected), companyName);
       const probe = await probeSource(source, companyName);
       attempts.push({ source, probe });
+    }
+    // No known ATS was found on any fetched page — before giving up, check
+    // whether the page itself already carries job data in its own embedded
+    // JSON (a generic fallback that needs no per-company configuration; see
+    // scripts/providers/embedded-json.mjs). Only a verified hit is kept: an
+    // unverified embedded-json probe is a strictly weaker diagnostic than the
+    // existing "needs_adapter"/page-failure reporting below, so it must not
+    // replace that as the reported outcome.
+    if (!attempts.some(({ probe }) => probe.status === 'verified_jobs')) {
+      for (const page of fetchedPages) {
+        const source = normalizeCompanySource({ provider: 'embedded-json', careersUrl: page.url });
+        const probe = await probeSource(source, companyName);
+        if (['verified_jobs', 'verified_empty'].includes(probe.status)) attempts.push({ source, probe });
+      }
     }
     const verified = attempts
       .filter(({ probe }) => ['verified_jobs', 'verified_empty'].includes(probe.status))

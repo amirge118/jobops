@@ -405,6 +405,12 @@ footer { padding: 22px 4px 0; color: var(--muted); font-size: 0.78rem; }
 .company-discovery-form label { display: grid; gap: 7px; color: var(--muted); font-size: .8rem; font-weight: 700; }
 .company-discovery-form input { width: 100%; min-height: 45px; border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; background: var(--surface); color: var(--ink); }
 .company-discovery-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(25, 101, 75, .12); }
+.company-manual-row[hidden] { display: none; }
+.company-manual-row td { padding: 0; }
+.company-manual-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: end; padding: 16px 20px; background: #fafbf9; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.company-manual-form p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.company-manual-form label { display: grid; gap: 7px; color: var(--muted); font-size: .8rem; font-weight: 700; }
+.company-manual-form input { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); color: var(--ink); }
 .company-feedback { min-height: 1.3rem; margin: 10px 28px; color: var(--accent-dark); font-size: .82rem; }
 .company-feedback[data-state="error"] { color: var(--warning); }
 .company-preview { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 28px 20px; padding: 16px; border: 1px solid #b8d6ca; border-radius: 14px; background: var(--accent-soft); }

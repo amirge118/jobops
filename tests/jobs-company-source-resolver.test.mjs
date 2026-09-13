@@ -22,6 +22,26 @@ test('source discovery canonicalizes ATS links embedded in an official careers p
   ]);
 });
 
+test('source discovery constructs a Comeet board URL from the classic embed widget snippet', () => {
+  const html = `
+    <script>
+      window.comeetInit = function() {
+        COMEET.init({
+          "token":       "6CA28BCD941B283650365036506CA36501B28",
+          "company-uid": "C6.00A",
+          "company-name":"OpenLegacy",
+          "css-cache": false,
+        });
+      };
+      (function(d, s, id) { js.src = "//www.comeet.co/careers-api/api.js"; }(document, 'script', 'comeet-jsapi'));
+    </script>
+  `;
+
+  assert.deepEqual(extractSupportedSourceCandidates(html, 'https://www.openlegacy.com/company/careers'), [
+    'https://www.comeet.com/jobs/openlegacy/C6.00A',
+  ]);
+});
+
 test('resolver follows an official page to a verified ATS source without auto-approval', async () => {
   const resolver = createCompanySourceResolver({
     fetchPage: async () => ({
@@ -65,6 +85,42 @@ test('resolver keeps a recognized but failing source disabled and explains the f
   assert.equal(result.candidate.source.enabled, false);
   assert.equal(result.probe.status, 'failed');
   assert.equal(result.probe.errorCode, 'http_404');
+});
+
+test('resolver falls back to embedded-json when the page has no known ATS but carries its own job data', async () => {
+  const resolver = createCompanySourceResolver({
+    fetchPage: async (url) => ({
+      url,
+      html: '<h1>Careers</h1><script type="application/json">{"openPositions":[{"title":"Backend Engineer","url":"/jobs/1","location":"Tel Aviv"}]}</script>',
+    }),
+    probeSource: async (source) => ({
+      status: 'verified_jobs', count: 1,
+      samples: [{ title: 'Backend Engineer', url: `${source.careersUrl}/jobs/1` }],
+    }),
+  });
+  const result = await resolver({
+    companyName: 'Acme', candidateUrls: ['https://www.acme.example/careers'], evidenceUrls: [],
+  });
+
+  assert.equal(result.candidate.source.provider, 'embedded-json');
+  assert.equal(result.candidate.source.enabled, true);
+  assert.equal(result.probe.status, 'verified_jobs');
+});
+
+test('resolver keeps reporting needs_adapter when the embedded-json fallback also finds nothing', async () => {
+  const resolver = createCompanySourceResolver({
+    fetchPage: async (url) => ({ url, html: '<h1>Careers</h1>' }),
+    probeSource: async () => ({
+      status: 'needs_adapter', count: 0, samples: [],
+      errorCode: 'provider_unsupported', reason: 'עדיין אין מתאם למקור הזה.',
+    }),
+  });
+  const result = await resolver({
+    companyName: 'Acme', candidateUrls: ['https://www.acme.example/careers'], evidenceUrls: [],
+  });
+
+  assert.equal(result.candidate.source.provider, 'unsupported');
+  assert.equal(result.probe.status, 'needs_adapter');
 });
 
 test('resolver reports an official page with no supported source as needs_adapter', async () => {

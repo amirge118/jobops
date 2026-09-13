@@ -107,7 +107,9 @@ search_queries:
 
 # -- Tracked companies (Israel-relevant companies and close sector peers) --
 # Supported providers: greenhouse, lever, ashby, workable, recruitee, smartrecruiters,
-# comeet, workday, zoho-recruit, teamme, official-html
+# comeet, workday, zoho-recruit, teamme, official-html, embedded-json (a company's own
+# careers page with jobs baked into its page data, e.g. Next.js __NEXT_DATA__ — no extra
+# config needed, just `provider: embedded-json`)
 # Verify with: node scripts/scan.mjs --dry-run
 tracked_companies:
 

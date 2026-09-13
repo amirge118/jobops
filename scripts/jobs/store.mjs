@@ -353,7 +353,7 @@ export function createJobStore(databasePath) {
       company_id INTEGER NOT NULL,
       source_key TEXT NOT NULL UNIQUE,
       provider TEXT NOT NULL
-        CHECK(provider IN ('greenhouse', 'lever', 'ashby', 'workable', 'recruitee', 'smartrecruiters', 'comeet', 'official-html', 'workday', 'zoho-recruit', 'teamme', 'unsupported')),
+        CHECK(provider IN ('greenhouse', 'lever', 'ashby', 'workable', 'recruitee', 'smartrecruiters', 'comeet', 'official-html', 'embedded-json', 'workday', 'zoho-recruit', 'teamme', 'unsupported')),
       board_key TEXT,
       careers_url TEXT NOT NULL,
       api_url TEXT,
@@ -387,7 +387,7 @@ export function createJobStore(databasePath) {
     }
   }
   const companySourcesSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'company_job_sources'").get()?.sql || '';
-  if (!['comeet', 'official-html', 'workday', 'zoho-recruit', 'teamme'].every((provider) => companySourcesSql.includes(`'${provider}'`))) {
+  if (!['comeet', 'official-html', 'embedded-json', 'workday', 'zoho-recruit', 'teamme'].every((provider) => companySourcesSql.includes(`'${provider}'`))) {
     db.transaction(() => {
       db.exec(`
         ALTER TABLE company_job_sources RENAME TO company_job_sources_legacy;
@@ -396,7 +396,7 @@ export function createJobStore(databasePath) {
           company_id INTEGER NOT NULL,
           source_key TEXT NOT NULL UNIQUE,
           provider TEXT NOT NULL
-            CHECK(provider IN ('greenhouse', 'lever', 'ashby', 'workable', 'recruitee', 'smartrecruiters', 'comeet', 'official-html', 'workday', 'zoho-recruit', 'teamme', 'unsupported')),
+            CHECK(provider IN ('greenhouse', 'lever', 'ashby', 'workable', 'recruitee', 'smartrecruiters', 'comeet', 'official-html', 'embedded-json', 'workday', 'zoho-recruit', 'teamme', 'unsupported')),
           board_key TEXT,
           careers_url TEXT NOT NULL,
           api_url TEXT,

@@ -102,6 +102,110 @@ test('company API researches a name but still requires explicit watch approval',
   assert.equal(invalid.status, 400);
 });
 
+test('company API accepts a manually configured official-html source once it verifies', async (context) => {
+  const { config, baseUrl } = await startCompanyApi(context, {
+    probeSource: async (source) => ({
+      status: source.careersUrl.includes('good') ? 'verified_jobs' : 'needs_adapter',
+      count: source.careersUrl.includes('good') ? 3 : 0,
+      samples: [],
+      reason: source.careersUrl.includes('good') ? 'נמצאו 3 משרות.' : 'לא נמצאו קישורי משרה תואמים.',
+    }),
+  });
+  const store = createJobStore(config.jobsDbPath);
+  const saved = store.upsertCompanyCandidate({ name: 'Custom Co', discoverySource: 'manual' });
+  store.close();
+
+  const failed = await postJson(`${baseUrl}/api/companies/${saved.company.id}/manual-source`, {
+    careersUrl: 'https://custom.example/careers', jobPathPrefix: '/careers/', jobPathSegments: 2,
+  });
+  assert.equal(failed.status, 200);
+  const failedBody = await failed.json();
+  assert.equal(failedBody.probe.status, 'needs_adapter');
+  assert.equal(failedBody.company.status, 'candidate');
+  assert.equal(failedBody.company.sources[0].enabled, false);
+
+  const ok = await postJson(`${baseUrl}/api/companies/${saved.company.id}/manual-source`, {
+    careersUrl: 'https://custom.example/careers-good', jobPathPrefix: '/careers-good/', jobPathSegments: 2,
+  });
+  assert.equal(ok.status, 200);
+  const okBody = await ok.json();
+  assert.equal(okBody.probe.status, 'verified_jobs');
+  const source = okBody.company.sources.find((item) => item.careersUrl === 'https://custom.example/careers-good');
+  assert.equal(source.enabled, true);
+  assert.equal(source.provider, 'official-html');
+  assert.equal(source.verificationStatus, 'verified_jobs');
+
+  const watched = await postJson(`${baseUrl}/api/companies/${saved.company.id}/watch`);
+  assert.equal(watched.status, 200);
+
+  const missingField = await postJson(`${baseUrl}/api/companies/${saved.company.id}/manual-source`, {
+    careersUrl: 'https://custom.example/careers',
+  });
+  assert.equal(missingField.status, 400);
+
+  const missingCompany = await postJson(`${baseUrl}/api/companies/999999/manual-source`, {
+    careersUrl: 'https://custom.example/careers', jobPathPrefix: '/careers/', jobPathSegments: 2,
+  });
+  assert.equal(missingCompany.status, 404);
+});
+
+test('company API runs a browser probe in the background and reports its outcome via polling', async (context) => {
+  let resolveBrowser;
+  const browserResolve = async ({ companyName, candidateUrls }) => new Promise((resolve) => {
+    resolveBrowser = () => resolve({
+      candidate: {
+        name: companyName, canonicalDomain: null, discoverySource: 'research', resolutionStatus: 'resolved', status: 'candidate',
+        source: { provider: 'lever', boardKey: 'acme', careersUrl: candidateUrls[0], apiUrl: null, enabled: true },
+      },
+      probe: { status: 'verified_jobs', count: 1, samples: [], reason: 'נמצאה משרה אחת.' },
+    });
+  });
+  const { config, baseUrl } = await startCompanyApi(context, { browserResolve });
+  const store = createJobStore(config.jobsDbPath);
+  const saved = store.upsertCompanyCandidate({ name: 'Blocked Co', discoverySource: 'manual' });
+  store.close();
+
+  const started = await postJson(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`, {
+    url: 'https://jobs.lever.co/acme',
+  });
+  assert.equal(started.status, 202);
+  assert.equal((await started.json()).status, 'running');
+
+  const busy = await postJson(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`, {});
+  assert.equal(busy.status, 409);
+
+  let polled = await fetch(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`).then((r) => r.json());
+  assert.equal(polled.status, 'running');
+
+  resolveBrowser();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  polled = await fetch(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`).then((r) => r.json());
+  assert.equal(polled.status, 'done');
+  assert.equal(polled.probe.status, 'verified_jobs');
+
+  const list = await fetch(`${baseUrl}/api/companies`).then((r) => r.json());
+  const persisted = list.companies.find((company) => company.id === saved.company.id);
+  assert.equal(persisted.sources[0].provider, 'lever');
+  assert.equal(persisted.sources[0].verificationStatus, 'verified_jobs');
+});
+
+test('company API browser probe requires a URL when the company has no existing source', async (context) => {
+  const { config, baseUrl } = await startCompanyApi(context, { browserResolve: async () => ({ candidate: {}, probe: {} }) });
+  const store = createJobStore(config.jobsDbPath);
+  const saved = store.upsertCompanyCandidate({ name: 'No Source Co', discoverySource: 'manual' });
+  store.close();
+
+  const missingUrl = await postJson(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`, {});
+  assert.equal(missingUrl.status, 400);
+
+  const missingCompany = await postJson(`${baseUrl}/api/companies/999999/browser-probe`, { url: 'https://example.com' });
+  assert.equal(missingCompany.status, 404);
+
+  const idle = await fetch(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`).then((r) => r.json());
+  assert.equal(idle.status, 'idle');
+});
+
 test('company API rejects unsafe URLs, unsupported watch requests and unknown fields', async (context) => {
   const { baseUrl } = await startCompanyApi(context);
 

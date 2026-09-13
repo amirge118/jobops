@@ -16,11 +16,17 @@ export const COMPANY_SOURCE_PROVIDERS = Object.freeze([
   'smartrecruiters',
   'comeet',
   'official-html',
+  'embedded-json',
   'workday',
   'zoho-recruit',
   'teamme',
   'unsupported',
 ]);
+
+// These two providers scan whatever page the careers URL already points at —
+// there is no separate ATS board URL to detect, so they never carry a board
+// key and are exempt from the detected-URL/provider match check below.
+const PROVIDERS_WITHOUT_BOARD_KEY = new Set(['official-html', 'embedded-json']);
 
 const PRIVATE_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.home', '.lan'];
 const SHARED_RECRUITING_HOSTS = new Set(['comeet.com', 'teamme.link', 'dueto.io']);
@@ -298,14 +304,14 @@ export function normalizeCompanySource(input) {
   const detected = detectCompanyJobSource(careersUrl) ||
     (input.apiUrl || input.api ? detectCompanyJobSource(input.apiUrl ?? input.api) : null);
   const provider = normalizeProvider(input.provider || detected?.provider || 'unsupported');
-  const configuredOfficialHtml = provider === 'official-html';
-  if (provider !== 'unsupported' && !configuredOfficialHtml && (!detected || provider !== detected.provider)) {
+  const boardKeyOptional = PROVIDERS_WITHOUT_BOARD_KEY.has(provider);
+  if (provider !== 'unsupported' && !boardKeyOptional && (!detected || provider !== detected.provider)) {
     fail('provider_mismatch', detected
       ? `Source URL belongs to ${detected.provider}, not ${provider}`
       : `Source URL does not match the ${provider} provider`);
   }
   const boardKey = normalizeBoardKey(input.boardKey ?? input.board_key ?? detected?.boardKey);
-  if (provider !== 'unsupported' && !configuredOfficialHtml && !boardKey) fail('invalid_board_key', 'Supported ATS source requires a board key');
+  if (provider !== 'unsupported' && !boardKeyOptional && !boardKey) fail('invalid_board_key', 'Supported ATS source requires a board key');
   const apiUrl = normalizeApiUrl(provider, input.apiUrl ?? input.api ?? detected?.apiUrl);
   const config = normalizeCompanySourceConfig(provider, input);
   const source = {
