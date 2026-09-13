@@ -6,7 +6,16 @@ export async function scanAts({ store, lookbackHours, runScan = runPortalScan })
   const args = ['--dry-run', '--quiet', '--ignore-history'];
   if (Number.isFinite(lookbackHours)) args.push(`--max-age=${lookbackHours}`);
 
-  const result = await runScan(args);
+  const watchedCompanies = typeof store.listWatchedCompanySources === 'function'
+    ? store.listWatchedCompanySources()
+    : [];
+  const result = await runScan(args, { additionalCompanies: watchedCompanies });
+  if (typeof store.recordCompanyScanResults === 'function') {
+    store.recordCompanyScanResults({
+      scannedNames: watchedCompanies.map((company) => company.name),
+      errorNames: (result.errors || []).map((error) => error.company),
+    });
+  }
   const candidates = [];
   for (const offer of result.offers) {
     const sighting = store.recordSighting({
@@ -26,5 +35,12 @@ export async function scanAts({ store, lookbackHours, runScan = runPortalScan })
     });
   }
 
-  return { source: 'ats', candidates, stats: result.stats, errors: result.errors };
+  const byKey = new Map();
+  for (const candidate of candidates) {
+    // A second sighting in this same run must not erase its first-seen status.
+    byKey.set(candidate.jobKey, { ...candidate, isNew: Boolean(candidate.isNew || byKey.get(candidate.jobKey)?.isNew) });
+  }
+  const unique = [...byKey.values()];
+  return { source: 'ats', candidates, stats: result.stats, errors: result.errors,
+    discovery: { found: unique.length, new: unique.filter((candidate) => candidate.isNew).length, known: unique.filter((candidate) => !candidate.isNew).length } };
 }

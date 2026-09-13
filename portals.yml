@@ -50,7 +50,13 @@ title_filter:
   positive:
     - "Software Engineer"
     - "Backend"
+    - "Back End"
+    - "Server Side"
     - "Data Engineer"
+    - "Data Platform"
+    - "Analytics Engineer"
+    - "Data Analyst"
+    - "Platform Engineer"
     - "Python"
   negative:
     - "Intern"
@@ -92,8 +98,9 @@ search_queries:
     query: 'site:jobmaster.co.il מפתח תוכנה'
     enabled: true
 
-# -- Tracked companies (Israeli tech on supported ATSs) --
-# Supported providers: greenhouse, lever, ashby, workable, recruitee, smartrecruiters
+# -- Tracked companies (Israel-relevant companies and close sector peers) --
+# Supported providers: greenhouse, lever, ashby, workable, recruitee, smartrecruiters,
+# comeet, workday, zoho-recruit, teamme, official-html
 # Verify with: node scripts/scan.mjs --dry-run
 tracked_companies:
 
@@ -105,8 +112,11 @@ tracked_companies:
 
   - name: monday.com
     careers_url: https://monday.com/careers
-    notes: "Work OS. TLV HQ. Uses Comeet — no API provider yet, covered by /search web sweep."
-    enabled: false
+    provider: official-html
+    job_path_prefix: /careers/
+    job_path_segments: 2
+    notes: "Work OS. TLV HQ. Server-rendered official job links verified 2026-09-12."
+    enabled: true
 
   - name: Gong
     careers_url: https://job-boards.greenhouse.io/gongio
@@ -155,9 +165,9 @@ tracked_companies:
     enabled: true
 
   - name: Island
-    careers_url: https://www.island.io/careers
-    notes: "Enterprise browser. TLV R&D. Not on a supported ATS — covered by /search web sweep."
-    enabled: false
+    careers_url: https://www.comeet.com/jobs/island/09.00A
+    notes: "Enterprise browser. TLV R&D. Verified Comeet board."
+    enabled: true
 
   - name: Cato Networks
     careers_url: https://job-boards.greenhouse.io/catonetworks
@@ -221,9 +231,9 @@ tracked_companies:
     enabled: true
 
   - name: Payzen
-    careers_url: https://jobs.lever.co/payzen
-    notes: "Healthcare BNPL fintech. TLV. Lever board token 404s (tried payzen/getpayzen/payzenhq) — no working API found, covered by /search web sweep."
-    enabled: false
+    careers_url: https://jobs.ashbyhq.com/payzen-inc
+    notes: "Healthcare BNPL fintech. Verified Ashby board on 2026-09-12."
+    enabled: true
 
   - name: Tavily
     careers_url: https://jobs.ashbyhq.com/tavily
@@ -253,14 +263,15 @@ tracked_companies:
     enabled: true
 
   - name: Nexxen
-    careers_url: https://boards.greenhouse.io/nexxen
-    notes: "Adtech data platform. TLV hybrid. Board token 404s (tried nexxen/nexxeninc/nexxenholdings) — no working API found, covered by /search web sweep."
-    enabled: false
+    careers_url: https://jobs.ashbyhq.com/nexxen
+    notes: "Adtech data platform. TLV hybrid. Verified Ashby board on 2026-09-12."
+    enabled: true
 
   - name: Tipalti
-    careers_url: https://tipalti.com/company/careers/
-    notes: "Finance automation/AP fintech. TLV. Board token 404s (tried tipalti/tipaltiinc) — no working API found, covered by /search web sweep."
-    enabled: false
+    careers_url: https://job-boards.greenhouse.io/tipaltisolutions
+    api: https://boards-api.greenhouse.io/v1/boards/tipaltisolutions/jobs
+    notes: "Finance automation/AP fintech. TLV. Verified Greenhouse board on 2026-09-12."
+    enabled: true
 
   - name: Payoneer
     careers_url: https://www.payoneer.com/careers/
@@ -279,3 +290,351 @@ tracked_companies:
     api: https://boards-api.greenhouse.io/v1/boards/armissecurity/jobs
     notes: "Cybersecurity asset-intelligence platform. TLV-Yafo. AWS-native data/backend roles. Added via /search 2026-08-20."
     enabled: true
+
+  # User-selected fintech, gaming, revenue-tech, and Web3 companies (2026-09-10).
+
+  - name: Finubit
+    careers_url: https://www.comeet.com/jobs/finubit/A9.002
+    notes: "Cloud-native core banking backed by Bank Leumi. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  - name: Appcharge
+    careers_url: https://www.appcharge.com/careers
+    provider: official-html
+    job_path_prefix: /careers/
+    job_path_segments: 2
+    notes: "Direct-to-consumer commerce and payments for mobile games. Tel Aviv. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Unipaas
+    careers_url: https://www.unipaas.com/company/careers
+    provider: official-html
+    job_path_prefix: /careers/
+    job_path_segments: 2
+    notes: "Embedded payments for vertical SaaS and marketplaces. Tel Aviv. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: FINQ
+    careers_url: https://finqai.co.il
+    notes: "AI-powered investment and pension platform. Tel Aviv. No dedicated supported ATS found."
+    enabled: false
+
+  - name: PayEm
+    careers_url: https://www.payem.co/careers
+    notes: "Spend management and procurement automation. Israel R&D. Custom careers page."
+    enabled: false
+
+  - name: Neema
+    careers_url: https://www.neema.co.il/en/global/careers
+    notes: "Cross-border payments and financial services. Israel. TeamMe-powered page is not supported yet."
+    enabled: false
+
+  - name: IVIX
+    careers_url: https://www.comeet.com/jobs/ivix/09.002
+    notes: "AI, OSINT, and data analytics for tax and financial-crime authorities. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  - name: PayKey
+    careers_url: https://paykey.com/career
+    notes: "Embedded banking engagement inside messaging channels. Israel. Custom careers page."
+    enabled: false
+
+  - name: Voyantis
+    careers_url: https://www.comeet.com/jobs/voyantis/86.00B
+    notes: "AI decisioning and predictive lifetime value for growth teams. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  - name: Okoora
+    careers_url: https://okoora.com/v3/career/
+    provider: official-html
+    job_path_prefix: /v3/career/co/
+    job_path_segments: 7
+    notes: "FX, cross-border payments, and embedded-finance infrastructure. Israel. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Monto
+    careers_url: https://montopay.com/career-in-monto
+    notes: "B2B payment collection and accounts-receivable automation. Tel Aviv. Custom careers page."
+    enabled: false
+
+  - name: Hypernative
+    careers_url: https://www.comeet.com/jobs/hypernative/8A.00E
+    notes: "Real-time Web3 threat prevention and security. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  # Similar companies discovered from the 14-company seed list.
+
+  - name: ONE ZERO Bank
+    careers_url: https://www.comeet.com/jobs/onezerobank/36.00A
+    notes: "Digital bank and banking technology. Israel. Verified Comeet board on 2026-09-12."
+    enabled: true
+
+  - name: AccessFintech
+    careers_url: https://www.accessfintech.com/about
+    notes: "Financial-market workflow and data collaboration. Israel-founded. Careers currently route through LinkedIn."
+    enabled: false
+
+  - name: OpenLegacy
+    careers_url: https://www.openlegacy.com/company/careers
+    notes: "Legacy core-system modernization and API integration. Israel-founded. Custom careers page."
+    enabled: false
+
+  - name: Personetics
+    careers_url: https://www.comeet.com/jobs/personetics/83.00A
+    notes: "AI-driven banking personalization and engagement. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  - name: Earnix
+    careers_url: https://earnix.com/our-story/careers
+    notes: "AI pricing and decisioning for banks and insurers. Israel. Custom careers page."
+    enabled: false
+
+  - name: Overwolf
+    careers_url: https://www.comeet.com/jobs/overwolf/B1.001
+    notes: "Platform and monetization ecosystem for game creators. Ramat Gan. Verified Comeet board on 2026-09-12."
+    enabled: true
+
+  - name: Moon Active
+    careers_url: https://jobs.ashbyhq.com/moonactive
+    notes: "Mobile gaming studio and live-operations platform. Tel Aviv. Verified Ashby board."
+    enabled: true
+
+  - name: Playtika
+    careers_url: https://playtika.teamme.link
+    provider: teamme
+    notes: "Mobile gaming and live-operations technology. Herzliya. Generic TeamMe source verified 2026-09-13."
+    enabled: true
+
+  - name: Plarium
+    careers_url: https://company.plarium.com/en/career
+    notes: "Global game developer with Israel R&D. Custom careers page."
+    enabled: false
+
+  - name: SuperPlay
+    careers_url: https://www.superplay.co/careers/
+    provider: official-html
+    job_path_prefix: /careers-position/
+    job_path_segments: 2
+    notes: "Mobile gaming studio. Tel Aviv. Official job links verified on 2026-09-12."
+    enabled: true
+
+  - name: Rapyd
+    careers_url: https://www.comeet.com/jobs/rapyd/73.00E
+    notes: "Embedded finance and global payments infrastructure. Tel Aviv. Verified Comeet board on 2026-09-12."
+    enabled: true
+
+  - name: Unit
+    careers_url: https://jobs.ashbyhq.com/unit
+    notes: "Embedded-finance infrastructure for software companies. Verified Ashby board; location filters still apply."
+    enabled: true
+
+  - name: Nayax
+    careers_url: https://www.nayax.com/careers
+    notes: "Payments and commerce platform for unattended retail. Herzliya. Custom careers page."
+    enabled: false
+
+  - name: BlueSnap
+    careers_url: https://www.bluesnap.com/careers
+    notes: "Global payment orchestration and merchant services. Israel R&D. Custom careers page."
+    enabled: false
+
+  - name: eToro
+    careers_url: https://www.etoro.com/about/careers/
+    provider: official-html
+    job_path_prefix: /about/careers/position/
+    job_path_segments: 4
+    notes: "Trading and multi-asset investment platform. Israel. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: FundGuard
+    careers_url: https://www.comeet.com/jobs/fundguard/37.002
+    notes: "AI-native investment accounting platform. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  - name: Pontera
+    careers_url: https://job-boards.greenhouse.io/pontera
+    api: https://boards-api.greenhouse.io/v1/boards/pontera/jobs
+    notes: "Retirement-account management technology. Tel Aviv. Verified Greenhouse board."
+    enabled: true
+
+  - name: RiseUp
+    careers_url: https://www.riseup.co.il/jobs
+    notes: "Consumer financial-wellness and cash-flow platform. Tel Aviv. Custom careers page."
+    enabled: false
+
+  - name: Mesh Payments
+    careers_url: https://meshpayments.com/careers
+    provider: official-html
+    job_path_prefix: /careers/
+    job_path_segments: 2
+    notes: "Travel and spend-management automation. Tel Aviv. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Stampli
+    careers_url: https://www.stampli.com/careers/
+    provider: official-html
+    job_path_prefix: /careers/co/
+    job_path_segments: 6
+    notes: "AI accounts-payable automation. Tel Aviv R&D. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Airwallex
+    careers_url: https://careers.airwallex.com
+    provider: official-html
+    job_path_prefix: /job/
+    job_path_segments: 3
+    notes: "Global payments, FX, and financial infrastructure. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Wise
+    careers_url: https://wise.jobs
+    provider: official-html
+    job_path_prefix: /job/
+    job_path_segments: 2
+    notes: "Cross-border money movement and account infrastructure. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: ThetaRay
+    careers_url: https://www.comeet.com/jobs/thetaray/72.00F
+    notes: "AI transaction monitoring and financial-crime detection. Israel. Verified Comeet board."
+    enabled: true
+
+  - name: Chainalysis
+    careers_url: https://jobs.ashbyhq.com/chainalysis-careers
+    notes: "Blockchain intelligence and financial-crime investigation. Verified Ashby board with Israel roles."
+    enabled: true
+
+  - name: TRM Labs
+    careers_url: https://jobs.ashbyhq.com/trm-labs
+    notes: "Blockchain intelligence and fraud investigation. Verified Ashby board on 2026-09-12."
+    enabled: true
+
+  - name: Unit21
+    careers_url: https://unit21.zohorecruit.com/jobs/Careers
+    provider: zoho-recruit
+    notes: "Fraud and AML operations platform. Generic Zoho Recruit source verified 2026-09-13."
+    enabled: true
+
+  - name: ComplyAdvantage
+    careers_url: https://job-boards.greenhouse.io/complyadvantage
+    api: https://boards-api.greenhouse.io/v1/boards/complyadvantage/jobs
+    notes: "AI-powered financial-crime risk intelligence. Verified Greenhouse board on 2026-09-12."
+    enabled: true
+
+  - name: Amount
+    careers_url: https://job-boards.greenhouse.io/amount
+    api: https://boards-api.greenhouse.io/v1/boards/amount/jobs
+    notes: "Digital-banking and lending infrastructure. Verified Greenhouse board; location filters still apply."
+    enabled: true
+
+  - name: Optimove
+    careers_url: https://job-boards.greenhouse.io/optimove
+    api: https://boards-api.greenhouse.io/v1/boards/optimove/jobs
+    notes: "AI customer-data and marketing decisioning platform. Tel Aviv. Verified Greenhouse board on 2026-09-12."
+    enabled: true
+
+  - name: Singular
+    careers_url: https://jobs.ashbyhq.com/singular
+    notes: "Marketing measurement and growth intelligence. Tel Aviv. Verified Ashby board."
+    enabled: true
+
+  - name: Dynamic Yield
+    careers_url: https://mastercard.wd1.myworkdayjobs.com/CorporateCareers
+    provider: workday
+    search_text: "Dynamic Yield"
+    notes: "AI personalization and optimization, now part of Mastercard. Generic Workday source scoped by brand and verified 2026-09-13."
+    enabled: true
+
+  - name: Signifyd
+    careers_url: https://job-boards.greenhouse.io/signifyd95
+    api: https://boards-api.greenhouse.io/v1/boards/signifyd95/jobs
+    notes: "Ecommerce fraud protection and payment optimization. Verified Greenhouse board on 2026-09-12."
+    enabled: true
+
+  - name: Sift
+    careers_url: https://jobs.ashbyhq.com/sift
+    notes: "Digital trust, identity, and fraud prevention. Verified Ashby board; location filters still apply."
+    enabled: true
+
+  - name: BioCatch
+    careers_url: https://jobs.lever.co/biocatch
+    notes: "Behavioral biometrics and financial-fraud prevention. Tel Aviv. Verified Lever board."
+    enabled: true
+
+  - name: Chargeflow
+    careers_url: https://www.chargeflow.io/careers
+    provider: official-html
+    job_path_prefix: /positions/
+    job_path_segments: 2
+    notes: "AI chargeback and dispute automation for ecommerce. Israel-founded. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: ZoomInfo
+    careers_url: https://www.zoominfo.com/careers
+    provider: official-html
+    job_path_prefix: /careers/jr
+    job_path_segments: 3
+    notes: "B2B go-to-market intelligence and revenue data. Official job links verified 2026-09-12. Similar to Gong."
+    enabled: true
+
+  - name: Outreach
+    careers_url: https://jobs.lever.co/outreach
+    notes: "Sales execution and revenue workflow platform. Verified Lever board; location filters still apply."
+    enabled: true
+
+  - name: Salesloft
+    careers_url: https://job-boards.greenhouse.io/salesloft
+    api: https://boards-api.greenhouse.io/v1/boards/salesloft/jobs
+    notes: "Revenue orchestration and sales engagement. Verified Greenhouse board."
+    enabled: true
+
+  - name: DealHub
+    careers_url: https://dealhub.io/careers/
+    provider: official-html
+    job_path_prefix: /careers/
+    job_path_segments: 3
+    notes: "Configure-price-quote and revenue workflow platform. Israel-founded. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Lusha
+    careers_url: https://www.lusha.com/careers/
+    provider: official-html
+    job_path_prefix: /careers/co/
+    job_path_segments: 5
+    notes: "B2B sales intelligence and prospecting data. Tel Aviv. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Kantox
+    careers_url: https://apply.workable.com/kantox
+    notes: "Currency-management and FX automation. Verified Workable board; location filters still apply."
+    enabled: true
+
+  - name: Currencycloud
+    careers_url: https://visa.wd5.myworkdayjobs.com/Visa
+    provider: workday
+    search_text: "Currencycloud"
+    notes: "Cross-border payment and FX infrastructure, now part of Visa. Generic Workday source scoped by brand and verified 2026-09-13."
+    enabled: true
+
+  - name: Balance
+    careers_url: https://www.getbalance.com/careers/
+    provider: official-html
+    job_path_prefix: /careers/co/
+    job_path_segments: 6
+    notes: "B2B checkout, credit, and payment infrastructure. Israel-founded. Official job links verified 2026-09-12."
+    enabled: true
+
+  - name: Finaloop
+    careers_url: https://www.finaloop.com/careers
+    notes: "Automated accounting and financial operations for ecommerce. Israel-founded. The former Ashby posting API now returns 404."
+    enabled: false
+
+  - name: Blockaid
+    careers_url: https://www.comeet.com/jobs/blockaid/69.00B
+    notes: "Web3 transaction security and threat prevention. Tel Aviv. Verified Comeet board."
+    enabled: true
+
+  - name: Cyvers
+    careers_url: https://cyvers.ai/careers
+    notes: "Real-time Web3 threat detection and prevention. Israel-founded. Custom careers page."
+    enabled: false

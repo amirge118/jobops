@@ -14,6 +14,15 @@ export function parseDashboardOptions(input = {}, maxLookbackDays = 14) {
   return { days, source, open: input.open === true };
 }
 
+export function parseBacklogOptions(input = {}) {
+  if (input.days == null) return { days: null };
+  const days = Number(input.days);
+  if (!Number.isInteger(days) || days < 1 || days > 365) {
+    throw new Error('backlog days must be an integer between 1 and 365, or null for all');
+  }
+  return { days };
+}
+
 export function buildActionCommand(action, options, rootDir) {
   if (action === 'scan') {
     const args = [path.join(rootDir, 'scripts', 'jobs.mjs'), '--days', String(options.days)];
@@ -46,6 +55,11 @@ export function buildActionCommand(action, options, rootDir) {
       args: [path.join(rootDir, 'scripts', 'jobs', 'mark-groups-read.mjs')],
     };
   }
+  if (action === 'process-backlog') {
+    const args = [path.join(rootDir, 'scripts', 'jobs.mjs'), '--whatsapp-backlog'];
+    if (options.days != null) args.push('--days', String(options.days));
+    return { command: process.execPath, args };
+  }
   throw new Error(`Unknown action: ${action}`);
 }
 
@@ -56,5 +70,6 @@ export function actionLabel(action) {
     'open-jobs': 'פתיחת משרות ב-Chrome',
     'retry-failed': 'ניסיון חוזר לקישורים שנכשלו',
     'mark-read': 'סימון קבוצות WhatsApp כנקראו',
+    'process-backlog': 'עיבוד היסטוריית WhatsApp המקומית',
   }[action] || action;
 }

@@ -25,8 +25,11 @@ export async function runCodexExec({
   binary,
   spawnProcess = spawn,
   timeoutMs = 120_000,
+  liveSearch = false,
+  maxOutputBytes = 2 * 1024 * 1024,
 }) {
   const args = [
+    ...(liveSearch ? ['--search'] : []),
     'exec',
     '--ephemeral',
     '--ignore-user-config',
@@ -54,6 +57,15 @@ export async function runCodexExec({
     let stdout = '';
     let stderr = '';
     let settled = false;
+    const appendBounded = (current, chunk) => {
+      const next = current + chunk;
+      if (Buffer.byteLength(next, 'utf8') > maxOutputBytes) {
+        try { child.kill('SIGTERM'); } catch {}
+        finish(reject, new Error('codex exec output exceeded the allowed size'));
+        return current;
+      }
+      return next;
+    };
     const finish = (callback, value) => {
       if (settled) return;
       settled = true;
@@ -64,8 +76,8 @@ export async function runCodexExec({
       try { child.kill('SIGTERM'); } catch {}
       finish(reject, new Error(`Codex scoring timed out after ${timeoutMs}ms`));
     }, Math.max(1, Number(timeoutMs) || 120_000));
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.stdout.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
+    child.stderr.on('data', (chunk) => { stderr = appendBounded(stderr, chunk); });
     child.once('error', (error) => finish(reject, error));
     child.once('exit', (code) => {
       if (code === 0) finish(resolve, { stdout, stderr });

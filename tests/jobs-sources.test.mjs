@@ -2,16 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { scanAts } from '../scripts/jobs/sources/ats.mjs';
+import { mergeTrackedCompanies } from '../scripts/scan.mjs';
 import {
   diagnoseUnavailableHistory,
   markConfiguredGroupsRead,
   queueIncomingMessages,
+  scanWhatsAppBacklog,
   verifyConfiguredGroups,
 } from '../scripts/jobs/sources/whatsapp.mjs';
 import {
   createWhatsAppSocketOptions,
   decideHistoryWait,
   shouldRetryWhatsAppConnection,
+  suppressKnownLibsignalNoise,
 } from '../scripts/jobs/sources/whatsapp-client.mjs';
 import { fetchGroupMessagesSince } from '../scripts/jobs/sources/whatsapp-history.mjs';
 
@@ -23,8 +26,9 @@ test('ATS source feeds portal offers into the shared store', async () => {
       return { jobKey: 'job-1', canonicalUrl: input.url, isNew: true };
     },
   };
-  const runScan = async (args) => {
+  const runScan = async (args, options) => {
     assert.deepEqual(args, ['--dry-run', '--quiet', '--ignore-history', '--max-age=48']);
+    assert.deepEqual(options, { additionalCompanies: [] });
     return {
       offers: [{
         url: 'https://example.com/jobs/1', company: 'Example', title: 'Backend Engineer', source: 'greenhouse-api',
@@ -40,6 +44,36 @@ test('ATS source feeds portal offers into the shared store', async () => {
   assert.equal(result.candidates.length, 1);
   assert.equal(result.candidates[0].source, 'ATS: greenhouse-api');
   assert.equal(sightings[0].company, 'Example');
+});
+
+test('ATS source includes only approved registry sources and records their health', async () => {
+  const health = [];
+  const store = {
+    listWatchedCompanySources: () => [{
+      name: 'Watched Co', provider: 'lever', careers_url: 'https://jobs.lever.co/watched', enabled: true,
+    }],
+    recordCompanyScanResults(result) { health.push(result); },
+    recordSighting(input) { return { jobKey: 'job-2', canonicalUrl: input.url, isNew: true }; },
+  };
+  const runScan = async (_args, options) => {
+    assert.equal(options.additionalCompanies.length, 1);
+    assert.equal(options.additionalCompanies[0].name, 'Watched Co');
+    return { offers: [], stats: { companies: 1 }, errors: [{ company: 'Watched Co', error: 'timeout' }] };
+  };
+
+  await scanAts({ store, lookbackHours: 24, runScan });
+
+  assert.deepEqual(health, [{ scannedNames: ['Watched Co'], errorNames: ['Watched Co'] }]);
+});
+
+test('ATS catalogue merges approved database sources without rescanning configured boards', () => {
+  const configured = [{ name: 'Acme', provider: 'lever', careers_url: 'https://jobs.lever.co/acme' }];
+  const approved = [
+    { name: 'Acme renamed', provider: 'lever', careers_url: 'https://jobs.lever.co/acme', enabled: true },
+    { name: 'New Co', provider: 'ashby', careers_url: 'https://jobs.ashbyhq.com/newco', enabled: true },
+  ];
+
+  assert.deepEqual(mergeTrackedCompanies(configured, approved), [configured[0], approved[1]]);
 });
 
 test('WhatsApp group verification checks each configured JID', async () => {
@@ -171,12 +205,57 @@ test('WhatsApp socket requests history as a supported web client', () => {
   assert.equal(options.markOnlineOnConnect, false);
 });
 
+test('local WhatsApp backlog is processed newest-first without opening a socket', () => {
+  const processed = [];
+  const store = {
+    getCheckpoint: () => 0,
+    listPendingWhatsAppMessages(_jid, options) {
+      assert.equal(options.order, 'desc');
+      assert.equal(options.limit, 100);
+      return [
+        { messageId: 'newer', timestamp: 2_000, text: 'https://example.com/newer' },
+        { messageId: 'older', timestamp: 1_000, text: 'no job link' },
+      ];
+    },
+    recordSighting({ url, source, seenAt }) {
+      return { jobKey: url, canonicalUrl: url, source, seenAt };
+    },
+    markMessageDone(message) { processed.push(message.messageId); },
+    markMessageFailed() { throw new Error('unexpected failure'); },
+    setCheckpoint() {},
+  };
+  const config = { sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'a@g.us' }] } } };
+
+  const result = scanWhatsAppBacklog({ config, store, sinceMs: 0, untilMs: 3_000, limitPerGroup: 100 });
+
+  assert.deepEqual(processed, ['newer', 'older']);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.groups[0].messages, 2);
+  assert.equal(result.groups[0].coverage.source, 'local-backlog');
+  assert.equal(result.groups[0].read.status, 'skipped');
+});
+
 test('WhatsApp retries transient disconnects but not logout or replacement', () => {
   assert.equal(shouldRetryWhatsAppConnection(428), true);
   assert.equal(shouldRetryWhatsAppConnection(408), true);
   assert.equal(shouldRetryWhatsAppConnection(503), true);
   assert.equal(shouldRetryWhatsAppConnection(401), false);
   assert.equal(shouldRetryWhatsAppConnection(440), false);
+});
+
+test('WhatsApp connection boundary suppresses private libsignal session dumps', () => {
+  const original = console.log;
+  const captured = [];
+  console.log = (...args) => captured.push(args.join(' '));
+  try {
+    const restore = suppressKnownLibsignalNoise();
+    console.log('Closing session:', { privateKey: 'secret-value' });
+    console.log('safe operational message');
+    restore();
+  } finally {
+    console.log = original;
+  }
+  assert.deepEqual(captured, ['safe operational message']);
 });
 
 test('WhatsApp connection waits for every announced history download to settle', () => {
@@ -264,16 +343,25 @@ test('WhatsApp history fetch does not use a synthetic message anchor', async () 
     delivered: 0,
     collected: 0,
     batches: 0,
+    requestedUntil: null,
+    anchorSource: null,
+    tailConfirmed: false,
+    reason: 'missing_anchor',
+    anchorWaitMs: 0,
   });
 });
 
-test('WhatsApp history coverage is complete only after raw history reaches the requested boundary', async () => {
-  const older = { key: { id: 'older', remoteJid: 'a@g.us' }, messageTimestamp: 90 };
-  const newer = { key: { id: 'newer', remoteJid: 'a@g.us' }, messageTimestamp: 110 };
+test('WhatsApp history coverage requires a delivered page, not just mixed buffer timestamps', async () => {
+  const older = { key: { id: 'older', remoteJid: 'a@g.us', fromMe: false }, messageTimestamp: 90 };
+  const newer = { key: { id: 'newer', remoteJid: 'a@g.us', fromMe: false }, messageTimestamp: 110 };
   const sock = {
     historyStore: new Map([['a@g.us', new Map([['older', older], ['newer', newer]])]]),
     groupHistoryDiagnostics: new Map(),
-    async fetchMessageHistory() { throw new Error('history should already cover the boundary'); },
+    historyBatches: new Map(),
+    async fetchMessageHistory(_count, key) {
+      assert.equal(key.id, 'newer');
+      sock.historyBatches.set('a@g.us', { revision: 1, messages: [older] });
+    },
   };
 
   const messages = await fetchGroupMessagesSince(sock, { jid: 'a@g.us', name: 'Group A' }, 100_000);
@@ -286,6 +374,33 @@ test('WhatsApp history coverage is complete only after raw history reaches the r
     newestAt: 110_000,
     delivered: 1,
     collected: 2,
-    batches: 0,
+    batches: 1,
+    requestedUntil: null,
+    anchorSource: 'received',
+    tailConfirmed: true,
+    reason: null,
+    anchorWaitMs: 0,
   });
+});
+
+test('WhatsApp history page is accepted only for its matching request session', async () => {
+  const newer = { key: { id: 'newer', remoteJid: 'a@g.us', fromMe: false }, messageTimestamp: 110 };
+  const older = { key: { id: 'older', remoteJid: 'a@g.us', fromMe: false }, messageTimestamp: 90 };
+  let clock = 0;
+  const sock = {
+    historyStore: new Map([['a@g.us', new Map([['newer', newer]])]]),
+    groupHistoryDiagnostics: new Map(),
+    historyBatches: new Map(),
+    async fetchMessageHistory() {
+      sock.historyBatches.set('a@g.us', { revision: 1, sessionId: 'different-session', messages: [older] });
+      return 'expected-session';
+    },
+  };
+
+  await fetchGroupMessagesSince(sock, { jid: 'a@g.us', name: 'Group A' }, 100_000, {
+    waitMs: 2, totalTimeoutMs: 5, now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+  });
+
+  assert.equal(sock.groupHistoryDiagnostics.get('a@g.us').reason, 'history_no_response');
 });

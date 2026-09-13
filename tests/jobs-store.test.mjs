@@ -94,6 +94,168 @@ test('WhatsApp inbox is idempotent and erases message text after processing', ()
   store.close();
 });
 
+test('WhatsApp backlog reports bounded metadata without exposing message bodies', () => {
+  const store = newStore();
+  store.queueWhatsAppMessage({
+    messageId: 'older-pending', groupJid: 'group-a@g.us', timestamp: 1_000,
+    text: 'private older text https://example.com/older',
+  });
+  store.queueWhatsAppMessage({
+    messageId: 'newer-failed', groupJid: 'group-a@g.us', timestamp: 2_000,
+    text: 'private newer text https://example.com/newer',
+  });
+  store.markMessageFailed({ messageId: 'newer-failed', groupJid: 'group-a@g.us', error: 'temporary' });
+  store.queueWhatsAppMessage({
+    messageId: 'other-group', groupJid: 'group-b@g.us', timestamp: 3_000,
+    text: 'private other text https://example.com/other',
+  });
+
+  const backlog = store.getWhatsAppBacklogStats({ sinceMs: 1_500, untilMs: 3_500 });
+
+  assert.equal(backlog.total, 2);
+  assert.equal(backlog.failed, 1);
+  assert.equal(backlog.oldestAt, 2_000);
+  assert.equal(backlog.newestAt, 3_000);
+  assert.deepEqual(backlog.groups.map(({ groupJid, total, failed }) => ({ groupJid, total, failed })), [
+    { groupJid: 'group-a@g.us', total: 1, failed: 1 },
+    { groupJid: 'group-b@g.us', total: 1, failed: 0 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(backlog), /private|example\.com/);
+  assert.deepEqual(
+    store.listPendingWhatsAppMessages('group-a@g.us', { sinceMs: 0, untilMs: 5_000, order: 'desc' })
+      .map(({ messageId }) => messageId),
+    ['newer-failed', 'older-pending'],
+  );
+  store.close();
+});
+
+test('WhatsApp retention erases expired backlog bodies but keeps terminal deduplication keys', () => {
+  const store = newStore();
+  store.queueWhatsAppMessage({
+    messageId: 'expired-pending', groupJid: 'group-a@g.us', timestamp: 1_000,
+    text: 'private expired text https://example.com/expired',
+  });
+  store.queueWhatsAppMessage({
+    messageId: 'expired-failed', groupJid: 'group-a@g.us', timestamp: 2_000,
+    text: 'private failed text https://example.com/failed',
+  });
+  store.markMessageFailed({ messageId: 'expired-failed', groupJid: 'group-a@g.us', error: 'temporary' });
+  store.queueWhatsAppMessage({
+    messageId: 'recent-pending', groupJid: 'group-a@g.us', timestamp: 9_000,
+    text: 'recent text https://example.com/recent',
+  });
+
+  const discarded = store.discardOldWhatsAppMessages({ beforeTs: 5_000, discardedAt: 10_000 });
+
+  assert.equal(discarded, 2);
+  assert.deepEqual(store.getMessageState('expired-pending'), { status: 'done', hasText: false });
+  assert.deepEqual(store.getMessageState('expired-failed'), { status: 'done', hasText: false });
+  assert.deepEqual(store.getMessageState('recent-pending'), { status: 'pending', hasText: true });
+  assert.equal(store.shouldProcessMessage('expired-pending'), false);
+  assert.equal(store.queueWhatsAppMessage({
+    messageId: 'expired-pending', groupJid: 'group-a@g.us', timestamp: 1_000,
+    text: 'private replayed text',
+  }), false);
+  assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 20_000 })
+    .map(({ messageId }) => messageId), ['recent-pending']);
+  assert.deepEqual(store.listWhatsAppMessageKeys('group-a@g.us').map(({ id }) => id), [
+    'recent-pending', 'expired-failed', 'expired-pending',
+  ]);
+  store.close();
+});
+
+test('WhatsApp history requests are durable, single-flight and retain safe per-group progress', () => {
+  const store = newStore();
+  const first = store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 2, createdAt: 10 });
+  const duplicate = store.requestWhatsAppHistory({ fromTs: 2_000, toTs: 6_000, groupsTotal: 2, createdAt: 11 });
+
+  assert.equal(first.created, true);
+  assert.equal(duplicate.created, false);
+  assert.equal(duplicate.request.id, first.request.id);
+
+  const claimed = store.claimNextWhatsAppHistoryRequest({ ownerPid: 123, startedAt: 20 });
+  assert.equal(claimed.status, 'running');
+  assert.equal(claimed.ownerPid, 123);
+  store.recordWhatsAppHistoryGroup(claimed.id, {
+    name: 'Group A', status: 'complete', delivered: 50, queued: 40,
+    duplicates: 10, oldestAt: 1_000, newestAt: 5_000, batches: 1,
+  });
+  store.updateWhatsAppHistoryRequest(claimed.id, {
+    currentGroup: 'Group A', groupsCompleted: 1, messagesReceived: 50,
+    messagesQueued: 40, duplicates: 10,
+  });
+  store.finishWhatsAppHistoryRequest(claimed.id, { status: 'complete', finishedAt: 30 });
+
+  const completed = store.getLatestWhatsAppHistoryRequest();
+  assert.equal(completed.status, 'complete');
+  assert.equal(completed.messagesReceived, 50);
+  assert.equal(completed.groups[0].name, 'Group A');
+  assert.doesNotMatch(JSON.stringify(completed), /@g\.us/);
+  store.close();
+});
+
+test('WhatsApp history keeps the per-group collection cursor captured when the request is created', () => {
+  const store = newStore();
+  const created = store.requestWhatsAppHistory({
+    fromTs: 1_000,
+    toTs: 10_000,
+    groupsTotal: 2,
+    groups: [
+      { name: 'Group A', requestedFrom: 4_000 },
+      { name: 'Group B', requestedFrom: 7_000 },
+    ],
+    createdAt: 20,
+  });
+
+  assert.deepEqual(created.request.groups.map(({ name, status, requestedFrom }) => ({ name, status, requestedFrom })), [
+    { name: 'Group A', status: 'pending', requestedFrom: 4_000 },
+    { name: 'Group B', status: 'pending', requestedFrom: 7_000 },
+  ]);
+  const claimed = store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: 30 });
+  store.recordWhatsAppHistoryGroup(claimed.id, {
+    name: 'Group A', status: 'complete', requestedFrom: 4_000, delivered: 3,
+  });
+  assert.equal(store.getWhatsAppHistoryRequest(claimed.id).groups[0].requestedFrom, 4_000);
+  store.close();
+});
+
+test('WhatsApp group collection stats expose timestamps and counts without message text', () => {
+  const store = newStore();
+  store.queueWhatsAppMessage({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000, text: 'private done' });
+  store.markMessageDone({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000 });
+  store.queueWhatsAppMessage({ messageId: 'pending', groupJid: 'group-a@g.us', timestamp: 2_000, text: 'private pending' });
+  store.queueWhatsAppMessage({ messageId: 'failed', groupJid: 'group-a@g.us', timestamp: 3_000, text: 'private failed' });
+  store.markMessageFailed({ messageId: 'failed', groupJid: 'group-a@g.us', error: 'temporary' });
+
+  const stats = store.getWhatsAppGroupCollectionStats('group-a@g.us');
+  assert.deepEqual(stats, {
+    totalCollected: 3,
+    pending: 2,
+    failed: 1,
+    lastCollectedAt: 3_000,
+    lastProcessedAt: 1_000,
+  });
+  assert.doesNotMatch(JSON.stringify(stats), /private/);
+  store.close();
+});
+
+test('an interrupted WhatsApp history request is safely requeued for the next collector', () => {
+  const store = newStore();
+  store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
+  const claimed = store.claimNextWhatsAppHistoryRequest({ ownerPid: 99_999_999, startedAt: 20 });
+  store.recordWhatsAppHistoryGroup(claimed.id, { name: 'Group A', status: 'partial', delivered: 10 });
+
+  assert.equal(store.requeueInterruptedWhatsAppHistoryRequests(), 1);
+  const requeued = store.getLatestWhatsAppHistoryRequest();
+  assert.equal(requeued.status, 'pending');
+  assert.equal(requeued.ownerPid, null);
+  assert.deepEqual(requeued.groups.map(({ name, status, delivered }) => ({ name, status, delivered })), [
+    { name: 'Group A', status: 'pending', delivered: 0 },
+  ]);
+  assert.equal(store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: 30 }).status, 'running');
+  store.close();
+});
+
 test('cached pages expire according to TTL', () => {
   const store = newStore();
   store.savePage({
@@ -191,6 +353,43 @@ test('last successful run must cover every requested source', () => {
 
   assert.equal(store.getLastSuccessfulRun(['ats']).id, Number(newerAts));
   assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp']).id, Number(full));
+  store.close();
+});
+
+test('diagnostic retention keeps only recent evidence and durable success checkpoints', () => {
+  const store = newStore();
+  const runIds = [];
+  for (let index = 0; index < 6; index += 1) {
+    const runId = store.startRun({
+      fromTs: index,
+      toTs: index + 1,
+      sources: index === 0 ? ['whatsapp'] : ['ats'],
+      startedAt: 100 + index,
+    });
+    store.recordRunEvent(runId, { source: 'system', scope: 'run', stage: 'run', status: 'started', createdAt: 100 + index });
+    store.finishRun(runId, { status: index === 0 || index === 2 ? 'success' : 'failed', finishedAt: 200 + index });
+    runIds.push(Number(runId));
+  }
+
+  for (let index = 0; index < 5; index += 1) {
+    const actionId = store.startAction(`action-${index}`, { ownerPid: 1 });
+    store.updateAction(actionId, { status: 'success', finishedAt: 300 + index });
+    const collectorId = store.startCollectorRun({ ownerPid: 1, startedAt: 400 + index });
+    store.recordCollectorEvent(collectorId, { stage: 'connected', status: 'complete', createdAt: 400 + index });
+    store.finishCollectorRun(collectorId, { status: 'stopped', finishedAt: 500 + index });
+  }
+
+  const result = store.pruneDiagnostics({ keepRecent: 3 });
+
+  assert.equal(store.getRun(runIds[0]).events.length, 0, 'old WhatsApp success survives only as a compact checkpoint');
+  assert.equal(store.getRun(runIds[1]), null, 'old failed run is deleted');
+  assert.equal(store.getLastSuccessfulRun(['whatsapp']).id, runIds[0]);
+  assert.equal(store.getLastSuccessfulRun(['ats']).id, runIds[2]);
+  assert.equal(store.diagnosticHistory().filter((item) => item.kind === 'runs').length, 3);
+  assert.equal(store.diagnosticHistory().filter((item) => item.kind === 'actions').length, 3);
+  assert.equal(store.diagnosticHistory().filter((item) => item.kind === 'collectors').length, 3);
+  assert.ok(result.runsDeleted >= 1);
+  assert.ok(result.eventsDeleted >= 1);
   store.close();
 });
 

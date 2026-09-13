@@ -5,31 +5,7 @@ import { markConfiguredGroupsRead, verifyConfiguredGroups } from './sources/what
 import { loadJobsConfig } from './config.mjs';
 import { createJobStore } from './store.mjs';
 
-function suppressKnownLibsignalNoise() {
-  const methods = ['error', 'warn', 'info'];
-  const originals = new Map(methods.map((method) => [method, console[method]]));
-  const noisyPrefixes = [
-    'Failed to decrypt message with any known session',
-    'Session error:',
-    'Closing open session in favor of incoming prekey bundle',
-    'Closing session:',
-    'Session already closed',
-    'Session already open',
-  ];
-  for (const method of methods) {
-    console[method] = (...args) => {
-      const first = String(args[0] ?? '');
-      if (noisyPrefixes.some((prefix) => first.startsWith(prefix))) return;
-      originals.get(method)(...args);
-    };
-  }
-  return () => {
-    for (const method of methods) console[method] = originals.get(method);
-  };
-}
-
 async function main() {
-  const restoreConsole = suppressKnownLibsignalNoise();
   let store;
   let sock;
   try {
@@ -38,6 +14,11 @@ async function main() {
     if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
 
     store = createJobStore(config.jobsDbPath);
+    const collector = store.getCollectorStatus();
+    if (collector && ['starting', 'connecting', 'connected', 'reconnecting', 'pairing_required', 'unconfirmed'].includes(collector.status)) {
+      console.log(`Collector #${collector.id} מנהל אישורי קריאה לאחר שמירת ההודעות; לא נפתח חיבור WhatsApp נוסף.`);
+      return;
+    }
     sock = await connectWhatsApp(whatsapp.authAbsPath, { historyWarmupMs: 20_000 });
     const verification = await verifyConfiguredGroups(config, sock);
     const missing = verification.filter((group) => !group.found);
@@ -47,9 +28,9 @@ async function main() {
     for (const result of results) {
       if (result.marked) {
         const detail = ['message-receipts', 'stored-message-receipts'].includes(result.method)
-          ? `${result.messages} הודעות שנאספו`
+          ? `${result.messages} מזהי הודעות ${result.method === 'stored-message-receipts' ? 'שנשמרו בריצות קודמות' : 'שהתקבלו בחיבור הנוכחי'}`
           : `מצב הצ'אט, ${result.unreadBefore} לא נקראו לפני הפעולה`;
-        console.log(`✓ ${result.name}: סומן כנקרא (${detail})`);
+        console.log(`✓ ${result.name}: נשלח סימון קריאה (${detail}); הפעולה אינה סריקת משרות ואינה אימות מונה הלא-נקראו בטלפון.`);
       } else {
         console.log(`✗ ${result.name}: לא סומן (${result.error})`);
       }
@@ -59,7 +40,6 @@ async function main() {
   } finally {
     if (sock) await disconnectWhatsApp(sock);
     store?.close();
-    restoreConsole();
   }
 }
 

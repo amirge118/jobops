@@ -8,6 +8,7 @@ import {
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
+import { normalizeWhatsAppAnchor } from './whatsapp-history.mjs';
 
 const logger = pino({ level: process.env.JOBOPS_WA_LOG_LEVEL || 'silent' });
 const MAX_RESTART_ATTEMPTS = 3;
@@ -15,6 +16,35 @@ const RECONNECT_DELAY_MS = 750;
 const HISTORY_INITIAL_WAIT_MS = 30_000;
 const HISTORY_MAX_WAIT_MS = 120_000;
 const HISTORY_QUIET_MS = 3_000;
+
+// libsignal occasionally writes complete SessionEntry objects directly to the
+// console. Those objects contain private ratchet keys, so suppress the known
+// diagnostic prefixes at the connection boundary instead of relying on callers
+// or dashboard redaction.
+export function suppressKnownLibsignalNoise() {
+  const methods = ['error', 'warn', 'info', 'log'];
+  const originals = new Map(methods.map((method) => [method, console[method]]));
+  const noisyPrefixes = [
+    'Failed to decrypt message with any known session',
+    'Session error:',
+    'Closing open session in favor of incoming prekey bundle',
+    'Closing session:',
+    'Session already closed',
+    'Session already open',
+  ];
+  for (const method of methods) {
+    console[method] = (...args) => {
+      if (noisyPrefixes.some((prefix) => String(args[0] ?? '').startsWith(prefix))) return;
+      originals.get(method)(...args);
+    };
+  }
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    for (const method of methods) console[method] = originals.get(method);
+  };
+}
 
 export function shouldRetryWhatsAppConnection(statusCode) {
   return statusCode === DisconnectReason.connectionClosed ||
@@ -28,6 +58,9 @@ export function createWhatsAppSocketOptions({ auth, logger: socketLogger }) {
   return {
     auth,
     logger: socketLogger,
+    // WhatsApp currently terminates Baileys desktop identities with status
+    // 428 before the socket can open. A web-browser identity remains supported
+    // and lets the long-lived Collector receive new messages reliably.
     browser: Browsers.ubuntu('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: true,
@@ -58,8 +91,21 @@ export async function connectWhatsApp(authPath, {
   historyQuietMs = HISTORY_QUIET_MS,
   persistCredentials = true,
   onMessages = null,
+  onIngressError = null,
+  onConnectionUpdate = null,
+  onQr = null,
+  configuredGroupJids = null,
+  waitForHistory = true,
 } = {}) {
-  const { state, saveCreds } = await useMultiFileAuthState(authPath);
+  const restoreConsole = suppressKnownLibsignalNoise();
+  let state;
+  let saveCreds;
+  try {
+    ({ state, saveCreds } = await useMultiFileAuthState(authPath));
+  } catch (error) {
+    restoreConsole();
+    throw error;
+  }
   const authDiagnostics = {
     processedHistoryMessages: Array.isArray(state.creds.processedHistoryMessages)
       ? state.creds.processedHistoryMessages.length
@@ -70,6 +116,21 @@ export async function connectWhatsApp(authPath, {
   return new Promise((resolve, reject) => {
     let attempts = 0;
     let generation = 0;
+    let settled = false;
+
+    const finishResolve = (sock) => {
+      if (settled) return;
+      settled = true;
+      sock.restoreWhatsAppConsole = restoreConsole;
+      resolve(sock);
+    };
+
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      restoreConsole();
+      reject(error);
+    };
 
     async function start() {
       const socketGeneration = ++generation;
@@ -81,6 +142,7 @@ export async function connectWhatsApp(authPath, {
 
       if (persistCredentials) sock.ev.on('creds.update', saveCreds);
       sock.historyStore = new Map();
+      sock.historyBatches = new Map();
       sock.chatStore = new Map();
       sock.groupHistoryDiagnostics = new Map();
       sock.historyDiagnostics = {
@@ -105,8 +167,9 @@ export async function connectWhatsApp(authPath, {
         lastHistoryActivityAt = Date.now();
       });
 
-      const collect = (messages = [], eventType) => {
-        const boundedMessages = messages.slice(0, 5_000);
+      const collect = (messages = [], eventType, { sessionId = null } = {}) => {
+        const scopedMessages = configuredGroupJids ? messages.filter((message) => configuredGroupJids.has(message.key?.remoteJid)) : messages;
+        const boundedMessages = scopedMessages.slice(0, 5_000);
         sock.historyDiagnostics.messages += boundedMessages.length;
         if (eventType === 'history') {
           sock.historyDiagnostics.historyEvents += 1;
@@ -120,22 +183,43 @@ export async function connectWhatsApp(authPath, {
           if (!sock.historyStore.has(jid)) sock.historyStore.set(jid, new Map());
           sock.historyStore.get(jid).set(id, message);
         }
+        // A history response can repeat IDs already in memory. Track its
+        // delivery separately from live upserts so neither is mistaken for a
+        // successful pagination response. Keep only the latest batch per group.
+        if (eventType === 'history') {
+          const batches = new Map();
+          for (const message of boundedMessages) {
+            const jid = message.key?.remoteJid;
+            const anchor = normalizeWhatsAppAnchor(message, jid);
+            if (!anchor) continue;
+            if (!batches.has(jid)) batches.set(jid, []);
+            batches.get(jid).push(anchor);
+          }
+          for (const [jid, messages] of batches) sock.historyBatches.set(jid, {
+            revision: (sock.historyBatches.get(jid)?.revision || 0) + 1,
+            sessionId: typeof sessionId === 'string' ? sessionId : null,
+            messages,
+          });
+        }
         try {
-          onMessages?.(boundedMessages);
+          onMessages?.(boundedMessages, sock);
         } catch (error) {
           sock.ingressError = error;
+          try { onIngressError?.(error, sock); }
+          catch { /* Preserve the original persistence failure. */ }
         }
       };
 
       const collectChats = (chats) => {
         for (const chat of chats || []) {
           if (!chat?.id) continue;
+          if (configuredGroupJids && !configuredGroupJids.has(chat.id)) continue;
           sock.chatStore.set(chat.id, { ...(sock.chatStore.get(chat.id) || {}), ...chat });
         }
       };
 
-      sock.ev.on('messaging-history.set', ({ messages, chats }) => {
-        collect(messages, 'history');
+      sock.ev.on('messaging-history.set', ({ messages, chats, peerDataRequestSessionId }) => {
+        collect(messages, 'history', { sessionId: peerDataRequestSessionId });
         collectChats(chats);
       });
       sock.ev.on('messages.upsert', ({ messages }) => collect(messages, 'upsert'));
@@ -143,14 +227,23 @@ export async function connectWhatsApp(authPath, {
       sock.ev.on('chats.update', collectChats);
 
       sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+        try { onConnectionUpdate?.({ connection, lastDisconnect, qr: Boolean(qr) }, sock); }
+        catch (error) { sock.ingressError = error; }
         if (qr) {
-          console.log('\nסרוק את קוד ה-QR ב-WhatsApp → מכשירים מקושרים:\n');
-          qrcodeTerminal.generate(qr, { small: true });
+          onQr?.(qr);
+          if (process.env.JOBOPS_HIDE_QR !== '1') {
+            console.log('\nסרוק את קוד ה-QR ב-WhatsApp → מכשירים מקושרים:\n');
+            qrcodeTerminal.generate(qr, { small: true });
+          }
         }
 
         if (connection === 'open') {
+          if (!waitForHistory) {
+            finishResolve(sock);
+            return;
+          }
           const openedAt = Date.now();
-          const waitForHistory = () => {
+          const pollHistory = () => {
             if (socketGeneration !== generation) return;
             const now = Date.now();
             const outcome = decideHistoryWait({
@@ -163,31 +256,35 @@ export async function connectWhatsApp(authPath, {
               quietMs: historyQuietMs,
             });
             if (outcome === 'wait') {
-              setTimeout(waitForHistory, 500);
+              setTimeout(pollHistory, 500);
               return;
             }
             sock.historyDiagnostics.waitOutcome = outcome;
             sock.historyDiagnostics.waitMs = now - openedAt;
-            resolve(sock);
+            finishResolve(sock);
           };
-          setTimeout(waitForHistory, 500);
+          setTimeout(pollHistory, 500);
           return;
         }
 
         if (connection !== 'close') return;
         const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+        // Once a long-lived caller owns the open socket, it is responsible for
+        // reconnect policy. Starting an untracked socket here would create two
+        // consumers of the same Signal session.
+        if (settled) return;
         if (statusCode === DisconnectReason.loggedOut) {
-          reject(new Error('WhatsApp session is logged out; remove the configured auth directory and pair again.'));
+          finishReject(new Error('WhatsApp session is logged out; pairing required.'));
         } else if (shouldRetryWhatsAppConnection(statusCode) && attempts < MAX_RESTART_ATTEMPTS) {
           attempts += 1;
-          setTimeout(() => start().catch(reject), RECONNECT_DELAY_MS * attempts);
+          setTimeout(() => start().catch(finishReject), RECONNECT_DELAY_MS * attempts);
         } else {
-          reject(new Error(`WhatsApp connection closed before ready (status ${statusCode}).`));
+          finishReject(new Error(`WhatsApp connection closed before ready (status ${statusCode}).`));
         }
       });
     }
 
-    start().catch(reject);
+    start().catch(finishReject);
   });
 }
 
@@ -198,5 +295,7 @@ export async function disconnectWhatsApp(sock) {
     await sock.end(undefined);
   } catch {
     // Best-effort teardown; scan results are already persisted locally.
+  } finally {
+    sock.restoreWhatsAppConsole?.();
   }
 }

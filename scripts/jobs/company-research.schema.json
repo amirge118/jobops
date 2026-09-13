@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["companyName", "candidateUrls", "rationale", "evidenceUrls"],
+  "properties": {
+    "companyName": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "candidateUrls": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    },
+    "rationale": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "evidenceUrls": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    }
+  }
+}

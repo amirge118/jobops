@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="החלטות על משרות ב-jobOps"><title>החלטות — jobOps</title><link rel="stylesheet" href="/styles.css"></head>
+  <body data-page="decisions">
+    <div class="shell">
+      <div id="app-shell"></div>
+      <main class="page-main">
+        <section class="page-hero"><div><p class="step">02 / החלטות</p><h2>המשרות שמתאימות לך</h2><p>כאן מופיעות רק משרות שעברו את סף ההתאמה ועדיין פעילות.</p></div><button id="open-jobs" class="button button-primary" type="button">פתח התאמות חדשות ב-Chrome</button></section>
+        <section class="summary-grid summary-grid-two" aria-label="סיכום החלטות">
+          <article class="summary-card summary-card-jobs" data-empty="true"><span>משרות מתאימות</span><strong id="suitable-count">0</strong></article>
+          <article class="summary-card summary-card-unopened" data-empty="true"><span>ממתינות לפתיחה</span><strong id="unopened-count">0</strong></article>
+        </section>
+        <section class="jobs-section page-section" aria-labelledby="jobs-title"><div class="section-heading jobs-heading"><div><p class="step">רשימת החלטות</p><h2 id="jobs-title">מה כדאי לבדוק עכשיו?</h2></div></div><div class="table-wrap"><table><thead><tr><th>חברה ומשרה</th><th>תיאור קצר</th><th>ציון</th><th>התאמה</th><th>סיבת ההחלטה</th><th>קישור</th><th>פעולה</th></tr></thead><tbody id="jobs-body"></tbody></table><div id="empty-state" class="empty-state"><strong>אין כרגע משרות מתאימות</strong><span>לאחר סריקה, משרות שיעברו את בדיקת ההתאמה יופיעו כאן.</span><a class="button button-secondary" href="/scan">עבור לסריקה</a></div></div></section>
+        <p id="page-feedback" class="company-feedback" role="status" aria-live="polite"></p>
+      </main>
+      <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
+    </div>
+    <script type="module" src="/shared/app-shell.js"></script>
+    <script type="module" src="/pages/decisions-page.js"></script>
+  </body>
+</html>

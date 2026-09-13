@@ -4,9 +4,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { buildActionCommand, parseDashboardOptions } from '../scripts/jobs/dashboard.mjs';
+import { buildActionCommand, parseBacklogOptions, parseDashboardOptions } from '../scripts/jobs/dashboard.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import { createDashboardServer, sanitizeCommandOutput } from '../scripts/web.mjs';
+
+const readyState = {
+  checkedAt: 1,
+  browser: { status: 'ready', code: null },
+  scorer: { status: 'ready', code: null },
+  collector: { status: 'ready', code: null },
+  readyFor: { ats: true, whatsapp: true },
+};
+const readyService = { inspect: async () => readyState };
 
 test('dashboard scan options become a shell-free jobs command', () => {
   const options = parseDashboardOptions({ days: 2, source: 'whatsapp', open: true }, 14);
@@ -40,7 +49,61 @@ test('dashboard actions use fixed scripts and reject unknown actions', () => {
     command: process.execPath,
     args: ['/project/scripts/jobs/mark-groups-read.mjs'],
   });
+  assert.deepEqual(parseBacklogOptions({ days: 7 }), { days: 7 });
+  assert.deepEqual(parseBacklogOptions({ days: null }), { days: null });
+  assert.deepEqual(buildActionCommand('process-backlog', { days: 7 }, '/project'), {
+    command: process.execPath,
+    args: ['/project/scripts/jobs.mjs', '--whatsapp-backlog', '--days', '7'],
+  });
   assert.throws(() => buildActionCommand('delete-everything', {}, '/project'), /Unknown action/);
+});
+
+test('dashboard exposes WhatsApp backlog and queues one durable history request', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-history-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'data', 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'group-a@g.us' }] } },
+  };
+  const store = createJobStore(config.jobsDbPath);
+  store.queueWhatsAppMessage({ messageId: 'pending-1', groupJid: 'group-a@g.us', timestamp: Date.now(), text: 'https://example.com/job' });
+  store.close();
+  const server = createDashboardServer({ config, readiness: readyService });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  assert.equal(scan.whatsappHistory.backlog.total, 1);
+  assert.equal(scan.whatsappHistory.backlog.groups[0].name, 'Group A');
+  assert.equal(Object.hasOwn(scan.whatsappHistory.backlog.groups[0], 'groupJid'), false);
+  assert.ok(scan.whatsappHistory.backlog.groups[0].lastCollectedAt);
+
+  const queuedResponse = await fetch(`${baseUrl}/api/whatsapp/history`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 30 }),
+  });
+  assert.equal(queuedResponse.status, 202);
+  const queued = await queuedResponse.json();
+  assert.equal(queued.created, true);
+  assert.equal(queued.request.status, 'pending');
+  assert.equal(queued.request.groups[0].name, 'Group A');
+  assert.equal(queued.request.groups[0].requestedFrom, scan.whatsappHistory.backlog.groups[0].lastCollectedAt - 1_000);
+
+  const duplicateResponse = await fetch(`${baseUrl}/api/whatsapp/history`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 30 }),
+  });
+  assert.equal(duplicateResponse.status, 200);
+  assert.equal((await duplicateResponse.json()).created, false);
+
+  const simpleCrossOriginShape = await fetch(`${baseUrl}/api/whatsapp/history`, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ days: 30 }),
+  });
+  assert.equal(simpleCrossOriginShape.status, 415);
 });
 
 test('dashboard command output redacts cryptographic buffers and session identifiers', () => {
@@ -68,6 +131,7 @@ test('dashboard API exposes state and prevents overlapping actions', async (cont
   };
   const server = createDashboardServer({
     config,
+    readiness: readyService,
     execute(command, rootDir, onOutput) {
       commands.push({ command, rootDir });
       onOutput('started');
@@ -141,4 +205,139 @@ test('dashboard API archives one known job and rejects unknown job keys', async 
 
   const missingResponse = await fetch(`${baseUrl}/api/jobs/aaaaaaaaaaaaaaaaaaaaaaaa/archive`, { method: 'POST' });
   assert.equal(missingResponse.status, 404);
+});
+
+test('dashboard serves three real pages and focused page APIs', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-pages-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const config = {
+    rootDir: projectRoot,
+    jobsDbPath: path.join(tempDir, 'jobs.db'),
+    demo: true,
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [{ name: 'Group A' }] } },
+  };
+  const server = createDashboardServer({ config });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const root = await fetch(`${baseUrl}/`, { redirect: 'manual' });
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get('location'), '/scan');
+
+  for (const [route, marker] of [
+    ['/scan', 'data-page="scan"'],
+    ['/decisions', 'data-page="decisions"'],
+    ['/companies', 'data-page="companies"'],
+  ]) {
+    const response = await fetch(`${baseUrl}${route}`);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), new RegExp(marker));
+  }
+
+  const summary = await fetch(`${baseUrl}/api/summary`).then((response) => response.json());
+  assert.deepEqual(summary.jobs, { suitable: 0, unopened: 0 });
+  assert.equal(summary.groups, 1);
+
+  const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  assert.equal(scan.settings.maxLookbackDays, 14);
+  assert.equal(scan.action.status, 'idle');
+  assert.equal(scan.readiness.readyFor.ats, true);
+  assert.equal(scan.diagnosis.status, 'empty');
+  assert.equal(Object.hasOwn(scan, 'jobs'), false);
+
+  const jobs = await fetch(`${baseUrl}/api/jobs`).then((response) => response.json());
+  assert.deepEqual(jobs.jobs, []);
+  assert.equal(Object.hasOwn(jobs, 'history'), false);
+
+  const history = await fetch(`${baseUrl}/api/diagnostics/history`).then((response) => response.json());
+  assert.deepEqual(history.history, []);
+});
+
+test('dashboard blocks an impossible scan and returns an actionable readiness result', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-readiness-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  let executed = false;
+  const blockedState = {
+    ...readyState,
+    browser: { status: 'blocked', code: 'sandboxed_runtime', reason: 'blocked', nextStep: 'open externally' },
+    scorer: { status: 'blocked', code: 'sandboxed_runtime', reason: 'blocked', nextStep: 'open externally' },
+    readyFor: { ats: false, whatsapp: false },
+  };
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [] } },
+  };
+  const server = createDashboardServer({
+    config,
+    readiness: { inspect: async () => blockedState },
+    execute: async () => { executed = true; },
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const response = await fetch(`${baseUrl}/api/actions/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 1, source: 'ats', open: false }),
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 409);
+  assert.equal(payload.code, 'scan_not_ready');
+  assert.deepEqual(payload.blockers.map((blocker) => blocker.code), ['sandboxed_runtime']);
+  assert.equal(executed, false);
+
+  const backlogResponse = await fetch(`${baseUrl}/api/actions/process-backlog`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days: 7 }),
+  });
+  const backlogPayload = await backlogResponse.json();
+
+  assert.equal(backlogResponse.status, 409);
+  assert.equal(backlogPayload.code, 'scan_not_ready');
+  assert.deepEqual(backlogPayload.blockers.map((blocker) => blocker.code), ['sandboxed_runtime']);
+  assert.equal(executed, false);
+});
+
+test('polling APIs keep detailed event timelines behind the diagnostic detail route', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-payload-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  const config = {
+    rootDir: projectRoot,
+    jobsDbPath: path.join(tempDir, 'jobs.db'),
+    demo: true,
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [] } },
+  };
+  const store = createJobStore(config.jobsDbPath);
+  const runId = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'] });
+  store.recordRunEvent(runId, { source: 'ats', scope: 'source', stage: 'collection', status: 'complete', count: 1 });
+  store.finishRun(runId, { status: 'success', details: { ats: { found: 1, candidates: 1, errors: 0 } } });
+  store.close();
+
+  const server = createDashboardServer({ config });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  assert.equal(scan.lastRun.id, Number(runId));
+  assert.equal(Object.hasOwn(scan.lastRun, 'events'), false);
+
+  const history = await fetch(`${baseUrl}/api/diagnostics/history`).then((response) => response.json());
+  assert.equal(Object.hasOwn(history.history[0], 'events'), false);
+
+  const detail = await fetch(`${baseUrl}/api/diagnostics/runs/${runId}`).then((response) => response.json());
+  assert.equal(detail.detail.events.length, 1);
 });

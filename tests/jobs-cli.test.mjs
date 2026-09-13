@@ -31,9 +31,20 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
     open: true,
     dryRun: false,
     retryOnly: false,
+    whatsappBacklog: false,
+  });
+  assert.deepEqual(parseArgs(['--whatsapp-backlog', '--days', '7']), {
+    days: 7,
+    atsOnly: false,
+    whatsappOnly: false,
+    open: false,
+    dryRun: false,
+    retryOnly: false,
+    whatsappBacklog: true,
   });
   assert.throws(() => parseArgs(['--ats-only', '--whatsapp-only']), /either/);
   assert.throws(() => parseArgs(['--retry-only', '--whatsapp-only']), /retry-only/);
+  assert.throws(() => parseArgs(['--whatsapp-backlog', '--ats-only']), /whatsapp-backlog/);
 });
 
 test('scan window uses last successful run with overlap and caps explicit days', () => {

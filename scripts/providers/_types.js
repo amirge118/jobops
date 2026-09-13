@@ -27,7 +27,9 @@
  * A single `tracked_companies` entry from `portals.yml`.
  *
  * Provider-specific fields are opaque to scan.mjs and validated by the
- * provider itself. Examples in current providers: `api`, `careers_url`.
+ * provider itself. Examples in current providers: `api`, `careers_url`, and
+ * Workday's optional `search_text`. Persistent sources keep only bounded,
+ * provider-validated configuration and restore these fields before scanning.
  * Providers read these directly off the entry object — no schema enforcement
  * at the framework level.
  *
@@ -65,6 +67,7 @@
  * @typedef {object} Context
  * @property {('http')} transport
  * @property {(url: string, opts?: FetchOptions) => Promise<string>}  fetchText
+ * @property {(url: string, opts?: FetchOptions & {maxBytes?: number}) => Promise<string>} fetchLimitedText
  * @property {(url: string, opts?: FetchOptions) => Promise<unknown>} fetchJson
  */
 

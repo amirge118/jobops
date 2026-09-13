@@ -7,11 +7,25 @@ import path from 'node:path';
 import { connectWhatsApp, disconnectWhatsApp } from './sources/whatsapp-client.mjs';
 import { verifyConfiguredGroups } from './sources/whatsapp.mjs';
 import { loadJobsConfig } from './config.mjs';
+import { createJobStore } from './store.mjs';
 
 async function main() {
   const config = loadJobsConfig();
   const whatsapp = config.sources.whatsapp;
   if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
+
+  const store = createJobStore(config.jobsDbPath);
+  const collector = store.getCollectorStatus();
+  store.close();
+  if (collector && ['starting', 'connecting', 'connected', 'reconnecting', 'pairing_required', 'unconfirmed'].includes(collector.status)) {
+    const verification = [...(collector.events || [])].reverse().find((event) => event.stage === 'group-verification')?.details?.groups;
+    if (!verification) throw new Error(`Collector #${collector.id} פעיל, אך עדיין אין תוצאת אימות קבוצות. בדוק את האבחון שלו.`);
+    for (const group of verification) console.log(`${group.found ? '✓' : '✗'} ${group.name}`);
+    const missing = verification.filter((group) => !group.found);
+    if (missing.length) throw new Error(`${missing.length} מתוך ${verification.length} קבוצות לא נמצאו ב-Collector #${collector.id}`);
+    console.log(`כל ${verification.length} הקבוצות אומתו על ידי Collector #${collector.id}; לא נפתח חיבור נוסף.`);
+    return;
+  }
 
   // Signal session state is mutable even during a read-only membership check.
   // Work on a disposable copy so verification never modifies the real session.

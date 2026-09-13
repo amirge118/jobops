@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { loadJobsConfig } from './jobs/config.mjs';
+import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { deduplicateJobs } from './jobs/core.mjs';
 import { createJobPageFetcher } from './jobs/fetch-page.mjs';
 import { openJobUrls } from './jobs/open.mjs';
@@ -13,7 +14,8 @@ import { renderMinimalReport } from './jobs/report.mjs';
 import { createJobScorer } from './jobs/score-job.mjs';
 import { createJobStore } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
-import { scanWhatsApp } from './jobs/sources/whatsapp.mjs';
+import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
+import { createRunLifecycle, describeFailure, safeTargetUrl } from './jobs/diagnostics.mjs';
 
 export function parseArgs(argv) {
   const daysIndex = argv.indexOf('--days');
@@ -27,6 +29,9 @@ export function parseArgs(argv) {
   if (argv.includes('--retry-only') && (argv.includes('--ats-only') || argv.includes('--whatsapp-only'))) {
     throw new Error('--retry-only cannot be combined with source-only flags');
   }
+  if (argv.includes('--whatsapp-backlog') && (argv.includes('--ats-only') || argv.includes('--whatsapp-only') || argv.includes('--retry-only'))) {
+    throw new Error('--whatsapp-backlog cannot be combined with source-only or retry flags');
+  }
   return {
     days,
     atsOnly: argv.includes('--ats-only'),
@@ -34,6 +39,7 @@ export function parseArgs(argv) {
     open: argv.includes('--open'),
     dryRun: argv.includes('--dry-run'),
     retryOnly: argv.includes('--retry-only'),
+    whatsappBacklog: argv.includes('--whatsapp-backlog'),
   };
 }
 
@@ -62,7 +68,7 @@ export function filterPendingCandidatesForSources(candidates, sources) {
   if (sources.includes('ats')) {
     return candidates.filter((candidate) => String(candidate.source || '').startsWith('ATS:'));
   }
-  if (sources.includes('whatsapp')) {
+  if (sources.includes('whatsapp') || sources.includes('whatsapp-backlog')) {
     return candidates.filter((candidate) => String(candidate.source || '').startsWith('WhatsApp:'));
   }
   return [];
@@ -139,6 +145,7 @@ export function summarizeSourceResults(sourceResults) {
       name: group.name,
       found: Boolean(group.found),
       messages,
+      failedMessages: Number(group.failedMessages || 0),
       candidates: Number(group.candidates || 0),
       coverage: {
         status: group.coverage?.status || fallbackCoverage,
@@ -148,15 +155,21 @@ export function summarizeSourceResults(sourceResults) {
         delivered: Number(group.coverage?.delivered ?? messages),
         collected: Number(group.coverage?.collected ?? messages),
         batches: Number(group.coverage?.batches ?? 0),
+        requestedUntil: group.coverage?.requestedUntil ?? null,
+        anchorSource: group.coverage?.anchorSource || null,
+        tailConfirmed: group.coverage?.tailConfirmed ?? null,
+        reason: group.coverage?.reason || null,
+        anchorWaitMs: Number(group.coverage?.anchorWaitMs || 0),
       },
       read: group.read ? {
+        ...(group.read.status ? { status: group.read.status } : {}),
         marked: Boolean(group.read.marked),
         method: group.read.method || null,
         messages: Number(group.read.messages || 0),
         unreadBefore: group.read.unreadBefore == null ? null : Number(group.read.unreadBefore),
-        error: group.read.error || null,
+        error: group.read.error ? describeFailure(group.read.error, 'read_failed').reason : null,
       } : null,
-      error: group.error || null,
+      error: group.error ? describeFailure(group.error, 'collection_failed').reason : null,
     };
   });
   const whatsappMessages = groups.reduce((total, group) => total + group.messages, 0);
@@ -181,6 +194,7 @@ export function summarizeSourceResults(sourceResults) {
   return {
     ats: ats ? {
       candidates: ats.candidates.length,
+      discovery: ats.discovery || null,
       companies: Number(ats.stats?.companies || 0),
       found: Number(ats.stats?.totalFound || 0),
       errors: ats.errors?.length || 0,
@@ -212,6 +226,9 @@ export function summarizeSourceResults(sourceResults) {
 
 export function completionStatusFor(summary) {
   return (summary?.whatsapp && summary.whatsapp.coverageStatus !== 'complete') ||
+    Number(summary?.ats?.errors || 0) > 0 ||
+    summary?.whatsapp?.groups?.some((group) => group.read && group.read.status !== 'skipped' && !group.read.marked) ||
+    summary?.whatsapp?.groups?.some((group) => group.failedMessages > 0) ||
     Number(summary?.processing?.totals?.failed || 0) > 0
     ? 'incomplete'
     : 'success';
@@ -230,6 +247,7 @@ function recordRunAudit(store, runId, summary) {
         found: summary.ats.found,
         errors: summary.ats.errors,
         filtered: summary.ats.filtered,
+        discovery: summary.ats.discovery,
       },
     });
   }
@@ -290,13 +308,16 @@ function printSourceSummary(summary) {
   if (summary.ats) {
     console.log(`ATS: ${summary.ats.candidates} מועמדויות מתוך ${summary.ats.found} משרות ב-${summary.ats.companies} חברות; ${summary.ats.errors} שגיאות.`);
     console.log(`  סוננו: ${summary.ats.filtered.title} לפי תפקיד, ${summary.ats.filtered.location} לפי מיקום, ${summary.ats.filtered.recency} לפי זמן.`);
+    if (summary.ats.discovery) console.log(`  לאחר מניעת כפילויות: ${summary.ats.discovery.new} חדשות במאגר, ${summary.ats.discovery.known} כבר מוכרות. מציאת מועמדות אינה החלטת התאמה.`);
   }
   if (summary.whatsapp) {
     console.log('WhatsApp:');
     for (const group of summary.whatsapp.groups) {
-      const marker = group.error ? '✗' : '✓';
+      const marker = group.error ? '✗' : group.coverage.status === 'complete' ? '✓' : '⚠';
       const suffix = group.error ? ` — ${group.error}` : '';
-      const read = group.read?.marked ? ', סומן כנקרא' : group.read ? ', לא סומן כנקרא' : '';
+      const read = group.read?.status === 'skipped' ? ', לא נשלח סימון קריאה (אין הודעות שנאספו ועובדו בחלון)' :
+        group.read?.method === 'scan-message-receipts' ? `, אושרה שליחת אישורי קריאה ל-${group.read.messages} הודעות מהסריקה${group.read.status === 'failed' ? ' — הסימון לא הושלם' : ''}` :
+          group.read?.marked ? ', דווח סימון קריאה — נפרד מהסריקה' : group.read ? ', לא סומן כנקרא' : '';
       console.log(`  ${marker} ${group.name}: ${group.coverage.delivered} התקבלו, ${group.messages} עובדו, ${group.candidates} קישורים, כיסוי ${group.coverage.status}${read}${suffix}`);
     }
     const diagnostics = summary.whatsapp.diagnostics;
@@ -326,23 +347,28 @@ function reportPaths(reportsDir, generatedAt) {
   };
 }
 
-export async function evaluateCandidates({ candidates, config, store, fetcher, scorer }) {
+export async function evaluateCandidates({ candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {} }) {
   const outcomes = new Map();
   const pendingScores = [];
+  let processingStage = 'page-fetch';
   const recordFailure = (candidate, code, reason) => {
+    const fallback = /scor/.test(code) ? 'scoring_failed' : /browser/.test(code) ? 'browser_error' : 'page_uncertain';
+    const diagnostic = describeFailure({ code, message: reason }, fallback);
     const outcome = {
       status: 'failed',
       code: String(code || 'unknown_failure').slice(0, 64),
-      reason: String(reason || 'Unknown failure').slice(0, 500),
+      reason: diagnostic.reason,
     };
     outcomes.set(candidate.jobKey, outcome);
     store.markEvaluationFailure(candidate.jobKey, outcome);
+    onFailure(candidate, diagnostic, processingStage);
   };
 
+  onStage('page-fetch');
   let fetched = 0;
   for (const candidate of candidates) {
     const existing = store.getJob(candidate.jobKey);
-    const evaluationIsCurrent = existing?.evaluated_at &&
+    const evaluationIsCurrent = existing?.evaluated_at && !existing.last_error_code &&
       existing.profile_hash === scorer.profileHash &&
       existing.criteria_version === config.decision.criteriaVersion;
     if (evaluationIsCurrent || existing?.archived_at) {
@@ -412,6 +438,8 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     outcomes.set(result.jobKey, { status: result.suitable ? 'suitable' : 'not-suitable' });
   };
 
+  processingStage = 'scoring';
+  onStage(processingStage);
   await scorer.scoreBatchSettled(pendingScores, {
     onProgress: ({ completed, total, failed, results, failures }) => {
       for (const failure of failures) {
@@ -430,22 +458,32 @@ export async function runJobs(argv = process.argv.slice(2)) {
   const config = loadJobsConfig();
   process.chdir(config.rootDir);
   const store = createJobStore(options.dryRun ? ':memory:' : config.jobsDbPath);
+  // portals.yml bootstraps the registry without overwriting decisions already
+  // made in the dashboard (watch, pause, or ignore).
+  syncConfiguredCompanyEntries(store, config.rootDir);
   const fetcher = createJobPageFetcher({
     store,
     cacheTtlMs: Number(config.scan.pageCacheHours) * 60 * 60 * 1000,
   });
   let runId = null;
   let runDetails = null;
+  let lifecycle = null;
+  let fetcherClosed = false;
 
   try {
     const sources = [];
-    if (!options.retryOnly && !options.whatsappOnly && config.sources.ats?.enabled) sources.push('ats');
-    if (!options.retryOnly && !options.atsOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    if (!options.whatsappBacklog && !options.retryOnly && !options.whatsappOnly && config.sources.ats?.enabled) sources.push('ats');
+    if (!options.whatsappBacklog && !options.retryOnly && !options.atsOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    if (options.whatsappBacklog && config.sources.whatsapp?.enabled) sources.push('whatsapp-backlog');
     if (options.retryOnly) sources.push('retry');
     if (sources.length === 0) throw new Error('No job sources are enabled for this run');
-    const window = scanWindow({ config, store, requestedDays: options.days, sources });
+    const window = options.whatsappBacklog
+      ? { from: options.days == null ? 0 : Date.now() - options.days * 24 * 60 * 60 * 1_000, to: Date.now() }
+      : scanWindow({ config, store, requestedDays: options.days, sources });
     if (!options.dryRun) {
-      runId = store.startRun({ fromTs: window.from, toTs: window.to, sources });
+      const actionId = /^[1-9]\d{0,8}$/.test(process.env.JOBOPS_ACTION_ID || '') ? Number(process.env.JOBOPS_ACTION_ID) : null;
+      runId = store.startRun({ fromTs: window.from, toTs: window.to, sources, ownerPid: process.pid, actionId });
+      lifecycle = createRunLifecycle(store, runId, { registerProcessHandlers: true });
       store.recordRunEvent(runId, {
         source: 'system',
         scope: 'run',
@@ -457,18 +495,58 @@ export async function runJobs(argv = process.argv.slice(2)) {
     }
 
     const sourceResults = [];
+    const saveSource = (result) => {
+      sourceResults.push(result);
+      runDetails = summarizeSourceResults(sourceResults);
+      if (!runId) return;
+      // Persist each source before waiting for the next one, so an interruption
+      // during WhatsApp cannot erase an already completed ATS collection.
+      store.touchRun(runId, { details: runDetails });
+      recordRunAudit(store, runId, summarizeSourceResults([result]));
+      for (const error of result.errors || []) {
+        store.recordRunEvent(runId, { source: result.source, scope: 'company', scopeKey: String(error.company || 'ATS').slice(0, 200),
+          stage: 'collection', status: 'failed', details: describeFailure(error.error, 'collection_failed') });
+      }
+      for (const group of result.groups || []) {
+        const record = (stage, failure) => store.recordRunEvent(runId, { source: 'whatsapp', scope: 'group',
+          scopeKey: group.name, stage, status: 'warning', details: failure });
+        if (group.coverage?.reason && group.coverage.reason !== 'stale-session-no-anchor') record('history-coverage', describeFailure(null, group.coverage.reason));
+        else if (group.coverage?.reason === 'stale-session-no-anchor') record('history-coverage', describeFailure(null, 'history_not_delivered'));
+        else if (group.error) record('collection', describeFailure(group.error, 'collection_failed'));
+        else if (group.coverage?.status !== 'complete') record('history-coverage', describeFailure(null, 'coverage_incomplete'));
+        if (group.read && group.read.status !== 'skipped' && !group.read.marked) record('mark-read', describeFailure(group.read.error, 'read_failed'));
+      }
+    };
     if (sources.includes('ats')) {
-      sourceResults.push(await scanAts({
+      lifecycle?.stage('collection', 'ats');
+      saveSource(await scanAts({
         store,
         lookbackHours: Math.ceil((window.to - window.from) / (60 * 60 * 1000)),
       }));
     }
     if (sources.includes('whatsapp')) {
-      sourceResults.push(await scanWhatsApp({
+      lifecycle?.stage('collection', 'whatsapp');
+      saveSource(await scanWhatsApp({
         config,
         store,
         sinceMs: window.from,
         untilMs: window.to,
+        onStage: (stage) => lifecycle?.stage(stage, 'whatsapp'),
+        onDiagnostic: (event) => { if (runId) store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
+      }));
+    }
+    if (sources.includes('whatsapp-backlog')) {
+      lifecycle?.stage('collection', 'whatsapp-backlog');
+      saveSource(scanWhatsAppBacklog({
+        config,
+        store,
+        sinceMs: window.from,
+        untilMs: window.to,
+        // Keep one dashboard action bounded. Re-run the action to drain a
+        // large historical inbox without creating an hours-long score run.
+        limitPerGroup: 100,
+        onStage: (stage) => lifecycle?.stage(stage, 'whatsapp-backlog'),
+        onDiagnostic: (event) => { if (runId) store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
       }));
     }
 
@@ -483,12 +561,32 @@ export async function runJobs(argv = process.argv.slice(2)) {
       ...retryCandidates.filter((candidate) => !currentJobKeys.has(candidate.jobKey)),
     ];
     const candidates = uniqueCandidates([...candidateSightings, ...retryCandidates]);
+    lifecycle?.stage('scorer-setup');
     const scorer = createJobScorer(config);
-    const outcomes = await evaluateCandidates({ candidates, config, store, fetcher, scorer });
+    let failureSamples = 0;
+    const outcomes = await evaluateCandidates({ candidates, config, store, fetcher, scorer,
+      onStage: (stage) => lifecycle?.stage(stage),
+      onFailure: (candidate, failure, stage) => {
+        if (!runId || failureSamples >= 200) return;
+        failureSamples += 1;
+        // A shared link can appear in several groups; retain each affected scope.
+        const sightings = processingCandidates.filter((item) => item.jobKey === candidate.jobKey);
+        const scopes = new Map(sightings.map((item) => { const scope = processingScope(item); return [`${scope.source}:${scope.name}`, scope]; }));
+        for (const scope of scopes.values()) store.recordRunEvent(runId, {
+          source: scope.source, scope: 'job', scopeKey: scope.name, stage,
+          status: 'failed', details: { ...failure, jobKey: candidate.jobKey, host: safeTargetUrl(candidate.url) },
+        });
+      },
+    });
     runDetails.processing = summarizeProcessingResults(processingCandidates, outcomes);
     printProcessingSummary(runDetails.processing);
-    if (runId) recordRunAudit(store, runId, runDetails);
+    if (runId) {
+      runDetails.failureSampleLimit = 200;
+      store.touchRun(runId, { details: runDetails });
+      recordRunAudit(store, runId, { processing: runDetails.processing });
+    }
 
+    lifecycle?.stage('report');
     const unpresentedJobs = store.listUnpresentedSuitable();
     const matchingJobs = deduplicateJobs(unpresentedJobs);
     const generatedAt = new Date(window.to);
@@ -508,42 +606,32 @@ export async function runJobs(argv = process.argv.slice(2)) {
     }
 
     if (options.open && matchingJobs.length > 0) {
+      lifecycle?.stage('open-browser');
       const openResult = await openJobUrls({ jobs: matchingJobs, application: config.browser?.application });
       if (!options.dryRun) store.markOpened(unpresentedJobs.map((job) => job.jobKey));
       console.log(`נפתחו ${openResult.opened} משרות ב-${config.browser?.application || 'Google Chrome'}.`);
     }
 
+    lifecycle?.stage('cleanup');
+    await fetcher.close();
+    fetcherClosed = true;
     const completionStatus = completionStatusFor(runDetails);
-    if (runId) {
-      store.recordRunEvent(runId, {
-        source: 'system',
-        scope: 'run',
-        scopeKey: String(runId),
-        stage: 'run',
-        status: completionStatus,
-      });
-      store.finishRun(runId, { status: completionStatus, details: runDetails });
-    }
+    lifecycle?.finish(completionStatus, { details: runDetails });
     if (completionStatus === 'incomplete') {
       console.warn('⚠️ הריצה הסתיימה עם כיסוי חלקי; יש לעיין במשפך הקבוצות לפני הסקת מסקנות.');
     }
     console.log(`נסרקו ${candidates.length} מועמדות; נמצאו ${matchingJobs.length} משרות חדשות מתאימות.`);
   } catch (error) {
-    if (runId) {
-      store.recordRunEvent(runId, {
-        source: 'system',
-        scope: 'run',
-        scopeKey: String(runId),
-        stage: 'run',
-        status: 'failed',
-        details: { errorType: error.name || 'Error' },
-      });
-      store.finishRun(runId, { status: 'failed', error: error.message, details: runDetails });
-    }
+    lifecycle?.finish('failed', { failure: describeFailure(error), details: runDetails });
     throw error;
   } finally {
-    await fetcher.close();
-    store.close();
+    lifecycle?.dispose();
+    try { if (!fetcherClosed) await fetcher.close(); }
+    finally {
+      try { store.pruneDiagnostics(); }
+      catch { console.error('JobOps diagnostic retention unavailable; existing records were preserved.'); }
+      store.close();
+    }
   }
 }
 

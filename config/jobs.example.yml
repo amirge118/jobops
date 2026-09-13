@@ -15,6 +15,12 @@ sources:
     authPath: "auth"
     # Opt in only if processed group messages should be marked as read.
     markRead: false
+    collector:
+      heartbeatMs: 5000
+      staleAfterMs: 20000
+      reconnectBaseMs: 1000
+      reconnectMaxMs: 30000
+      backlogRetentionDays: 7
     groups:
       - name: "Example jobs group"
         jid: "000000000000000000@g.us"

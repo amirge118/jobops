@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * scan.mjs — Zero-token portal scanner with a plugin-based provider layer.
+ * scan.mjs — Zero-token career-source scanner with a plugin-based provider layer.
  *
  * Providers live in providers/*.mjs and are loaded at startup. Each provider
  * exports a default object with:
@@ -409,7 +409,42 @@ function guardStatusFor(code) {
   return 'skipped_invalid_url';
 }
 
-export async function runPortalScan(args = []) {
+function companySourceKey(company) {
+  const endpoint = String(company?.careers_url || company?.api || '').trim();
+  if (endpoint) {
+    try {
+      const parsed = new URL(endpoint);
+      parsed.hash = '';
+      parsed.search = '';
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+      return `url::${parsed.href.toLowerCase()}`;
+    } catch {
+      return `url::${endpoint.toLowerCase()}`;
+    }
+  }
+  const provider = String(company?.provider || '').trim().toLowerCase();
+  return `${provider}::name:${String(company?.name || '').trim().toLowerCase()}`;
+}
+
+/**
+ * Merge the public bootstrap catalogue with user-approved companies stored in
+ * SQLite. The file remains easy to review on GitHub while the dashboard can
+ * extend the next scan without rewriting YAML.
+ */
+export function mergeTrackedCompanies(configured = [], additional = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const company of [...configured, ...(Array.isArray(additional) ? additional : [])]) {
+    if (!company || typeof company !== 'object') continue;
+    const key = companySourceKey(company);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(company);
+  }
+  return merged;
+}
+
+export async function runPortalScan(args = [], { additionalCompanies = [] } = {}) {
   const log = args.includes('--quiet') ? () => {} : console.log;
   const dryRun = args.includes('--dry-run');
   const verify = args.includes('--verify');
@@ -444,7 +479,7 @@ export async function runPortalScan(args = []) {
   }
 
   const config = parseYaml(readFileSync(PORTALS_PATH, 'utf-8'));
-  const companies = config.tracked_companies || [];
+  const companies = mergeTrackedCompanies(config.tracked_companies || [], additionalCompanies);
   const titleFilter = buildTitleFilter(config.title_filter);
   const locationFilter = buildLocationFilter(config.location_filter);
   const maxAgeHours = cliMaxAgeHours !== undefined && !Number.isNaN(cliMaxAgeHours)

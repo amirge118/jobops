@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="סריקה ותוצאות ב-jobOps">
+    <title>סריקה ותוצאה — jobOps</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body data-page="scan">
+    <div class="shell">
+      <div id="app-shell"></div>
+      <aside id="demo-banner" class="demo-banner" hidden><strong>מצב הדגמה</strong><span>כל המידע במסך הזה סינתטי.</span></aside>
+
+      <main class="page-main">
+        <section class="control-panel" aria-labelledby="scan-title">
+          <div class="section-heading"><div><p class="step">01 / סריקה</p><h2 id="scan-title">מה לחפש היום?</h2></div><p>הסריקה משתמשת בפרופיל ובכללי ההתאמה הקיימים.</p></div>
+          <form id="scan-form" class="scan-form">
+            <label><span>טווח זמן</span><select id="days" name="days"><option value="1">יום אחרון</option><option value="2" selected>יומיים אחרונים</option><option value="7">שבוע אחרון</option><option value="14">שבועיים אחרונים</option></select></label>
+            <label><span>מקור</span><select id="source" name="source"><option value="all">ATS + WhatsApp</option><option value="ats">ATS בלבד</option><option value="whatsapp">WhatsApp בלבד</option></select></label>
+            <label class="toggle-row"><input id="open-after" name="open" type="checkbox"><span>פתח התאמות ב-Chrome בסיום</span></label>
+            <button class="button button-primary" type="submit">הפעל סריקה</button>
+          </form>
+          <div class="secondary-actions">
+            <button id="retry-failed" class="button button-secondary" type="button">נסה שוב קישורים שנכשלו</button>
+            <button id="verify-groups" class="button button-secondary" type="button">אמת קבוצות WhatsApp</button>
+            <button id="mark-read" class="button button-secondary" type="button">סמן קבוצות כנקראו</button>
+            <button id="open-jobs" class="button button-secondary" type="button">פתח התאמות חדשות ב-Chrome</button>
+          </div>
+          <div class="secondary-information">
+            <details><summary>איך מתקבלת החלטה?</summary><p>משרה פעילה בתחום ובמיקום המתאימים מקבלת ״מתאים״ מציון <strong id="minimum-score">4.0</strong>. מציון <strong id="exact-score">4.5</strong> היא ״בול מתאים״. שפה או framework שלא מופיעים בפרופיל אינם blocker אוטומטי.</p></details>
+            <details><summary>אילו קבוצות WhatsApp מוגדרות?</summary><ul id="groups-list"></ul></details>
+          </div>
+        </section>
+
+        <section class="summary-grid" aria-label="סיכום סריקה">
+          <article class="summary-card summary-card-jobs" data-empty="true"><span>משרות מתאימות</span><strong id="suitable-count">0</strong></article>
+          <article class="summary-card summary-card-unopened" data-empty="true"><span>ממתינות לפתיחה</span><strong id="unopened-count">0</strong></article>
+          <article class="summary-card summary-card-groups" data-empty="false"><span>קבוצות מוגדרות</span><strong id="groups-count">0</strong></article>
+        </section>
+
+        <section class="whatsapp-history-panel" aria-labelledby="whatsapp-history-title">
+          <div class="history-heading">
+            <div><p class="step">סנכרון WhatsApp</p><h2 id="whatsapp-history-title">מה נאסף מכל קבוצה?</h2></div>
+            <div class="history-total"><strong id="backlog-total">0</strong><span>הודעות חדשות לעיבוד</span></div>
+          </div>
+          <p id="backlog-summary" class="history-summary">טוען את מצב ההיסטוריה…</p>
+          <div class="history-actions">
+            <button id="process-recent-backlog" class="button button-primary" type="button">עבד הודעות שנאספו</button>
+            <button id="request-history" class="button button-secondary" type="button">השלם פערים מהיסטוריית WhatsApp</button>
+          </div>
+          <div id="history-request-status" class="history-request-status" hidden></div>
+          <div class="history-groups-wrap"><table class="history-groups"><thead><tr><th>קבוצה</th><th>איסוף אחרון</th><th>השלמת פער</th><th>הגיעו בסריקה</th><th>קישורים</th><th>מתאימות</th><th>נכשלו</th><th>ממתינות</th></tr></thead><tbody id="history-groups-body"></tbody></table></div>
+        </section>
+
+        <section id="readiness-panel" class="readiness-panel" aria-labelledby="readiness-title">
+          <div class="health-heading"><div><p class="step">לפני שמתחילים</p><h2 id="readiness-title">האם המערכת מוכנה לסריקה?</h2></div><button id="refresh-readiness" class="button button-secondary" type="button">בדוק שוב</button></div>
+          <p id="readiness-summary" class="readiness-summary">בודק את סביבת ההפעלה…</p>
+          <div class="readiness-grid">
+            <article id="browser-readiness"><span class="health-dot"></span><div><strong>דפדפן אוטומטי</strong><span>בודק…</span></div></article>
+            <article id="scorer-readiness"><span class="health-dot"></span><div><strong>מנגנון התאמה</strong><span>בודק…</span></div></article>
+            <article id="collector-readiness"><span class="health-dot"></span><div><strong>WhatsApp Collector</strong><span>בודק…</span></div></article>
+          </div>
+        </section>
+
+        <section id="scan-result-panel" class="scan-result-panel" data-state="empty" aria-labelledby="result-title">
+          <div class="result-heading"><div><p class="step">סריקה אחרונה</p><h2 id="result-title">עדיין לא בוצעה סריקה</h2></div><span id="result-time"></span></div>
+          <p id="result-summary" class="result-summary">לאחר סריקה תוצג כאן תשובה קצרה וברורה.</p>
+          <div id="diagnosis-issues" class="diagnosis-issues" hidden></div>
+          <details id="source-details" class="source-details">
+            <summary>פירוט לפי מקור וקבוצה</summary>
+            <div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>מקור / קבוצה</th><th>כיסוי</th><th>הודעות / משרות</th><th>קישורים</th><th>תוצאת עיבוד</th><th>מצב</th></tr></thead><tbody id="run-audit-body"></tbody></table><div id="run-audit-empty" class="empty-state audit-empty"><strong>אין נתוני מקור</strong></div></div>
+          </details>
+          <details id="technical-details" class="technical-details">
+            <summary>פרטים לתמיכה</summary>
+            <code id="technical-summary" dir="ltr">No scan yet</code>
+          </details>
+        </section>
+
+        <section id="activity-card" class="activity-card" hidden aria-live="polite"><div><span id="activity-kicker" class="step">פעילות אחרונה</span><strong id="activity-title"></strong></div><span id="activity-time"></span><details id="activity-details"><summary>פלט הפעולה</summary><pre id="activity-output"></pre></details></section>
+      </main>
+      <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
+    </div>
+    <script type="module" src="/shared/app-shell.js"></script>
+    <script type="module" src="/pages/scan-page.js"></script>
+  </body>
+</html>
