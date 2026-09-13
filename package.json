@@ -42,6 +42,8 @@
     "web": "node scripts/web.mjs --open",
     "web:no-open": "node scripts/web.mjs",
     "start:local": "node scripts/start-local.mjs",
+    "stop:local": "node scripts/stop-local.mjs",
+    "restart:local": "node scripts/restart-local.mjs",
     "scan": "node scripts/scan.mjs",
     "scan:dry": "node scripts/scan.mjs --dry-run",
     "pdf": "node scripts/generate-pdf.mjs",

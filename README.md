@@ -113,6 +113,8 @@ npm run jobs -- --whatsapp-backlog --days 7 # process seven days already queued 
 npm run jobs -- --whatsapp-backlog          # process the next bounded history batch
 npm run diagnostics -- --latest        # print the newest safe diagnostic record
 npm run start:local                    # recommended: Collector + dashboard from macOS Terminal
+npm run stop:local                     # stop only this project's dashboard
+npm run restart:local                  # stop stale dashboard and start a clean one
 npm run web                            # open the local dashboard in Chrome
 ```
 
@@ -125,6 +127,12 @@ sandboxes that can block Chromium or the signed-in Codex scorer. The equivalent 
 cd /path/to/jobOps
 npm run start:local
 ```
+
+Use `restart-jobops.command` when the site is stale or a previous server still owns port `4177`.
+Use `stop-jobops.command` when you want to shut down only the dashboard. Both commands verify that
+the listener belongs to this jobOps checkout before signaling it, so they do not terminate unrelated
+Node.js processes. The WhatsApp Collector is a separate background service and remains active after
+the dashboard is stopped.
 
 The dashboard runs only on `127.0.0.1:4177` and redirects `/` to three focused pages:
 
