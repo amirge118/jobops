@@ -77,10 +77,10 @@ export function deduplicateJobs(jobs) {
 
 export function calculateFitScore({ cvMatch, seniority, roleScope, location, sector }) {
   const weighted =
-    Number(cvMatch) * 0.5 +
-    Number(seniority) * 0.2 +
-    Number(roleScope) * 0.15 +
-    Number(location) * 0.1 +
+    Number(cvMatch) * 0.55 +
+    Number(seniority) * 0.15 +
+    Number(roleScope) * 0.10 +
+    Number(location) * 0.15 +
     Number(sector) * 0.05;
 
   return Math.round(Math.max(1, Math.min(5, weighted)) * 10) / 10;

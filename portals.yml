@@ -58,6 +58,12 @@ title_filter:
     - "Data Analyst"
     - "Platform Engineer"
     - "Python"
+    - "Java"
+    - "Node"
+    - "TypeScript"
+    - "Distributed Systems"
+    - "Cloud Engineer"
+    - "Infrastructure Engineer"
   negative:
     - "Intern"
     - "Student"
@@ -65,6 +71,7 @@ title_filter:
     - "Firmware"
     - "QA"
     - "Manual"
+    - "Junior"
   seniority_boost:
     - "Senior"
     - "Staff"

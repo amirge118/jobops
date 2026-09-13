@@ -50,7 +50,7 @@ test('calculateFitScore uses the documented simple weights', () => {
       location: 5,
       sector: 5,
     }),
-    4.7,
+    4.8,
   );
 });
 
