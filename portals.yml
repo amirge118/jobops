@@ -110,7 +110,13 @@ search_queries:
 # comeet, workday, zoho-recruit, teamme, official-html, embedded-json (a company's own
 # careers page with jobs baked into its page data, e.g. Next.js __NEXT_DATA__ — no extra
 # config needed, just `provider: embedded-json`)
-# Verify with: node scripts/scan.mjs --dry-run
+# official-html entries whose job list only renders client-side (a plain fetch sees no
+# job links at all — check with curl before assuming) can add `render_with_browser: true`
+# to launch a real headless Chromium instead. Opt-in per company only — it is much slower
+# (real browser + page load per scan) and never triggers automatically. Confirm the site
+# actually needs it first: `curl -sA "Mozilla/5.0" <careers_url> | grep <job_path_prefix>`
+# — if that finds nothing but the page has real postings, it's a JS-rendered candidate.
+# Verify with: node scripts/scan.mjs --dry-run --company "<name>"
 tracked_companies:
 
   - name: Wiz
@@ -324,13 +330,17 @@ tracked_companies:
     enabled: true
 
   - name: FINQ
-    careers_url: https://finqai.co.il
-    notes: "AI-powered investment and pension platform. Tel Aviv. No dedicated supported ATS found."
-    enabled: false
+    careers_url: https://employer.dueto.io/finqai/career-website/positions
+    provider: official-html
+    job_path_prefix: /position/
+    job_path_segments: 3
+    render_with_browser: true
+    notes: "AI-powered investment and pension platform. Tel Aviv. Hosted on Dueto (employer.dueto.io), a JS-rendered career site — needs render_with_browser. Verified 2026-09-13."
+    enabled: true
 
   - name: PayEm
     careers_url: https://www.payem.co/careers
-    notes: "Spend management and procurement automation. Israel R&D. Custom careers page."
+    notes: "Spend management and procurement automation. Israel R&D. Page explicitly says 'We currently have no open positions' as of 2026-09-13 — not a scanning problem, just nothing posted right now. Re-check periodically."
     enabled: false
 
   - name: Neema
@@ -415,9 +425,13 @@ tracked_companies:
     enabled: true
 
   - name: Plarium
-    careers_url: https://company.plarium.com/en/career
-    notes: "Global game developer with Israel R&D. Custom careers page."
-    enabled: false
+    careers_url: https://company.plarium.com/en/career/
+    provider: official-html
+    job_path_prefix: /en/career/
+    job_path_segments: 3
+    render_with_browser: true
+    notes: "Global game developer with Israel R&D (Herzliya). Next.js JS-rendered careers page — needs render_with_browser. Most roles are Poland/Spain/Ukraine; filter for Herzliya. Verified 2026-09-13."
+    enabled: true
 
   - name: SuperPlay
     careers_url: https://www.superplay.co/careers/

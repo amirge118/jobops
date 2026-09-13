@@ -98,3 +98,31 @@ test('official HTML validates its small declarative rule and bounded fetch', asy
     options: { redirect: 'error', timeoutMs: 15_000, maxBytes: 3_000_000 },
   }]);
 });
+
+test('official HTML renders with a browser instead of a plain fetch when opted in', async () => {
+  const calls = [];
+  const jobs = await officialHtml.fetch({
+    name: 'FINQ', careers_url: 'https://employer.dueto.io/finqai/career-website/positions',
+    provider: 'official-html', job_path_prefix: '/position/', job_path_segments: 3,
+    render_with_browser: true,
+  }, {
+    async fetchLimitedText() { throw new Error('a plain fetch must not be used when render_with_browser is set'); },
+    async fetchPageWithBrowser(url, options) {
+      calls.push({ url, options });
+      return {
+        url,
+        html: '<a href="/position/2132/finqai"><h3>Senior Full Stack Developer</h3></a>',
+      };
+    },
+  });
+
+  assert.deepEqual(jobs, [{
+    title: 'Senior Full Stack Developer',
+    url: 'https://employer.dueto.io/position/2132/finqai',
+    company: 'FINQ', location: '',
+  }]);
+  assert.deepEqual(calls, [{
+    url: 'https://employer.dueto.io/finqai/career-website/positions',
+    options: { timeoutMs: 25_000 },
+  }]);
+});

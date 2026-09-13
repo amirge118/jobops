@@ -173,12 +173,26 @@ export default {
 
   async fetch(entry, ctx) {
     const rule = validateOfficialHtmlEntry(entry);
-    if (typeof ctx.fetchLimitedText !== 'function') {
-      throw new Error('official-html: bounded HTML transport is unavailable');
+    const useBrowser = entry.render_with_browser === true || entry.renderWithBrowser === true;
+    let html;
+    if (useBrowser) {
+      // Opt-in only, per company: a plain fetch sees nothing on a
+      // JS-rendered careers page (React/Next.js SPA with no server-rendered
+      // job list), and this project deliberately never launches a browser
+      // automatically for a URL it hasn't been told needs one. Dynamic
+      // import keeps every other scan free of Playwright's startup cost.
+      const fetchPageWithBrowser = ctx.fetchPageWithBrowser
+        || (await import('../jobs/browser-fetch.mjs')).fetchPageWithBrowser;
+      const page = await fetchPageWithBrowser(rule.listingUrl.href, { timeoutMs: 25_000 });
+      html = page.html;
+    } else {
+      if (typeof ctx.fetchLimitedText !== 'function') {
+        throw new Error('official-html: bounded HTML transport is unavailable');
+      }
+      html = await ctx.fetchLimitedText(rule.listingUrl.href, {
+        redirect: 'error', timeoutMs: 15_000, maxBytes: MAX_HTML_BYTES,
+      });
     }
-    const html = await ctx.fetchLimitedText(rule.listingUrl.href, {
-      redirect: 'error', timeoutMs: 15_000, maxBytes: MAX_HTML_BYTES,
-    });
     const jobs = extractOfficialHtmlJobs(html, entry);
     if (jobs.length === 0 && entry.allow_empty !== true) {
       throw new Error('official-html: no matching job links found; verify the configured path rule');

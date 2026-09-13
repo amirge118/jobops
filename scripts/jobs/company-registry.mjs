@@ -274,6 +274,7 @@ export function normalizeCompanySourceConfig(provider, input = {}) {
       config.ignoredJobPaths = ignored.map((item) => boundedText(item, 'Ignored job path'));
     }
     if (raw.allowEmpty === true || raw.allow_empty === true) config.allowEmpty = true;
+    if (raw.renderWithBrowser === true || raw.render_with_browser === true) config.renderWithBrowser = true;
   }
   if (Buffer.byteLength(JSON.stringify(config), 'utf8') > MAX_SOURCE_CONFIG_BYTES) {
     fail('invalid_source_config', 'Company source configuration is too large');
@@ -293,6 +294,7 @@ export function companySourcePortalFields(input) {
       ...(Number.isInteger(config.jobPathSegments) ? { job_path_segments: config.jobPathSegments } : {}),
       ...(config.ignoredJobPaths ? { ignored_job_paths: config.ignoredJobPaths } : {}),
       ...(config.allowEmpty ? { allow_empty: true } : {}),
+      ...(config.renderWithBrowser ? { render_with_browser: true } : {}),
     };
   }
   return {};
