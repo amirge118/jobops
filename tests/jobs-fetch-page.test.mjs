@@ -247,6 +247,60 @@ test('a headed retry that is still blocked keeps the uncertain result instead of
   await fetcher.close();
 });
 
+test('a host that stays blocked trips a circuit breaker so later jobs on it skip the headed retry, without affecting other hosts', async () => {
+  const store = memoryStore();
+  let zoominfoHeadedGotoCalls = 0;
+  const headedPage = {
+    _url: '',
+    _calls: 0,
+    async goto(url) {
+      this._url = url;
+      this._calls = 0;
+      if (url.includes('zoominfo.com')) { zoominfoHeadedGotoCalls += 1; return { status: () => 403 }; }
+      return { status: () => 200 };
+    },
+    async waitForTimeout() {},
+    url() { return this._url; },
+    mainFrame: () => ({}),
+    frames() { return [this.mainFrame()]; },
+    async evaluate() {
+      this._calls += 1;
+      const blocked = this._url.includes('zoominfo.com');
+      const bodyText = blocked ? '' : `Backend Engineer. ${'Content. '.repeat(30)}`;
+      const applyControls = blocked ? [] : ['Apply Now'];
+      return this._calls === 2 ? applyControls : bodyText;
+    },
+  };
+  const chromiumImpl = fakeChromium({
+    headlessPage: fakeLivenessPage({ status: 403, bodyText: 'Access Denied' }),
+    headedPage,
+  });
+  const fetcher = createJobPageFetcher({
+    store, cacheTtlMs: 0, chromiumImpl,
+    fetchImpl: async () => new Response('Access Denied', { status: 403 }),
+  });
+
+  const first = await fetcher.fetch('https://www.zoominfo.com/careers/1');
+  const second = await fetcher.fetch('https://www.zoominfo.com/careers/2');
+  assert.equal(zoominfoHeadedGotoCalls, 2);
+  assert.match(first.reason, /headed retry also blocked/);
+  assert.match(second.reason, /headed retry also blocked/);
+
+  const third = await fetcher.fetch('https://www.zoominfo.com/careers/3');
+  assert.equal(zoominfoHeadedGotoCalls, 2, 'the third job on the same host must not trigger another headed attempt');
+  assert.equal(third.status, 'uncertain');
+  assert.equal(third.code, 'access_blocked');
+  assert.match(third.reason, /headed retry skipped/);
+  assert.match(third.reason, /www\.zoominfo\.com/);
+
+  // A different host's own circuit is untouched by zoominfo's tripped breaker.
+  const otherHost = await fetcher.fetch('https://www.example.com/careers/1');
+  assert.equal(otherHost.status, 'active');
+  assert.equal(otherHost.code, 'apply_control_visible');
+
+  await fetcher.close();
+});
+
 test('no headed browser is launched when the headless check is not a bot-challenge', async () => {
   const store = memoryStore();
   const longBody = `Some job content with plenty of text but no recognized apply control. ${'Filler. '.repeat(60)}`;

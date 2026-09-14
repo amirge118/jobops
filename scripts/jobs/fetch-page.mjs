@@ -194,10 +194,25 @@ function greenhouseContent(posting) {
     .slice(0, 50_000);
 }
 
+// After this many headed-retry attempts on the same host are still blocked
+// within one run, stop retrying that host: a real diagnostic run showed a WAF
+// (ZoomInfo) escalate from a soft 403 to hard connection-level timeouts
+// (navigation_error) when hit repeatedly with the slower headed-browser path
+// in a short window — likely the retries themselves reading as suspicious,
+// sustained automated traffic. Failing fast for the rest of the run avoids
+// making an already-hostile host worse, and every other host is unaffected.
+const HEADED_RETRY_HOST_LIMIT = 2;
+
+function hostnameOf(url) {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+}
+
 export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis.fetch, chromiumImpl = chromium }) {
   let browser = null;
   let page = null;
   let headed = null;
+  const headedRetryFailures = new Map(); // host -> still-blocked headed-retry count this run
+  const headedRetryCircuitOpen = new Set(); // hosts to stop retrying for the rest of this run
 
   async function renderedCheck(url) {
     try {
@@ -205,24 +220,36 @@ export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis
       if (!page) page = await newLivenessPage(browser);
       let liveness = await checkUrlLiveness(page, url);
       let activePage = page;
+      const host = hostnameOf(url);
       // The plain headless check already covers most SPAs. When it specifically
       // hits an anti-bot wall (bot_challenge/access_blocked — the same class of
       // 403 that ZoomInfo and similar hosts return on every run), retry once in
       // a real, non-headless browser: this already exists and works for
       // `scan.mjs --verify --headed-fallback`, just wasn't wired into the
-      // regular per-job scoring pipeline that runs on every scan.
-      if (isChallengeResult(liveness)) {
+      // regular per-job scoring pipeline that runs on every scan. Skip it once
+      // this host's circuit has tripped (see HEADED_RETRY_HOST_LIMIT above).
+      if (isChallengeResult(liveness) && !(host && headedRetryCircuitOpen.has(host))) {
         if (!headed) headed = createHeadedPageProvider(chromiumImpl);
         const headedPage = await headed.get();
         if (headedPage) {
           const retried = await checkUrlLiveness(headedPage, url, { extraSettleMs: 3_000 });
           if (isChallengeResult(retried)) {
             liveness = { ...retried, reason: `${retried.reason} (headed retry also blocked)` };
+            if (host) {
+              const failures = (headedRetryFailures.get(host) || 0) + 1;
+              headedRetryFailures.set(host, failures);
+              if (failures >= HEADED_RETRY_HOST_LIMIT) headedRetryCircuitOpen.add(host);
+            }
           } else {
             liveness = retried;
             activePage = headedPage;
           }
         }
+      } else if (isChallengeResult(liveness) && host && headedRetryCircuitOpen.has(host)) {
+        liveness = {
+          ...liveness,
+          reason: `${liveness.reason} (headed retry skipped — ${host} was still blocked after ${HEADED_RETRY_HOST_LIMIT} attempts this run)`,
+        };
       }
       const content = await activePage.evaluate(() => document.body?.innerText ?? '').catch(() => '');
       return { liveness, content: content.replace(/\s+/g, ' ').trim(), finalUrl: activePage.url() };
@@ -476,6 +503,8 @@ export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis
       browser = null;
       page = null;
       headed = null;
+      headedRetryFailures.clear();
+      headedRetryCircuitOpen.clear();
     },
   };
 }
