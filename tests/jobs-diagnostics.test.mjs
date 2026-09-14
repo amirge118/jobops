@@ -107,6 +107,32 @@ test('detail history always includes the final failure after more than 500 event
   assert.equal(run.eventCount, 511);
 });
 
+test('evaluateCandidates reports page-content length distribution ahead of scoring', async (context) => {
+  const store = createJobStore(temporary(context));
+  context.after(() => store.close());
+  const lengths = [100, 5_000, 9_000]; // one over the 8,000-char pageText cap
+  const candidates = lengths.map((length, index) => ({
+    ...store.recordSighting({ url: `https://example.com/jobs/${index}`, source: 'ATS: Example' }),
+    url: `https://example.com/jobs/${index}`,
+  }));
+  const pages = new Map(candidates.map((candidate, index) => [candidate.url, 'x'.repeat(lengths[index])]));
+  let stats = null;
+  await evaluateCandidates({
+    candidates, config: { decision: { criteriaVersion: 'v1' } }, store,
+    fetcher: { fetch: async (url) => ({ status: 'active', finalUrl: url, content: pages.get(url), contentHash: url }) },
+    scorer: { profileHash: 'p', scoreBatchSettled: async () => {} },
+    onContentStats: (value) => { stats = value; },
+  });
+
+  assert.equal(stats.count, 3);
+  assert.equal(stats.minChars, 100);
+  assert.equal(stats.maxChars, 9_000);
+  assert.equal(stats.avgChars, Math.round((100 + 5_000 + 9_000) / 3));
+  assert.equal(stats.medianChars, 5_000);
+  assert.equal(stats.capChars, 8_000);
+  assert.equal(stats.atOrOverCapCount, 1);
+});
+
 test('failed evaluation keeps retry identity and reports the actual processing stage', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());

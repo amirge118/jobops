@@ -11,7 +11,7 @@ import { createJobPageFetcher } from './jobs/fetch-page.mjs';
 import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
-import { createJobScorer } from './jobs/score-job.mjs';
+import { createJobScorer, JOB_PAGE_TEXT_CAP_CHARS } from './jobs/score-job.mjs';
 import { createJobStore } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
@@ -347,9 +347,10 @@ function reportPaths(reportsDir, generatedAt) {
   };
 }
 
-export async function evaluateCandidates({ candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {} }) {
+export async function evaluateCandidates({ candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {}, onContentStats = () => {} }) {
   const outcomes = new Map();
   const pendingScores = [];
+  const contentLengths = [];
   let processingStage = 'page-fetch';
   const recordFailure = (candidate, code, reason) => {
     const fallback = /scor/.test(code) ? 'scoring_failed' : /browser/.test(code) ? 'browser_error' : 'page_uncertain';
@@ -423,6 +424,28 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     }
 
     pendingScores.push({ candidate, page });
+    contentLengths.push(page.content.length);
+  }
+
+  // Documents, per run, how close real job pages come to the pageText
+  // truncation cap — the biggest single cost component in a scoring batch,
+  // but one that must not be lowered blind (real accuracy risk). This turns
+  // "is 8,000 chars too generous?" from a guess into an answerable question
+  // after a few runs' worth of real data.
+  if (contentLengths.length > 0) {
+    const sorted = [...contentLengths].sort((left, right) => left - right);
+    const sum = sorted.reduce((total, value) => total + value, 0);
+    const percentile = (fraction) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
+    onContentStats({
+      count: sorted.length,
+      minChars: sorted[0],
+      maxChars: sorted[sorted.length - 1],
+      avgChars: Math.round(sum / sorted.length),
+      medianChars: percentile(0.5),
+      p90Chars: percentile(0.9),
+      capChars: JOB_PAGE_TEXT_CAP_CHARS,
+      atOrOverCapCount: contentLengths.filter((length) => length >= JOB_PAGE_TEXT_CAP_CHARS).length,
+    });
   }
 
   const persistResult = (result) => {
@@ -576,6 +599,13 @@ export async function runJobs(argv = process.argv.slice(2)) {
         for (const scope of scopes.values()) store.recordRunEvent(runId, {
           source: scope.source, scope: 'job', scopeKey: scope.name, stage,
           status: 'failed', details: { ...failure, jobKey: candidate.jobKey, host: safeTargetUrl(candidate.url) },
+        });
+      },
+      onContentStats: (stats) => {
+        console.log(`אורך תוכן שנשלח לניקוד (${stats.count} משרות): ממוצע ${stats.avgChars}, חציון ${stats.medianChars}, P90 ${stats.p90Chars}, מקסימום ${stats.maxChars} תווים; ${stats.atOrOverCapCount} הגיעו לתקרת ${stats.capChars} התווים.`);
+        if (runId) store.recordRunEvent(runId, {
+          source: 'system', scope: 'run', scopeKey: String(runId), stage: 'content-length-stats',
+          status: 'complete', details: stats,
         });
       },
     });

@@ -8,6 +8,10 @@ import { readCandidateContext } from './config.mjs';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SCHEMA_PATH = path.join(MODULE_DIR, 'job-score.schema.json');
+// Exported so jobs.mjs can measure, per run, how close real page content
+// comes to this cap — data to decide later, with actual numbers instead of
+// a guess, whether it is safe to lower.
+export const JOB_PAGE_TEXT_CAP_CHARS = 8_000;
 const MACOS_APP_CODEX = '/Applications/ChatGPT.app/Contents/Resources/codex';
 
 export function resolveCodexBinary(config) {
@@ -93,6 +97,18 @@ export async function runCodexExec({
   }
 }
 
+// The profile/preferences files carry their own administrative HTML-comment
+// notes (CV-source citations, "Updated 2026-08-12 from documents/...", setup
+// instructions) — useful for the /apply CV-generation skill, but pure token
+// cost here: this text is resent verbatim on every single scoring batch call
+// (codex exec has no cross-call caching), so every unnecessary byte is paid
+// for repeatedly. Stripping comments only — never touches profileHash, which
+// is computed from the raw files in config.mjs, so cached scores are not
+// invalidated by this trim.
+function trimForScoring(markdown) {
+  return String(markdown || '').replace(/<!--[\s\S]*?-->/g, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function stablePrompt(config, context) {
   const domains = config.filters.domains.join(', ');
   const locations = config.filters.acceptedLocations.join(', ');
@@ -101,10 +117,10 @@ function stablePrompt(config, context) {
   return `You score job fit for one candidate. Return only the JSON required by the output schema.
 
 Candidate profile (the only source of truth):
-${context.profile}
+${trimForScoring(context.profile)}
 
 Preferences:
-${context.preferences}
+${trimForScoring(context.preferences)}
 
 Decision rules:
 - Target domains: ${domains}.
@@ -126,7 +142,7 @@ function jobPayload({ candidate, page }) {
     knownCompany: candidate.company || 'unknown',
     knownTitle: candidate.title || 'unknown',
     url: page.finalUrl,
-    pageText: page.content.slice(0, 8000),
+    pageText: page.content.slice(0, JOB_PAGE_TEXT_CAP_CHARS),
   };
 }
 

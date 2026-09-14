@@ -24,6 +24,30 @@ const context = {
   profileHash: 'profile-hash',
 };
 
+test('the prompt strips profile/preferences HTML comments but keeps their real content', async () => {
+  const calls = [];
+  const noisyContext = {
+    profile: '<!-- Updated 2026-08-12 from documents/Amir Gefen cv.pdf. Do not edit manually. -->\nBackend engineer with production Node.js experience.',
+    preferences: '<!-- Populated by /setup. -->\nBackend roles in Tel Aviv.',
+    profileHash: 'profile-hash',
+  };
+  const scorer = createJobScorer(config(), {
+    candidateContext: noisyContext,
+    runCodex: async (input) => { calls.push(input); return { results: [] }; },
+  });
+
+  await scorer.scoreBatch([{
+    candidate: { jobKey: 'job-1', source: 'ATS', company: 'Example', title: 'Backend Engineer' },
+    page: { finalUrl: 'https://example.com/jobs/1', status: 'active', content: 'Backend role.' },
+  }]).catch(() => {}); // the fake runCodex returns no result for job-1; only the prompt matters here
+
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].prompt, /Updated 2026-08-12 from documents/);
+  assert.doesNotMatch(calls[0].prompt, /Populated by \/setup/);
+  assert.match(calls[0].prompt, /Backend engineer with production Node\.js experience\./);
+  assert.match(calls[0].prompt, /Backend roles in Tel Aviv\./);
+});
+
 test('Codex scorer batches jobs under the signed-in user and keeps scoring deterministic', async () => {
   const calls = [];
   const scorer = createJobScorer(config(), {
