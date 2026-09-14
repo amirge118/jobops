@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { scanAts } from '../scripts/jobs/sources/ats.mjs';
-import { mergeTrackedCompanies } from '../scripts/scan.mjs';
+import { buildNegativeTitleFilter, loadTitleFilterNegative, mergeTrackedCompanies } from '../scripts/scan.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   diagnoseUnavailableHistory,
   markConfiguredGroupsRead,
@@ -405,4 +408,36 @@ test('WhatsApp history page is accepted only for its matching request session', 
   });
 
   assert.equal(sock.groupHistoryDiagnostics.get('a@g.us').reason, 'history_no_response');
+});
+
+test('the negative title filter blocks a match anywhere in the checked text and passes everything else', () => {
+  const passes = buildNegativeTitleFilter(['Junior', 'QA', 'Fullstack']);
+  assert.equal(passes('Senior Backend Engineer'), true);
+  assert.equal(passes('Junior Backend Engineer'), false);
+  assert.equal(passes('junior backend engineer'), false, 'must be case-insensitive');
+  assert.equal(passes('QA Automation Engineer'), false);
+  assert.equal(passes('Fullstack Developer'), false);
+  assert.equal(passes(''), true);
+  assert.equal(passes(undefined), true);
+});
+
+test('an empty negative keyword list blocks nothing', () => {
+  const passes = buildNegativeTitleFilter([]);
+  assert.equal(passes('Junior Backend Engineer'), true);
+});
+
+test('loadTitleFilterNegative reads the real, current portals.yml list', () => {
+  const negative = loadTitleFilterNegative(path.join(process.cwd(), 'portals.yml'));
+  assert.ok(Array.isArray(negative));
+  for (const keyword of ['Junior', 'QA', 'Fullstack']) assert.ok(negative.includes(keyword), `expected "${keyword}" in title_filter.negative`);
+});
+
+test('loadTitleFilterNegative tolerates a missing or malformed file instead of throwing', (context) => {
+  assert.deepEqual(loadTitleFilterNegative('/nonexistent/path/portals.yml'), []);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-portals-'));
+  context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const malformed = path.join(dir, 'portals.yml');
+  fs.writeFileSync(malformed, 'not: [valid, yaml,');
+  assert.deepEqual(loadTitleFilterNegative(malformed), []);
 });

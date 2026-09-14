@@ -72,6 +72,9 @@ title_filter:
     - "QA"
     - "Manual"
     - "Junior"
+    - "Fullstack"
+    - "Full Stack"
+    - "Full-Stack"
   seniority_boost:
     - "Senior"
     - "Staff"

@@ -16,6 +16,7 @@ import { createJobStore } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
 import { createRunLifecycle, describeFailure, safeTargetUrl } from './jobs/diagnostics.mjs';
+import { buildNegativeTitleFilter, loadTitleFilterNegative } from './scan.mjs';
 
 export function parseArgs(argv) {
   const daysIndex = argv.indexOf('--days');
@@ -352,6 +353,18 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   const pendingScores = [];
   const contentLengths = [];
   let processingStage = 'page-fetch';
+  let titleFilteredCount = 0;
+  // ATS candidates are already screened by portals.yml's title_filter before
+  // they ever become a candidate (scan.mjs runs it against the source's own
+  // structured title). A WhatsApp link has no such title until its page is
+  // fetched, so nothing has ever screened it — every link anyone shares
+  // reaches full Codex scoring, including the obvious non-matches the same
+  // negative keyword list already exists to catch. Reusing that one,
+  // person-edited list here (negative-only — see buildNegativeTitleFilter)
+  // closes that gap without a second list to keep in sync.
+  const passesNegativeTitleFilter = config.rootDir
+    ? buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')))
+    : () => true;
   const recordFailure = (candidate, code, reason) => {
     const fallback = /scor/.test(code) ? 'scoring_failed' : /browser/.test(code) ? 'browser_error' : 'page_uncertain';
     const diagnostic = describeFailure({ code, message: reason }, fallback);
@@ -431,9 +444,38 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
       continue;
     }
 
+    // Only WhatsApp links get this local check — ATS titles are already
+    // filtered before discovery, and re-running a *title* filter against a
+    // full page's worth of description text would risk false-positive
+    // exclusions this list was never tuned for. Checked against a bounded
+    // prefix (where a fetched job page's own title/heading actually lives),
+    // not the whole page — matching the ATS filter's intent of screening a
+    // title, not a description.
+    if (String(candidate.source || '').startsWith('WhatsApp:') && !passesNegativeTitleFilter(page.content.slice(0, 300))) {
+      titleFilteredCount += 1;
+      store.saveEvaluation(candidate.jobKey, {
+        company: candidate.company || 'חברה לא ידועה',
+        title: candidate.title || 'משרה לא ידועה',
+        summary: 'המשרה סוננה מקומית על פי מילת מפתח שלילית בכותרת, לפני שליחה לניקוד.',
+        score: 1,
+        fitLabel: 'לא מתאים',
+        decisionReason: 'נחסמה על ידי סינון מילות מפתח (title_filter.negative ב-portals.yml).',
+        suitable: false,
+        applyUrl: page.finalUrl || candidate.url,
+        activeStatus: page.status,
+        contentHash: page.contentHash,
+        profileHash: scorer.profileHash,
+        criteriaVersion: config.decision.criteriaVersion,
+        evaluatedAt: Date.now(),
+      });
+      outcomes.set(candidate.jobKey, { status: 'not-suitable' });
+      continue;
+    }
+
     pendingScores.push({ candidate, page });
     contentLengths.push(page.content.length);
   }
+  if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי מילות מפתח שליליות, לפני שליחה לניקוד.`);
 
   // Documents, per run, how close real job pages come to the pageText
   // truncation cap — the biggest single cost component in a scoring batch,

@@ -121,7 +121,7 @@ function resolveProvider(entry, providers, { skipIds = [] } = {}) {
 
 // ── Title filter ────────────────────────────────────────────────────
 
-function buildTitleFilter(titleFilter) {
+export function buildTitleFilter(titleFilter) {
   const positive = (titleFilter?.positive || []).map(k => k.toLowerCase());
   const negative = (titleFilter?.negative || []).map(k => k.toLowerCase());
 
@@ -131,6 +131,33 @@ function buildTitleFilter(titleFilter) {
     const hasNegative = negative.some(k => lower.includes(k));
     return hasPositive && !hasNegative;
   };
+}
+
+// WhatsApp candidates have no structured title the way an ATS API entry
+// does — only the fetched page's own text, after the fact. Requiring a
+// *positive* keyword match against that noisier text would risk dropping
+// real matches (see buildTitleFilter's positive-list role for ATS, which
+// only ever sees a short, clean title). Negative keywords are the safer,
+// one-directional half of the same portals.yml list: a small set of
+// unambiguous "definitely not this" words a person already curated.
+export function buildNegativeTitleFilter(negativeKeywords = []) {
+  const negative = negativeKeywords.map((keyword) => String(keyword).toLowerCase());
+  return (text) => !negative.some((keyword) => String(text || '').toLowerCase().includes(keyword));
+}
+
+// Reads just the title_filter.negative list out of portals.yml — a minimal,
+// tolerant read (never throws) so callers outside the main scan (e.g. the
+// WhatsApp scoring path in jobs.mjs) can reuse the same, single, person-
+// edited keyword list without pulling in the rest of scan.mjs's machinery.
+export function loadTitleFilterNegative(portalsPath) {
+  try {
+    if (!existsSync(portalsPath)) return [];
+    const parsed = parseYaml(readFileSync(portalsPath, 'utf-8'));
+    const negative = parsed?.title_filter?.negative;
+    return Array.isArray(negative) ? negative.filter((keyword) => typeof keyword === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 // ── Location filter ─────────────────────────────────────────────────

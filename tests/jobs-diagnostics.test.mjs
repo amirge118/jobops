@@ -134,6 +134,39 @@ test('evaluateCandidates reports page-content length distribution ahead of scori
   assert.equal(stats.atOrOverCapCount, 1);
 });
 
+test('a WhatsApp link with a negative-keyword title is filtered locally, never reaching the scorer — an ATS link with the same text is not', async (context) => {
+  const store = createJobStore(temporary(context));
+  context.after(() => store.close());
+  const whatsappCandidate = {
+    ...store.recordSighting({ url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A' }),
+    url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A',
+  };
+  const atsCandidate = {
+    ...store.recordSighting({ url: 'https://example.com/jobs/2', source: 'ATS: greenhouse-api' }),
+    url: 'https://example.com/jobs/2', source: 'ATS: greenhouse-api',
+  };
+  let scoreCalls = 0;
+
+  const outcomes = await evaluateCandidates({
+    candidates: [whatsappCandidate, atsCandidate], store,
+    config: { decision: { criteriaVersion: 'v1' }, rootDir: process.cwd() },
+    fetcher: { fetch: async (url) => ({ status: 'active', finalUrl: url, content: 'Junior Backend Engineer, apply now.', contentHash: url }) },
+    scorer: {
+      profileHash: 'p',
+      scoreBatchSettled: async (items, { onProgress }) => {
+        scoreCalls += items.length;
+        onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
+      },
+    },
+  });
+
+  assert.equal(scoreCalls, 1, 'only the ATS candidate should reach the scorer');
+  assert.equal(outcomes.get(whatsappCandidate.jobKey).status, 'not-suitable');
+  const filtered = store.getJob(whatsappCandidate.jobKey);
+  assert.equal(filtered.suitable, 0);
+  assert.equal(filtered.evaluated_at != null, true, 'must be recorded as resolved, not left pending for retry');
+});
+
 test('a scoring failure is stored with its specific reason, while a page-fetch failure keeps its own specific code', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
