@@ -58,6 +58,16 @@ const APPLY_PATTERNS = [
   /\baplikuj\b/i,
   /panelu aplikowania/i,
   /wyślij (cv|aplikacj)/i,
+  // Hebrew (Israeli company career pages): \b relies on \w, which excludes
+  // Hebrew letters in JS regex, so these are unanchored substring matches —
+  // matching the pattern already used for every other non-Latin-script CTA
+  // in this list. "הגש/הגשי מועמדות" (submit candidacy), "הגשת מועמדות" (the
+  // noun form, also used as a heading/button), "שלח/שלחי קורות חיים" (send
+  // CV), "שלח/שלחי מועמדות" (send candidacy).
+  /הגש(?:י)?\s+מועמדות/,
+  /הגשת\s+מועמדות/,
+  /שלח(?:י)?\s+קורות\s+חיים/,
+  /שלח(?:י)?\s+מועמדות/,
 ];
 
 const MIN_CONTENT_CHARS = 300;

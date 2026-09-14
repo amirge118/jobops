@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { chromium } from 'playwright';
 
 import { classifyLiveness } from '../liveness-core.mjs';
-import { checkUrlLiveness, newLivenessPage } from '../liveness-browser.mjs';
+import {
+  checkUrlLiveness, createHeadedPageProvider, isChallengeResult, newLivenessPage,
+} from '../liveness-browser.mjs';
 import { canonicalizeJobUrl } from './core.mjs';
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -81,7 +83,7 @@ function greenhouseIdentity(url) {
   }
 }
 
-function knownNonJobReason(url) {
+export function knownNonJobReason(url) {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
@@ -92,8 +94,19 @@ function knownNonJobReason(url) {
     if (['referally.link', 'www.referally.link', 'referally-jobos.lovable.app'].includes(host) && path === '/') {
       return 'Community homepage, not a job posting.';
     }
-    if (host === 'secrethunter.io' && path === '/search') {
-      return 'Job search page, not an individual posting.';
+    if (['secrethunter.io', 'hire.secrethunter.io'].includes(host) && (path === '/search' || path === '/')) {
+      return 'Job search/landing page, not an individual posting.';
+    }
+    if (['play.google.com', 'apps.apple.com'].includes(host)) {
+      return 'App store link, not a job posting.';
+    }
+    if (['linktr.ee', 'www.linktr.ee'].includes(host)) {
+      return 'Link-in-bio aggregator page, not a job posting.';
+    }
+    // A real Apple posting is /<locale>/details/<id>/<slug>; anything else on
+    // this host (the bare root, /search, a generic landing page) is not one.
+    if (host === 'jobs.apple.com' && !/^\/[a-z]{2}-[a-z]{2}\/details\/\d+/.test(path)) {
+      return 'Apple careers search/landing page, not a specific job posting.';
     }
     return null;
   } catch {
@@ -181,17 +194,38 @@ function greenhouseContent(posting) {
     .slice(0, 50_000);
 }
 
-export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis.fetch }) {
+export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis.fetch, chromiumImpl = chromium }) {
   let browser = null;
   let page = null;
+  let headed = null;
 
   async function renderedCheck(url) {
     try {
-      if (!browser) browser = await chromium.launch({ headless: true });
+      if (!browser) browser = await chromiumImpl.launch({ headless: true });
       if (!page) page = await newLivenessPage(browser);
-      const liveness = await checkUrlLiveness(page, url);
-      const content = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
-      return { liveness, content: content.replace(/\s+/g, ' ').trim(), finalUrl: page.url() };
+      let liveness = await checkUrlLiveness(page, url);
+      let activePage = page;
+      // The plain headless check already covers most SPAs. When it specifically
+      // hits an anti-bot wall (bot_challenge/access_blocked — the same class of
+      // 403 that ZoomInfo and similar hosts return on every run), retry once in
+      // a real, non-headless browser: this already exists and works for
+      // `scan.mjs --verify --headed-fallback`, just wasn't wired into the
+      // regular per-job scoring pipeline that runs on every scan.
+      if (isChallengeResult(liveness)) {
+        if (!headed) headed = createHeadedPageProvider(chromiumImpl);
+        const headedPage = await headed.get();
+        if (headedPage) {
+          const retried = await checkUrlLiveness(headedPage, url, { extraSettleMs: 3_000 });
+          if (isChallengeResult(retried)) {
+            liveness = { ...retried, reason: `${retried.reason} (headed retry also blocked)` };
+          } else {
+            liveness = retried;
+            activePage = headedPage;
+          }
+        }
+      }
+      const content = await activePage.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+      return { liveness, content: content.replace(/\s+/g, ' ').trim(), finalUrl: activePage.url() };
     } catch (error) {
       return {
         liveness: { result: 'uncertain', code: 'browser_error', reason: error.message.split('\n')[0] },
@@ -438,8 +472,10 @@ export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis
 
     async close() {
       if (browser) await browser.close().catch(() => {});
+      if (headed) await headed.close().catch(() => {});
       browser = null;
       page = null;
+      headed = null;
     },
   };
 }

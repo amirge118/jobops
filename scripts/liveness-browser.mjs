@@ -75,6 +75,44 @@ function rejectPrivateOrInvalid(url) {
   return null;
 }
 
+// Self-contained (no closure references) so it can run unmodified via
+// page.evaluate() and, per frame, frame.evaluate() — some careers pages embed
+// their ATS widget (Comeet, Greenhouse) in an iframe rather than linking out
+// to it, and an apply control living in that document is invisible to a
+// querySelectorAll scoped to the main frame alone.
+function extractApplyControls() {
+  const candidates = Array.from(
+    document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')
+  );
+
+  return candidates
+    .filter((element) => {
+      if (element.closest('nav, header, footer')) return false;
+      if (element.closest('[aria-hidden="true"]')) return false;
+
+      const style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      if (!element.getClientRects().length) return false;
+
+      return Array.from(element.getClientRects()).some((rect) => rect.width > 0 && rect.height > 0);
+    })
+    .map((element) => {
+      const label = [
+        element.innerText,
+        element.value,
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      return label;
+    })
+    .filter(Boolean);
+}
+
 export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
   const guardError = rejectPrivateOrInvalid(url);
   if (guardError) {
@@ -90,38 +128,16 @@ export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
 
     const finalUrl = page.url();
     const bodyText = await page.evaluate(() => document.body?.innerText ?? '');
-    const applyControls = await page.evaluate(() => {
-      const candidates = Array.from(
-        document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')
-      );
-
-      return candidates
-        .filter((element) => {
-          if (element.closest('nav, header, footer')) return false;
-          if (element.closest('[aria-hidden="true"]')) return false;
-
-          const style = window.getComputedStyle(element);
-          if (style.display === 'none' || style.visibility === 'hidden') return false;
-          if (!element.getClientRects().length) return false;
-
-          return Array.from(element.getClientRects()).some((rect) => rect.width > 0 && rect.height > 0);
-        })
-        .map((element) => {
-          const label = [
-            element.innerText,
-            element.value,
-            element.getAttribute('aria-label'),
-            element.getAttribute('title'),
-          ]
-            .filter(Boolean)
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-          return label;
-        })
-        .filter(Boolean);
-    });
+    const applyControls = await page.evaluate(extractApplyControls);
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) continue;
+      try {
+        applyControls.push(...await frame.evaluate(extractApplyControls));
+      } catch {
+        // Detached, still-navigating, or otherwise inaccessible frame — an
+        // embedded widget we can't yet read must never fail the whole check.
+      }
+    }
 
     return classifyLiveness({ status, finalUrl, bodyText, applyControls });
   } catch (err) {

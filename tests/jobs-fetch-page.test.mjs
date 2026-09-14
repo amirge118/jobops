@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createJobPageFetcher } from '../scripts/jobs/fetch-page.mjs';
+import { createJobPageFetcher, knownNonJobReason } from '../scripts/jobs/fetch-page.mjs';
 
 function memoryStore() {
   let saved = null;
@@ -86,6 +86,27 @@ test('known community and registration links are classified as non-jobs without 
   await fetcher.close();
 });
 
+test('known non-job hosts cover app stores, link-in-bio pages and generic Apple careers landing pages', () => {
+  const nonJobUrls = [
+    'https://secrethunter.io/search',
+    'https://secrethunter.io/',
+    'https://hire.secrethunter.io/',
+    'https://play.google.com/store/apps/details?id=com.example',
+    'https://apps.apple.com/us/app/example/id123456789',
+    'https://linktr.ee/somecompany',
+    'https://www.linktr.ee/somecompany',
+    'https://jobs.apple.com/',
+    'https://jobs.apple.com/en-us/search?team=apps-and-frameworks',
+  ];
+  for (const url of nonJobUrls) assert.ok(knownNonJobReason(url), `expected ${url} to be a known non-job URL`);
+
+  const realPostings = [
+    'https://jobs.apple.com/en-us/details/200538935/software-engineer',
+    'https://boards.greenhouse.io/example/jobs/123',
+  ];
+  for (const url of realPostings) assert.equal(knownNonJobReason(url), null, `expected ${url} to be treated as a real posting`);
+});
+
 test('SmartRecruiters pages use the public posting API', async () => {
   const store = memoryStore();
   const calls = [];
@@ -141,6 +162,108 @@ test('JFrog custom Greenhouse links use the public job API', async () => {
   assert.equal(page.status, 'active');
   assert.equal(page.code, 'greenhouse_api');
   assert.match(page.content, /production backend services/);
+  await fetcher.close();
+});
+
+function fakeLivenessPage({ status, bodyText = '', applyControls = [] }) {
+  // checkUrlLiveness's own evaluate() calls always run in this order: page body
+  // text, then the apply-control query. fetch-page.mjs's renderedCheck makes one
+  // further evaluate() call afterwards on whichever page won, to grab the final
+  // content — reusing the same body text is a faithful stand-in since a real
+  // page's content does not change between those calls.
+  const evalResults = [bodyText, applyControls, bodyText];
+  let calls = 0;
+  let currentUrl = '';
+  const mainFrame = {};
+  return {
+    async goto(url) { currentUrl = url; return { status: () => status }; },
+    async waitForTimeout() {},
+    url: () => currentUrl,
+    async evaluate() {
+      const value = evalResults[Math.min(calls, evalResults.length - 1)];
+      calls += 1;
+      return value;
+    },
+    mainFrame: () => mainFrame,
+    frames: () => [mainFrame],
+  };
+}
+
+function fakeChromium({ headlessPage, headedPage, headedLaunchFails = false }) {
+  const launches = [];
+  return {
+    launches,
+    async launch({ headless }) {
+      launches.push(headless);
+      if (!headless && headedLaunchFails) throw new Error('no display available');
+      return {
+        async newContext() { return { async newPage() { return headless ? headlessPage : headedPage; } }; },
+        async close() {},
+      };
+    },
+  };
+}
+
+test('a bot-blocked page is retried in a real (headed) browser and the working result wins', async () => {
+  const store = memoryStore();
+  const chromiumImpl = fakeChromium({
+    headlessPage: fakeLivenessPage({ status: 403, bodyText: 'Access Denied' }),
+    headedPage: fakeLivenessPage({
+      status: 200,
+      bodyText: `Senior Backend Engineer at Example. ${'Build distributed services. '.repeat(20)}`,
+      applyControls: ['Apply Now'],
+    }),
+  });
+  const fetcher = createJobPageFetcher({
+    store, cacheTtlMs: 0, chromiumImpl,
+    fetchImpl: async () => new Response('Access Denied', { status: 403 }),
+  });
+
+  const page = await fetcher.fetch('https://www.zoominfo.com/careers/12345');
+
+  assert.equal(page.status, 'active');
+  assert.equal(page.code, 'apply_control_visible');
+  assert.match(page.content, /Senior Backend Engineer/);
+  assert.deepEqual(chromiumImpl.launches, [true, false]);
+  await fetcher.close();
+});
+
+test('a headed retry that is still blocked keeps the uncertain result instead of upgrading it', async () => {
+  const store = memoryStore();
+  const chromiumImpl = fakeChromium({
+    headlessPage: fakeLivenessPage({ status: 403, bodyText: 'Access Denied' }),
+    headedPage: fakeLivenessPage({ status: 403, bodyText: 'Access Denied' }),
+  });
+  const fetcher = createJobPageFetcher({
+    store, cacheTtlMs: 0, chromiumImpl,
+    fetchImpl: async () => new Response('Access Denied', { status: 403 }),
+  });
+
+  const page = await fetcher.fetch('https://www.zoominfo.com/careers/12345');
+
+  assert.equal(page.status, 'uncertain');
+  assert.equal(page.code, 'access_blocked');
+  assert.match(page.reason, /headed retry also blocked/);
+  await fetcher.close();
+});
+
+test('no headed browser is launched when the headless check is not a bot-challenge', async () => {
+  const store = memoryStore();
+  const longBody = `Some job content with plenty of text but no recognized apply control. ${'Filler. '.repeat(60)}`;
+  const chromiumImpl = fakeChromium({
+    headlessPage: fakeLivenessPage({ status: 200, bodyText: longBody, applyControls: [] }),
+    headedPage: fakeLivenessPage({ status: 200, bodyText: longBody, applyControls: ['Apply Now'] }),
+  });
+  const fetcher = createJobPageFetcher({
+    store, cacheTtlMs: 0, chromiumImpl,
+    fetchImpl: async () => new Response(longBody, { status: 200 }),
+  });
+
+  const page = await fetcher.fetch('https://example.com/careers/12345');
+
+  assert.equal(page.status, 'uncertain');
+  assert.equal(page.code, 'no_apply_control');
+  assert.deepEqual(chromiumImpl.launches, [true]);
   await fetcher.close();
 });
 
