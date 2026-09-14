@@ -70,6 +70,20 @@ test('dashboard exposes WhatsApp backlog and queues one durable history request'
   };
   const store = createJobStore(config.jobsDbPath);
   store.queueWhatsAppMessage({ messageId: 'pending-1', groupJid: 'group-a@g.us', timestamp: Date.now(), text: 'https://example.com/job' });
+  store.markWhatsAppMessagesRead([{ id: 'pending-1', remoteJid: 'group-a@g.us' }], { readAt: Date.now() });
+  const collectorId = store.startCollectorRun({ ownerPid: process.pid, groupsExpected: 1 });
+  store.updateCollectorRun(collectorId, { status: 'connected', stage: 'connected', connectedAt: Date.now(), groupsFound: 1 });
+  const missingFrom = Date.now() - 24 * 60 * 60 * 1_000;
+  const missing = store.requestWhatsAppHistory({
+    fromTs: missingFrom, toTs: Date.now(), groupsTotal: 1,
+    groups: [{ name: 'Group A', requestedFrom: missingFrom }],
+  });
+  store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid });
+  store.recordWhatsAppHistoryGroup(missing.request.id, {
+    name: 'Group A', status: 'failed', requestedFrom: missingFrom,
+    reason: 'history_no_response',
+  });
+  store.finishWhatsAppHistoryRequest(missing.request.id, { status: 'failed' });
   store.close();
   const server = createDashboardServer({ config, readiness: readyService });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -81,6 +95,9 @@ test('dashboard exposes WhatsApp backlog and queues one durable history request'
   assert.equal(scan.whatsappHistory.backlog.groups[0].name, 'Group A');
   assert.equal(Object.hasOwn(scan.whatsappHistory.backlog.groups[0], 'groupJid'), false);
   assert.ok(scan.whatsappHistory.backlog.groups[0].lastCollectedAt);
+  assert.ok(scan.whatsappHistory.backlog.groups[0].lastReadAt);
+  assert.equal(scan.whatsappHistory.backlog.groups[0].syncState, 'live-with-gap');
+  assert.equal(scan.whatsappHistory.backlog.groups[0].gapFrom, missingFrom);
 
   const queuedResponse = await fetch(`${baseUrl}/api/whatsapp/history`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

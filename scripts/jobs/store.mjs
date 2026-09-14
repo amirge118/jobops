@@ -199,6 +199,7 @@ export function createJobStore(databasePath) {
       status        TEXT NOT NULL,
       retry_count   INTEGER NOT NULL DEFAULT 0,
       last_error    TEXT,
+      read_at       INTEGER,
       updated_at    INTEGER NOT NULL
     );
 
@@ -464,6 +465,16 @@ export function createJobStore(databasePath) {
   const processedMessageColumns = db.prepare('PRAGMA table_info(processed_messages)').all();
   if (!processedMessageColumns.some((column) => column.name === 'message_text')) {
     db.exec('ALTER TABLE processed_messages ADD COLUMN message_text TEXT');
+  }
+  if (!processedMessageColumns.some((column) => column.name === 'read_at')) {
+    try {
+      db.exec('ALTER TABLE processed_messages ADD COLUMN read_at INTEGER');
+    } catch (error) {
+      // Two local processes can open the database during a dashboard action.
+      // If the other process won this additive migration race, the desired
+      // schema already exists and both versions remain compatible.
+      if (!/duplicate column name:\s*read_at/i.test(String(error?.message || ''))) throw error;
+    }
   }
   db.exec(`
     CREATE INDEX IF NOT EXISTS processed_messages_pending_idx
@@ -1260,6 +1271,29 @@ export function createJobStore(databasePath) {
       return result.changes === 1;
     },
 
+    markWhatsAppMessagesRead(keys, { readAt = Date.now() } = {}) {
+      if (!Array.isArray(keys) || keys.length > 5_000) {
+        throw new Error('WhatsApp read keys must be an array of at most 5,000 items');
+      }
+      const timestamp = Number(readAt);
+      if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+        throw new Error('WhatsApp read timestamp must be a non-negative integer');
+      }
+      const update = db.prepare(`
+        UPDATE processed_messages SET read_at = ?, updated_at = ?
+        WHERE message_id = ? AND group_jid = ?
+      `);
+      return db.transaction((items) => {
+        let marked = 0;
+        for (const key of items) {
+          if (typeof key?.id !== 'string' || !key.id || key.id.length > 256 ||
+              typeof key?.remoteJid !== 'string' || !key.remoteJid || key.remoteJid.length > 128) continue;
+          marked += update.run(timestamp, timestamp, key.id, key.remoteJid).changes;
+        }
+        return marked;
+      })(keys);
+    },
+
     saveWhatsAppAnchor(groupJid, message) {
       const anchor = normalizeWhatsAppAnchor(message, groupJid);
       if (!anchor) return false;
@@ -1331,7 +1365,9 @@ export function createJobStore(databasePath) {
           SUM(CASE WHEN status IN ('pending', 'failed') AND message_text IS NOT NULL THEN 1 ELSE 0 END) AS pending,
           SUM(CASE WHEN status = 'failed' AND message_text IS NOT NULL THEN 1 ELSE 0 END) AS failed,
           MAX(wa_timestamp) AS last_collected_at,
-          MAX(CASE WHEN status = 'done' THEN wa_timestamp END) AS last_processed_at
+          MAX(CASE WHEN status = 'done' THEN wa_timestamp END) AS last_processed_at,
+          MAX(read_at) AS last_read_at,
+          SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read_total
         FROM processed_messages
         WHERE group_jid = ?
       `).get(groupJid);
@@ -1341,6 +1377,8 @@ export function createJobStore(databasePath) {
         failed: Number(row?.failed || 0),
         lastCollectedAt: row?.last_collected_at == null ? null : Number(row.last_collected_at),
         lastProcessedAt: row?.last_processed_at == null ? null : Number(row.last_processed_at),
+        lastReadAt: row?.last_read_at == null ? null : Number(row.last_read_at),
+        readTotal: Number(row?.read_total || 0),
       };
     },
 

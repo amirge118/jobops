@@ -542,9 +542,10 @@ export async function runJobs(argv = process.argv.slice(2)) {
         store,
         sinceMs: window.from,
         untilMs: window.to,
-        // Keep one dashboard action bounded. Re-run the action to drain a
-        // large historical inbox without creating an hours-long score run.
-        limitPerGroup: 100,
+        // A group may accumulate a few hundred messages while the Collector is
+        // offline. Keep the action bounded while allowing the common backlog
+        // to drain in one run.
+        limitPerGroup: 500,
         onStage: (stage) => lifecycle?.stage(stage, 'whatsapp-backlog'),
         onDiagnostic: (event) => { if (runId) store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
       }));

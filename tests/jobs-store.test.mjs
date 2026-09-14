@@ -224,6 +224,7 @@ test('WhatsApp group collection stats expose timestamps and counts without messa
   store.queueWhatsAppMessage({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000, text: 'private done' });
   store.markMessageDone({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000 });
   store.queueWhatsAppMessage({ messageId: 'pending', groupJid: 'group-a@g.us', timestamp: 2_000, text: 'private pending' });
+  store.markWhatsAppMessagesRead([{ id: 'pending', remoteJid: 'group-a@g.us' }], { readAt: 2_500 });
   store.queueWhatsAppMessage({ messageId: 'failed', groupJid: 'group-a@g.us', timestamp: 3_000, text: 'private failed' });
   store.markMessageFailed({ messageId: 'failed', groupJid: 'group-a@g.us', error: 'temporary' });
 
@@ -234,6 +235,8 @@ test('WhatsApp group collection stats expose timestamps and counts without messa
     failed: 1,
     lastCollectedAt: 3_000,
     lastProcessedAt: 1_000,
+    lastReadAt: 2_500,
+    readTotal: 1,
   });
   assert.doesNotMatch(JSON.stringify(stats), /private/);
   store.close();

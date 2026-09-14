@@ -118,14 +118,21 @@ function renderWhatsAppHistory(history) {
     ? `${Number(backlog.total || 0)} הודעות חדשות נאספו בשבעת הימים האחרונים ומוכנות לחילוץ קישורים.`
     : 'אין הודעות חדשות שממתינות לעיבוד. אפשר להשלים פערים; הבקשה תמתין אם ה-Collector אינו מחובר.';
   elements.processRecentBacklog.textContent = `עבד הודעות שנאספו (${Number(backlog.total || 0)})`;
-  const historyLabels = { pending: 'ממתין לחיבור', running: 'אוסף עכשיו', complete: 'הושלם', partial: 'חלקי', failed: 'נכשל' };
+  const syncLabels = {
+    live: 'קליטה חיה',
+    'live-with-gap': 'קליטה חיה · קיים פער',
+    recovering: 'מנסה להשלים פער',
+    gap: 'קיים פער · Collector לא מחובר',
+    offline: 'Collector לא מחובר',
+  };
   elements.backlogGroups.innerHTML = (backlog.groups || []).map((group) => `<tr>
     <td><strong>${escapeHtml(group.name)}</strong></td>
+    <td><span class="coverage-pill" data-state="${group.syncState === 'live' ? 'complete' : group.syncState === 'recovering' ? 'partial' : 'failed'}">${escapeHtml(syncLabels[group.syncState] || 'מצב לא ידוע')}</span>${group.gapFrom ? `<small>פער מ־${escapeHtml(formatTime(group.gapFrom))}</small>` : ''}</td>
     <td>${group.lastCollectedAt ? escapeHtml(formatTime(group.lastCollectedAt)) : 'טרם נאסף מידע'}</td>
-    <td>${escapeHtml(historyLabels[group.historyStatus] || 'טרם התבקש')}</td>
+    <td>${group.lastReadAt ? escapeHtml(formatTime(group.lastReadAt)) : 'טרם אומת'}</td>
     <td>${Number(group.received || 0)}</td><td>${Number(group.links || 0)}</td>
     <td>${Number(group.suitable || 0)}</td><td>${Number(group.failed || 0)}</td><td>${Number(group.total || 0)}</td>
-  </tr>`).join('') || '<tr><td colspan="8">אין קבוצות מוגדרות</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="9">אין קבוצות מוגדרות</td></tr>';
 
   const request = history?.request;
   historyRequestRunning = ['pending', 'running'].includes(request?.status);

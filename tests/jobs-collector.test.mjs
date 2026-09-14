@@ -89,8 +89,42 @@ test('collector durably queues configured messages, sends receipts and records a
   assert.equal(diagnostic.messages_received, 1);
   assert.equal(diagnostic.messages_queued, 1);
   assert.equal(diagnostic.receipts_sent, 1);
+  assert.ok(store.getWhatsAppGroupCollectionStats(group.jid).lastReadAt);
   assert.equal(diagnostic.events.some((event) => event.stage === 'message-ingress'), true);
   assert.doesNotMatch(JSON.stringify(diagnostic), /private text|private-user|group-a@g\.us/);
+});
+
+test('collector reconnects a status 500 stream error inside the same durable run', async (context) => {
+  const { dir, store } = temporary(context);
+  let connections = 0;
+  const connect = async (_authPath, options) => {
+    connections += 1;
+    const statusCode = connections === 1 ? 500 : 440;
+    const error = new Boom(connections === 1 ? 'Stream Errored (ack)' : 'replaced', {
+      statusCode,
+      data: connections === 1 ? { tag: 'ack' } : null,
+    });
+    const sock = {
+      groupFetchAllParticipating: async () => ({ [group.jid]: { subject: group.name, participants: [] } }),
+      readMessages: async () => {},
+    };
+    setImmediate(() => options.onConnectionUpdate({
+      connection: 'close',
+      lastDisconnect: { error },
+    }, sock));
+    return sock;
+  };
+
+  const result = await runWhatsAppCollector({
+    config: configFor(dir), store, connect, disconnect: async () => {},
+    sleep: async () => new Promise((resolve) => setImmediate(resolve)), registerSignals: false,
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(connections, 2);
+  const diagnostic = store.getCollectorRun(result.id);
+  assert.equal(diagnostic.reconnects, 1);
+  assert.equal(diagnostic.events.some((event) => event.stage === 'reconnect-wait'), true);
 });
 
 test('scan consumes the collector inbox without opening another WhatsApp session', async (context) => {

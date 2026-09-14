@@ -24,6 +24,9 @@ export function createDashboardQueries(config, action) {
     const recent = store.getWhatsAppBacklogStats({ sinceMs: now - 7 * 24 * 60 * 60 * 1_000, untilMs: now });
     const lastRun = store.getLastRunSummary();
     const latestRequest = store.getLatestWhatsAppHistoryRequest();
+    const collector = store.getCollectorStatusSummary();
+    const collectorLive = collector?.status === 'connected' &&
+      Number(collector.groups_found || 0) === Number(collector.groups_expected || 0);
     const historyGroups = new Map((latestRequest?.groups || []).map((group) => [group.name, group]));
     const lastWhatsAppGroups = new Map((lastRun?.details?.whatsapp?.groups || []).map((group) => [group.name, group]));
     const processingGroups = new Map((lastRun?.details?.processing?.scopes || [])
@@ -47,6 +50,12 @@ export function createDashboardQueries(config, action) {
           const runGroup = lastWhatsAppGroups.get(name);
           const processing = processingGroups.get(name);
           const historyGroup = historyGroups.get(name);
+          const historyRunning = ['pending', 'running'].includes(historyGroup?.status);
+          const hasGap = ['partial', 'failed'].includes(historyGroup?.status) && Boolean(historyGroup?.reason);
+          const syncState = historyRunning ? 'recovering'
+            : collectorLive && hasGap ? 'live-with-gap'
+              : hasGap ? 'gap'
+                : collectorLive ? 'live' : 'offline';
           return {
             name,
             total: Number(recentGroup?.total || 0),
@@ -57,6 +66,8 @@ export function createDashboardQueries(config, action) {
             newestAt: group?.newestAt ?? null,
             lastCollectedAt: collection.lastCollectedAt,
             lastProcessedAt: collection.lastProcessedAt,
+            lastReadAt: collection.lastReadAt,
+            readTotal: collection.readTotal,
             collectedTotal: collection.totalCollected,
             lastRunAt: lastRun?.finished_at || lastRun?.started_at || null,
             received: Number(runGroup?.coverage?.delivered ?? runGroup?.messages ?? 0),
@@ -68,6 +79,8 @@ export function createDashboardQueries(config, action) {
             historyReason: historyGroup?.reason || null,
             historyReceived: Number(historyGroup?.delivered || 0),
             historyRequestedFrom: historyGroup?.requestedFrom ?? null,
+            syncState,
+            gapFrom: hasGap ? historyGroup?.requestedFrom ?? null : null,
           };
         }),
       },

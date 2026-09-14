@@ -34,6 +34,7 @@
     "jobs:verify-groups": "node scripts/jobs/verify-groups.mjs",
     "jobs:mark-read": "node scripts/jobs/mark-groups-read.mjs",
     "jobs:migrate-whatsapp": "node scripts/migrate-whatsapp-state.mjs",
+    "jobs:import-whatsapp-links": "node scripts/jobs/import-whatsapp-links.mjs",
     "whatsapp:collector": "node scripts/jobs/whatsapp-collector.mjs",
     "whatsapp:collector:install": "node scripts/jobs/collector-service.mjs install",
     "whatsapp:collector:uninstall": "node scripts/jobs/collector-service.mjs uninstall",

@@ -116,7 +116,9 @@ export async function markConfiguredGroupsRead(config, sock, { store } = {}) {
       .filter((message) => message.key?.id && !message.key?.fromMe);
     try {
       if (messages.length > 0) {
-        await sock.readMessages(messages.map((message) => message.key));
+        const keys = messages.map((message) => message.key);
+        await sock.readMessages(keys);
+        store?.markWhatsAppMessagesRead?.(keys);
         results.push({ name: group.name, marked: true, method: 'message-receipts', messages: messages.length });
         continue;
       }
@@ -145,7 +147,9 @@ export async function markConfiguredGroupsRead(config, sock, { store } = {}) {
           const storedKeys = store?.listWhatsAppMessageKeys(group.jid) || [];
           if (storedKeys.length === 0) throw chatStateError;
           for (let index = 0; index < storedKeys.length; index += READ_RECEIPT_BATCH_SIZE) {
-            await sock.readMessages(storedKeys.slice(index, index + READ_RECEIPT_BATCH_SIZE));
+            const batch = storedKeys.slice(index, index + READ_RECEIPT_BATCH_SIZE);
+            await sock.readMessages(batch);
+            store?.markWhatsAppMessagesRead?.(batch);
           }
           results.push({
             name: group.name,
@@ -213,7 +217,7 @@ export function scanWhatsAppBacklog({
   store,
   sinceMs = 0,
   untilMs = Date.now(),
-  limitPerGroup = 100,
+  limitPerGroup = 500,
   onDiagnostic = () => {},
   onStage = () => {},
 } = {}) {
@@ -422,7 +426,9 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
         try {
           for (let offset = 0; offset < keys.length; offset += READ_RECEIPT_BATCH_SIZE) {
             const batch = keys.slice(offset, offset + READ_RECEIPT_BATCH_SIZE);
-            await sendReceiptBatch(sock, batch, readTimeoutMs); sent += batch.length;
+            await sendReceiptBatch(sock, batch, readTimeoutMs);
+            store.markWhatsAppMessagesRead?.(batch);
+            sent += batch.length;
           }
           readResults.push({ name: whatsapp.groups[index].name, marked: keys.length > 0, status: keys.length ? 'sent' : 'skipped',
             method: 'scan-message-receipts', messages: sent, error: null });

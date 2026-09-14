@@ -109,6 +109,7 @@ npm run jobs -- --days 2 --open       # also open new matches in Chrome
 npm run jobs:open                      # open matches that were not opened yet
 npm run jobs:verify-groups             # confirm configured WhatsApp groups still exist
 npm run whatsapp:collector             # keep receiving WhatsApp messages in this terminal
+npm run jobs:import-whatsapp-links -- --group "GROUP" --file links.json # one-time browser/export backfill
 npm run jobs -- --whatsapp-backlog --days 7 # process seven days already queued locally
 npm run jobs -- --whatsapp-backlog          # process the next bounded history batch
 npm run diagnostics -- --latest        # print the newest safe diagnostic record
@@ -302,6 +303,12 @@ proof that the phone's unread counter cleared. No other chats are touched, the s
 The separate, explicit `npm run jobs:mark-read` action still supports configured-chat state and
 old stored-ID fallbacks, without running job scoring. Its output identifies these methods; they
 must not be interpreted as evidence of messages received by the current scan.
+
+If WhatsApp declines an on-demand history request, a browser-assisted or exported JSON array of
+links can be imported with `jobs:import-whatsapp-links`. The importer accepts only configured group
+names, canonicalizes and deduplicates URLs, stores no surrounding chat text, and is safe to rerun.
+Imported links remain pending until `npm run jobs -- --whatsapp-backlog` fetches the destination
+pages and evaluates them. One backlog run processes up to 500 stored messages per group.
 
 Keep `authPath` inside this project so Baileys can safely refresh its session files. When moving
 from the standalone `whatsappJobsScanner`, copy its existing private `auth/` directory into this

@@ -46,7 +46,13 @@ export function suppressKnownLibsignalNoise() {
   };
 }
 
-export function shouldRetryWhatsAppConnection(statusCode) {
+export function shouldRetryWhatsAppConnection(statusCode, error = null) {
+  // WhatsApp can emit a repeatable Stream Errored (ack) after roughly
+  // 50 minutes. Baileys maps every status 500 to badSession, but this specific
+  // ack reset is transient. Other 500 failures may require a fresh pairing.
+  if (statusCode === DisconnectReason.badSession) {
+    return error?.data?.tag === 'ack' || /stream errored\s*\(ack\)/i.test(String(error?.message || ''));
+  }
   return statusCode === DisconnectReason.connectionClosed ||
     statusCode === DisconnectReason.connectionLost ||
     statusCode === DisconnectReason.timedOut ||
@@ -275,7 +281,7 @@ export async function connectWhatsApp(authPath, {
         if (settled) return;
         if (statusCode === DisconnectReason.loggedOut) {
           finishReject(new Error('WhatsApp session is logged out; pairing required.'));
-        } else if (shouldRetryWhatsAppConnection(statusCode) && attempts < MAX_RESTART_ATTEMPTS) {
+        } else if (shouldRetryWhatsAppConnection(statusCode, lastDisconnect?.error) && attempts < MAX_RESTART_ATTEMPTS) {
           attempts += 1;
           setTimeout(() => start().catch(finishReject), RECONNECT_DELAY_MS * attempts);
         } else {

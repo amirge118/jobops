@@ -238,6 +238,8 @@ test('local WhatsApp backlog is processed newest-first without opening a socket'
 test('WhatsApp retries transient disconnects but not logout or replacement', () => {
   assert.equal(shouldRetryWhatsAppConnection(428), true);
   assert.equal(shouldRetryWhatsAppConnection(408), true);
+  assert.equal(shouldRetryWhatsAppConnection(500, { message: 'Stream Errored (ack)', data: { tag: 'ack' } }), true);
+  assert.equal(shouldRetryWhatsAppConnection(500, new Error('bad auth state')), false);
   assert.equal(shouldRetryWhatsAppConnection(503), true);
   assert.equal(shouldRetryWhatsAppConnection(401), false);
   assert.equal(shouldRetryWhatsAppConnection(440), false);

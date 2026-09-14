@@ -280,6 +280,7 @@ export async function runWhatsAppCollector({
                 for (let offset = 0; offset < keys.length; offset += RECEIPT_BATCH_SIZE) {
                   const receiptBatch = keys.slice(offset, offset + RECEIPT_BATCH_SIZE);
                   await sock.readMessages(receiptBatch);
+                  store.markWhatsAppMessagesRead?.(receiptBatch, { readAt: now() });
                   sent += receiptBatch.length;
                 }
                 store.updateCollectorRun(runId, { receiptsSent: sent });
@@ -327,7 +328,11 @@ export async function runWhatsAppCollector({
             : lastDisconnect?.error,
           'network_error',
         );
-        store.recordCollectorEvent(runId, { stage: 'connection-closed', status: 'failed', details: { ...failure, ...(statusCode ? { statusCode } : {}) } });
+        const retryable = shouldRetryWhatsAppConnection(statusCode, lastDisconnect?.error);
+        store.recordCollectorEvent(runId, {
+          stage: 'connection-closed', status: retryable ? 'warning' : 'failed',
+          details: { ...failure, ...(statusCode ? { statusCode } : {}), retryable },
+        });
 
         if (statusCode === DisconnectReason.loggedOut) {
           record('pairing', 'pairing_required', { details: describeFailure(null, 'pairing_required') });
@@ -338,7 +343,7 @@ export async function runWhatsAppCollector({
           store.finishCollectorRun(runId, { status: 'failed', failure: replaced });
           return { id: runId, status: 'failed', failure: replaced };
         }
-        if (!shouldRetryWhatsAppConnection(statusCode)) {
+        if (!retryable) {
           store.finishCollectorRun(runId, { status: 'failed', failure });
           return { id: runId, status: 'failed', failure };
         }
