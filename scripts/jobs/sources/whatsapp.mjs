@@ -295,13 +295,67 @@ function latestGroupVerification(collector) {
   return [...(collector?.events || [])].reverse().find((event) => event.stage === 'group-verification')?.details?.groups || [];
 }
 
+const DEFAULT_COLLECTOR_GAP_TOLERANCE_MS = 60_000;
+
+/**
+ * Whether the collector's connectivity during [sinceMs, untilMs] is trustworthy
+ * enough to claim full coverage — reconstructed from the run's own event log
+ * instead of the single `connected_at <= sinceMs` snapshot, which resets on
+ * *every* reconnect (a graceful one-second blip counts exactly the same as an
+ * hour offline) and, since laptops sleep and WhatsApp's own servers hiccup,
+ * made "complete" coverage nearly unreachable over any realistic window.
+ *
+ * A window counts as covered when the collector was disconnected for no more
+ * than `gapToleranceMs` in total during it: a message landing in a sub-minute
+ * gap is unlikely, so a short blip is an acceptable, bounded risk in exchange
+ * for coverage the system can actually reach. Anything longer still reports
+ * `collector_gap` exactly as before.
+ */
+export function computeCollectorCoverage({ collector, sinceMs, untilMs, gapToleranceMs = DEFAULT_COLLECTOR_GAP_TOLERANCE_MS }) {
+  if (!collector || collector.status !== 'connected' || !Array.isArray(collector.events) || collector.events.length === 0) {
+    return { covered: false, downtimeMs: Math.max(0, untilMs - sinceMs) };
+  }
+
+  let up = false;
+  let cursor = sinceMs;
+  let downtimeMs = 0;
+  const accumulate = (from, to) => {
+    const start = Math.max(from, sinceMs);
+    const end = Math.min(to, untilMs);
+    if (end > start) downtimeMs += end - start;
+  };
+
+  for (const event of collector.events) {
+    const at = Number(event.createdAt);
+    if (!Number.isFinite(at)) continue;
+    // Events before sinceMs still matter for establishing whether the
+    // collector was already up or down at the window's start — only the
+    // accumulated downtime itself (via accumulate()'s own clamping) is
+    // restricted to [sinceMs, untilMs]. An event after untilMs can be
+    // skipped: nothing past the window's end affects coverage of it.
+    if (at > untilMs) break;
+    if (!up && event.stage === 'connected' && event.status === 'connected') {
+      accumulate(cursor, at);
+      up = true;
+      cursor = at;
+    } else if (up && event.stage === 'connection-closed') {
+      up = false;
+      cursor = at;
+    }
+  }
+  if (!up) accumulate(cursor, untilMs);
+
+  return { covered: downtimeMs <= gapToleranceMs, downtimeMs };
+}
+
 export function scanCollectedWhatsApp({ config, store, sinceMs, untilMs = Date.now(), collector, onDiagnostic = () => {}, onStage = () => {} }) {
   const whatsapp = config.sources.whatsapp;
   const verification = new Map(latestGroupVerification(collector).map((group) => [group.name, group]));
-  const connectedForWindow = collector?.status === 'connected' && Number(collector.connected_at || 0) <= sinceMs;
+  const gapToleranceMs = Number(whatsapp.collector?.gapToleranceMs) || DEFAULT_COLLECTOR_GAP_TOLERANCE_MS;
+  const { covered: connectedForWindow, downtimeMs } = computeCollectorCoverage({ collector, sinceMs, untilMs, gapToleranceMs });
   const coverage = connectedForWindow
-    ? { status: 'complete', reason: null, requestedFrom: sinceMs, newestAt: untilMs, delivered: 0, source: 'collector' }
-    : { status: 'partial', reason: 'collector_gap', requestedFrom: sinceMs, newestAt: collector?.last_message_at || null, delivered: 0, source: 'collector' };
+    ? { status: 'complete', reason: null, requestedFrom: sinceMs, newestAt: untilMs, delivered: 0, source: 'collector', downtimeMs }
+    : { status: 'partial', reason: 'collector_gap', requestedFrom: sinceMs, newestAt: collector?.last_message_at || null, delivered: 0, source: 'collector', downtimeMs };
   const candidates = [];
   const groups = [];
   onStage('collector-inbox');

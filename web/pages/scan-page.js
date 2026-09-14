@@ -107,6 +107,48 @@ function readStateLabel(read) {
   return read.marked ? 'סומן כנקרא' : 'לא סומן כנקרא';
 }
 
+// Three simple states cover what a person actually needs to know at a
+// glance; the rest (coverage/historyStatus/historyReason/gapFrom/read
+// counts/link counts) is real and useful, but only on request — see
+// groupDetailsRow(). "live" and "live-with-gap" both mean the collector is
+// connected and reading right now; a gap from before it connected doesn't
+// change that, so it must not read as a failure.
+const syncPillState = { live: 'complete', 'live-with-gap': 'complete', recovering: 'partial', gap: 'failed', offline: 'failed' };
+const syncLabels = {
+  live: 'קורא עכשיו',
+  'live-with-gap': 'קורא עכשיו',
+  recovering: 'משלים פער…',
+  gap: 'לא מחובר',
+  offline: 'לא מחובר',
+};
+const historyReasonLabels = {
+  missing_anchor: 'אין נקודת התחלה אמינה', anchor_too_old: 'נקודת ההתחלה ישנה מדי',
+  history_no_response: 'WhatsApp לא החזיר את עמוד ההיסטוריה',
+  history_request_timeout: 'בקשת ההיסטוריה חרגה מהזמן',
+  history_no_progress: 'הבקשה לא התקדמה אחורה בזמן',
+  newer_messages_unverified: 'הקצה החדש של הטווח לא אומת',
+  history_batch_limit: 'הגענו למגבלת האצוות', history_deadline: 'הגענו למגבלת הזמן',
+};
+
+function groupDetailsRow(group, index) {
+  const rows = [
+    ['כיסוי הסריקה האחרונה', coverageLabels[group.coverage] || group.coverage || 'לא ידוע'],
+    ['איסוף אחרון', group.lastCollectedAt ? formatTime(group.lastCollectedAt) : 'טרם נאסף מידע'],
+    ['נקרא לאחרונה (WhatsApp)', group.lastReadAt ? formatTime(group.lastReadAt) : 'טרם אומת'],
+    ['הודעות שנקראו סה"כ', Number(group.readTotal || 0)],
+    ['הודעות שנאספו סה"כ', Number(group.collectedTotal || 0)],
+    ['הגיעו בסריקה האחרונה', Number(group.received || 0)],
+    ['קישורים שחולצו', Number(group.links || 0)],
+    ['מתאימות', Number(group.suitable || 0)],
+    ['נכשלו', Number(group.failed || 0)],
+  ];
+  if (group.gapFrom) rows.push(['פער היסטוריה פתוח מ-', formatTime(group.gapFrom)]);
+  if (group.historyReason) rows.push(['סיבת הפער', historyReasonLabels[group.historyReason] || group.historyReason]);
+  return `<tr class="group-details-row" data-group-details="${index}" hidden><td colspan="5">
+    <dl class="group-details-grid">${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join('')}</dl>
+  </td></tr>`;
+}
+
 function renderWhatsAppHistory(history) {
   const backlog = history?.backlog || { total: 0, recentTotal: 0, failed: 0, groups: [] };
   backlogState = {
@@ -118,41 +160,37 @@ function renderWhatsAppHistory(history) {
     ? `${Number(backlog.total || 0)} הודעות חדשות נאספו בשבעת הימים האחרונים ומוכנות לחילוץ קישורים.`
     : 'אין הודעות חדשות שממתינות לעיבוד. אפשר להשלים פערים; הבקשה תמתין אם ה-Collector אינו מחובר.';
   elements.processRecentBacklog.textContent = `עבד הודעות שנאספו (${Number(backlog.total || 0)})`;
-  const syncLabels = {
-    live: 'קליטה חיה',
-    'live-with-gap': 'קליטה חיה · קיים פער',
-    recovering: 'מנסה להשלים פער',
-    gap: 'קיים פער · Collector לא מחובר',
-    offline: 'Collector לא מחובר',
-  };
-  elements.backlogGroups.innerHTML = (backlog.groups || []).map((group) => `<tr>
+  elements.backlogGroups.innerHTML = (backlog.groups || []).map((group, index) => `<tr>
     <td><strong>${escapeHtml(group.name)}</strong></td>
-    <td><span class="coverage-pill" data-state="${group.syncState === 'live' ? 'complete' : group.syncState === 'recovering' ? 'partial' : 'failed'}">${escapeHtml(syncLabels[group.syncState] || 'מצב לא ידוע')}</span>${group.gapFrom ? `<small>פער מ־${escapeHtml(formatTime(group.gapFrom))}</small>` : ''}</td>
-    <td>${group.lastCollectedAt ? escapeHtml(formatTime(group.lastCollectedAt)) : 'טרם נאסף מידע'}</td>
-    <td>${group.lastReadAt ? escapeHtml(formatTime(group.lastReadAt)) : 'טרם אומת'}</td>
-    <td>${Number(group.received || 0)}</td><td>${Number(group.links || 0)}</td>
-    <td>${Number(group.suitable || 0)}</td><td>${Number(group.failed || 0)}</td><td>${Number(group.total || 0)}</td>
-  </tr>`).join('') || '<tr><td colspan="9">אין קבוצות מוגדרות</td></tr>';
+    <td><span class="coverage-pill" data-state="${syncPillState[group.syncState] || 'unknown'}">${escapeHtml(syncLabels[group.syncState] || 'מצב לא ידוע')}</span></td>
+    <td>${Number(group.total || 0)}</td>
+    <td>${group.lastProcessedAt ? escapeHtml(formatTime(group.lastProcessedAt)) : 'טרם עובד'}</td>
+    <td><button type="button" class="link-button" data-group-toggle="${index}">פרטים נוספים</button></td>
+  </tr>${groupDetailsRow(group, index)}`).join('') || '<tr><td colspan="5">אין קבוצות מוגדרות</td></tr>';
 
   const request = history?.request;
   historyRequestRunning = ['pending', 'running'].includes(request?.status);
   syncControls();
   elements.historyRequestStatus.hidden = !request;
   if (!request) return;
-  const statusLabels = { pending: 'ממתין לקולקטור', running: 'מתבצע', complete: 'הושלם', partial: 'הושלם חלקית', failed: 'נכשל' };
-  const reasonLabels = {
-    missing_anchor: 'אין נקודת התחלה אמינה', anchor_too_old: 'נקודת ההתחלה ישנה מדי',
-    history_no_response: 'WhatsApp לא החזיר את עמוד ההיסטוריה',
-    history_request_timeout: 'בקשת ההיסטוריה חרגה מהזמן',
-    history_no_progress: 'הבקשה לא התקדמה אחורה בזמן',
-    newer_messages_unverified: 'הקצה החדש של הטווח לא אומת',
-    history_batch_limit: 'הגענו למגבלת האצוות', history_deadline: 'הגענו למגבלת הזמן',
+  // "נכשל" reads as an app malfunction, but the common case is WhatsApp
+  // itself declining to hand over old history — live collection of new
+  // messages is unaffected either way, so say that explicitly instead of
+  // leaving it to be inferred.
+  const statusLabels = {
+    pending: 'ממתין לקולקטור', running: 'משלים היסטוריה ישנה…', complete: 'הושלמה',
+    partial: 'הושלמה חלקית', failed: 'לא זמינה כרגע',
   };
-  const groupResults = (request.groups || []).map((group) =>
-    `${group.name}: ${Number(group.delivered || 0)} התקבלו, ${Number(group.queued || 0) + Number(group.duplicates || 0)} זמינות מקומית${group.reason ? ` — ${reasonLabels[group.reason] || group.reason}` : ''}`,
-  ).join(' · ');
+  const groups = request.groups || [];
+  const reasons = new Set(groups.map((group) => group.reason).filter(Boolean));
+  const sameReasonForAll = groups.length > 0 && reasons.size === 1 && groups.every((group) => group.reason);
+  const groupResults = sameReasonForAll
+    ? `כל ${groups.length} הקבוצות: ${historyReasonLabels[[...reasons][0]] || [...reasons][0]}. זה לא משפיע על קליטת הודעות חדשות — היא ממשיכה כרגיל.`
+    : groups.map((group) =>
+      `${group.name}: ${Number(group.delivered || 0)} התקבלו, ${Number(group.queued || 0) + Number(group.duplicates || 0)} זמינות מקומית${group.reason ? ` — ${historyReasonLabels[group.reason] || group.reason}` : ''}`,
+    ).join(' · ');
   elements.historyRequestStatus.dataset.state = request.status;
-  elements.historyRequestStatus.innerHTML = `<strong>${escapeHtml(statusLabels[request.status] || request.status)}</strong>
+  elements.historyRequestStatus.innerHTML = `<strong>השלמת היסטוריה ישנה: ${escapeHtml(statusLabels[request.status] || request.status)}</strong>
     <span>${Number(request.groupsCompleted || 0)}/${Number(request.groupsTotal || 0)} קבוצות · ${Number(request.messagesReceived || 0)} הודעות התקבלו · ${Number(request.messagesQueued || 0) + Number(request.duplicates || 0)} זמינות מקומית</span>
     ${groupResults ? `<small>${escapeHtml(groupResults)}</small>` : ''}`;
 }
@@ -272,6 +310,12 @@ elements.retryFailed.addEventListener('click', () => runAction('retry-failed'));
 elements.markRead.addEventListener('click', () => runAction('mark-read'));
 elements.openJobs.addEventListener('click', () => runAction('open-jobs'));
 elements.processRecentBacklog.addEventListener('click', () => runAction('process-backlog', { days: 7 }));
+elements.backlogGroups.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-group-toggle]');
+  if (!toggle) return;
+  const row = elements.backlogGroups.querySelector(`[data-group-details="${toggle.dataset.groupToggle}"]`);
+  if (row) row.hidden = !row.hidden;
+});
 elements.requestHistory.addEventListener('click', async () => {
   try {
     await postJson('/api/whatsapp/history', {});
