@@ -357,7 +357,15 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     const diagnostic = describeFailure({ code, message: reason }, fallback);
     const outcome = {
       status: 'failed',
-      code: String(code || 'unknown_failure').slice(0, 64),
+      // Scoring failures start out generically labeled ('scoring_failed') by
+      // score-job.mjs, since the raw Codex error text isn't safe to persist
+      // as-is — describeFailure's own classification (codex_usage_limit,
+      // timeout, network_error, ...) is strictly more specific there, so use
+      // it. Page-fetch failures already carry a specific liveness code
+      // (access_blocked, no_apply_control, ...); describeFailure's generic
+      // HTTP-status fallback can only make those coarser, so keep the raw
+      // code for everything else.
+      code: code === 'scoring_failed' ? diagnostic.code : String(code || 'unknown_failure').slice(0, 64),
       reason: diagnostic.reason,
     };
     outcomes.set(candidate.jobKey, outcome);

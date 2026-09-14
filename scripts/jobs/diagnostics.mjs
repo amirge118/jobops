@@ -9,6 +9,7 @@ const reasons = {
   http_error: ['האתר החזיר קוד HTTP של שגיאה.', 'בדוק את קוד התשובה ופתח ידנית את הקישור המקורי; אין להסיק שהמשרה לא מתאימה.'],
   browser_error: ['הדפדפן האוטומטי לא הצליח לפתוח או לקרוא את העמוד.', 'פתח את הקישור ידנית ובדוק אם נדרשת התחברות או שהאתר חוסם אוטומציה.'],
   scoring_failed: ['עיבוד ההתאמה לא הושלם או החזיר תשובה לא תקינה.', 'בדוק את התחברות Codex ונסה שוב דרך ניסיון חוזר לקישורים שנכשלו.'],
+  codex_usage_limit: ['הגעת למכסת השימוש הזמנית ב-Codex/ChatGPT.', 'המתן לזמן האיפוס שמופיע בהודעת המכסה ונסה שוב; המשרות שנכשלו ינוסו שוב אוטומטית בסריקה הבאה, אין צורך בפעולה ידנית.'],
   page_uncertain: ['לא התקבל תוכן מספיק כדי לאמת את עמוד המשרה.', 'פתח את הקישור ידנית; המשרה לא סומנה כלא מתאימה בגלל כשל הקריאה.'],
   collection_failed: ['איסוף הנתונים מהמקור לא הושלם.', 'בדוק את המקור או הקבוצה המצוינים באירוע ונסה שוב.'],
   invalid_link: ['נמצא קישור שאינו כתובת תקינה לעיבוד.', 'בדוק את כתובת המשרה במקור; הכשל אינו החלטת התאמה.'],
@@ -50,7 +51,8 @@ export function describeFailure(error, fallback = 'unknown_failure') {
   else if (/connection replaced|status\s*440/i.test(message)) code = 'connection_replaced';
   else if (/pairing required|scan.+qr|logged.?out/i.test(message)) code = 'pairing_required';
   else if (/ERR_INVALID_URL|invalid url/i.test(message)) code = 'invalid_link';
-  else if (httpStatus === 429 || /rate.limit|quota|usage limit/i.test(message)) code = 'rate_limited';
+  else if (/usage limit|purchase more credits|hit your usage/i.test(message)) code = 'codex_usage_limit';
+  else if (httpStatus === 429 || /rate.limit|quota/i.test(message)) code = 'rate_limited';
   else if (httpStatus === 401 || /unauthori[sz]ed|logged.out|not authenticated|authentication required/i.test(message)) code = 'authentication_required';
   else if (/timeout|timed out|AbortError|ETIMEDOUT/i.test(message)) code = 'timeout';
   else if (/ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|connection closed/i.test(message)) code = 'network_error';

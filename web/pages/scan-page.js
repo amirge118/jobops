@@ -39,6 +39,8 @@ const coverageLabels = { complete: 'מלא', partial: 'חלקי', unknown: 'לא
 const failureLabels = {
   page_fetch_failed: 'פתיחת קישור', page_uncertain: 'עמוד לא ניתן לאימות',
   browser_error: 'דפדפן אוטומטי', fetch_error: 'רשת', scoring_failed: 'מנגנון התאמה',
+  codex_usage_limit: 'מכסת Codex', rate_limited: 'הגבלת קצב', timeout: 'תם הזמן',
+  network_error: 'רשת', http_error: 'שגיאת HTTP', authentication_required: 'נדרשת התחברות',
   unknown_failure: 'לא ידוע',
 };
 
@@ -171,8 +173,15 @@ function renderWhatsAppHistory(history) {
   const request = history?.request;
   historyRequestRunning = ['pending', 'running'].includes(request?.status);
   syncControls();
-  elements.historyRequestStatus.hidden = !request;
-  if (!request) return;
+  // This reflects the *last time anyone explicitly asked* for old history
+  // (the "השלם פערים" button below, or the equivalent API) — never something
+  // a regular scan retries on its own. A finished (non-running) request from
+  // hours ago is stale, not current status, and showing it without an age
+  // reads as "this is happening right now" when it may be from yesterday.
+  const requestIsLive = request && ['pending', 'running'].includes(request.status);
+  const requestIsRecent = request && Date.now() - Number(request.finishedAt || request.createdAt || 0) < 3 * 60 * 60 * 1_000;
+  elements.historyRequestStatus.hidden = !request || !(requestIsLive || requestIsRecent);
+  if (!request || !(requestIsLive || requestIsRecent)) return;
   // "נכשל" reads as an app malfunction, but the common case is WhatsApp
   // itself declining to hand over old history — live collection of new
   // messages is unaffected either way, so say that explicitly instead of
@@ -191,7 +200,7 @@ function renderWhatsAppHistory(history) {
     ).join(' · ');
   elements.historyRequestStatus.dataset.state = request.status;
   elements.historyRequestStatus.innerHTML = `<strong>השלמת היסטוריה ישנה: ${escapeHtml(statusLabels[request.status] || request.status)}</strong>
-    <span>${Number(request.groupsCompleted || 0)}/${Number(request.groupsTotal || 0)} קבוצות · ${Number(request.messagesReceived || 0)} הודעות התקבלו · ${Number(request.messagesQueued || 0) + Number(request.duplicates || 0)} זמינות מקומית</span>
+    <span>${requestIsLive ? 'התחילה' : 'בוצעה'} ${escapeHtml(formatTime(request.createdAt))} · ${Number(request.groupsCompleted || 0)}/${Number(request.groupsTotal || 0)} קבוצות · ${Number(request.messagesReceived || 0)} הודעות התקבלו · ${Number(request.messagesQueued || 0) + Number(request.duplicates || 0)} זמינות מקומית</span>
     ${groupResults ? `<small>${escapeHtml(groupResults)}</small>` : ''}`;
 }
 

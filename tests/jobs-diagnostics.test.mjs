@@ -19,7 +19,8 @@ function temporary(context) {
 
 test('diagnostics classify errors without saving secrets, raw stacks or URL parameters', () => {
   for (const [message, code] of [['EPERM token=secret-value', 'permission_denied'], ['HTTP 403 secret-value', 'http_error'],
-    ['ETIMEDOUT secret-value', 'timeout'], ['HTTP 429 secret-value', 'rate_limited'], ['ENOENT secret-value', 'unknown_failure']]) {
+    ['ETIMEDOUT secret-value', 'timeout'], ['HTTP 429 secret-value', 'rate_limited'], ['ENOENT secret-value', 'unknown_failure'],
+    ["ERROR: You've hit your usage limit. Upgrade to Pro, purchase more credits or try again at 12:29 PM.", 'codex_usage_limit']]) {
     const error = new Error(message);
     error.stack = 'at /private/project/scripts/jobs.mjs:12:4\nsecret-value';
     const diagnostic = describeFailure(error);
@@ -131,6 +132,41 @@ test('evaluateCandidates reports page-content length distribution ahead of scori
   assert.equal(stats.medianChars, 5_000);
   assert.equal(stats.capChars, 8_000);
   assert.equal(stats.atOrOverCapCount, 1);
+});
+
+test('a scoring failure is stored with its specific reason, while a page-fetch failure keeps its own specific code', async (context) => {
+  const store = createJobStore(temporary(context));
+  context.after(() => store.close());
+  const scoringCandidate = { ...store.recordSighting({ url: 'https://example.com/jobs/scored', source: 'ATS: Example' }), url: 'https://example.com/jobs/scored' };
+  const blockedCandidate = { ...store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ATS: Example' }), url: 'https://example.com/jobs/blocked' };
+
+  await evaluateCandidates({
+    candidates: [scoringCandidate, blockedCandidate], config: { decision: { criteriaVersion: 'v1' } }, store,
+    fetcher: {
+      fetch: async (url) => url.endsWith('/blocked')
+        ? { status: 'uncertain', code: 'access_blocked', reason: 'HTTP 403 (access blocked, likely anti-bot)', contentHash: 'h' }
+        : { status: 'active', finalUrl: url, content: 'Backend role.', contentHash: 'h' },
+    },
+    scorer: {
+      profileHash: 'p',
+      scoreBatchSettled: async (items, { onProgress }) => {
+        onProgress({
+          completed: 1, total: 1, failed: 1, results: [],
+          failures: [{ jobKey: items[0].candidate.jobKey, code: 'scoring_failed', reason: "ERROR: You've hit your usage limit. purchase more credits" }],
+        });
+      },
+    },
+  });
+
+  // scoring_failed only ever meant "something went wrong in a batch call" —
+  // describeFailure's own classification is strictly more specific and is
+  // now what gets persisted, so a repeat failure is diagnosable without
+  // guessing or re-running a live probe.
+  assert.equal(store.getJob(scoringCandidate.jobKey).last_error_code, 'codex_usage_limit');
+  // access_blocked is already specific; describeFailure's generic
+  // HTTP-status fallback ("http_error") would only make it coarser, so it
+  // must be left untouched.
+  assert.equal(store.getJob(blockedCandidate.jobKey).last_error_code, 'access_blocked');
 });
 
 test('failed evaluation keeps retry identity and reports the actual processing stage', async (context) => {

@@ -152,7 +152,15 @@ function safeFailureReason(error) {
     .replace(/([?&](?:token|key|code|session|auth)=)[^&\s]+/gi, '$1[redacted]')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 240);
+    // Keep the END of the message, not the start: runCodexExec's error is
+    // "codex exec exited with code N: <last 1200 chars of stderr>", and
+    // codex's own CLI convention is to echo the whole session transcript
+    // (banner, then the full prompt) before printing the actual failure —
+    // e.g. "ERROR: You've hit your usage limit...". For a real scoring
+    // batch the echoed prompt alone is thousands of characters, so slicing
+    // from the front discarded the one part that actually explains the
+    // failure and left every scoring failure looking identically generic.
+    .slice(-240);
 }
 
 function finalizeResult(config, item, extracted) {

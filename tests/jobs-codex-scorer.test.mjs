@@ -115,6 +115,27 @@ test('Codex scorer rejects an incomplete batch response', async () => {
   );
 });
 
+test('a failure reason keeps the actual error even behind a long echoed prompt', async () => {
+  // Mirrors codex exec's own real shape: it echoes the whole session
+  // transcript (banner, then the full user prompt) to stderr before the
+  // actual failure line — for a real scoring batch that echoed prompt alone
+  // is thousands of characters, all ahead of the one line that explains
+  // what happened.
+  const longEchoedPrompt = 'user\n' + 'Candidate profile: '.repeat(500);
+  const realError = "ERROR: You've hit your usage limit. Upgrade to Pro, purchase more credits or try again at 12:29 PM.";
+  const scorer = createJobScorer(config(), {
+    candidateContext: context,
+    runCodex: async () => { throw new Error(`codex exec exited with code 1: ${longEchoedPrompt}\n${realError}`); },
+  });
+
+  const settled = await scorer.scoreBatchSettled([{
+    candidate: { jobKey: 'job-1', source: 'ATS' },
+    page: { finalUrl: 'https://example.com/1', status: 'active', content: 'Backend role.' },
+  }]);
+
+  assert.match(settled.failures[0].reason, /usage limit/);
+});
+
 test('Codex scorer isolates one failed batch and keeps successful batch results', async () => {
   let call = 0;
   const progress = [];
