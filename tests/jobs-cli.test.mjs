@@ -149,9 +149,9 @@ test('link processing is summarized independently for ATS and each WhatsApp grou
   const processing = summarizeProcessingResults(candidates, outcomes);
 
   assert.deepEqual(processing.scopes, [
-    { source: 'ats', name: 'ATS', links: 1, processed: 1, suitable: 1, notSuitable: 0, failed: 0, alreadyProcessed: 0, failureReasons: {} },
-    { source: 'whatsapp', name: 'Group A', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 1, alreadyProcessed: 0, failureReasons: { page_uncertain: 1 } },
-    { source: 'whatsapp', name: 'Group B', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 0, alreadyProcessed: 1, failureReasons: {} },
+    { source: 'ats', name: 'ATS', links: 1, processed: 1, suitable: 1, notSuitable: 0, failed: 0, alreadyProcessed: 0, filtered: 0, failureReasons: {} },
+    { source: 'whatsapp', name: 'Group A', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 1, alreadyProcessed: 0, filtered: 0, failureReasons: { page_uncertain: 1 } },
+    { source: 'whatsapp', name: 'Group B', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 0, alreadyProcessed: 1, filtered: 0, failureReasons: {} },
   ]);
   assert.deepEqual(processing.totals, {
     links: 5,
@@ -160,6 +160,7 @@ test('link processing is summarized independently for ATS and each WhatsApp grou
     notSuitable: 2,
     failed: 1,
     alreadyProcessed: 1,
+    filtered: 0,
     failureReasons: { page_uncertain: 1 },
   });
   assert.equal(completionStatusFor({ processing }), 'incomplete');

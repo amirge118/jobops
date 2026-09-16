@@ -37,7 +37,7 @@ function renderJobs() {
     <td><a class="job-link" href="${escapeHtml(job.applyUrl)}" target="_blank" rel="noreferrer">פתח משרה ↗</a></td>
     <td><div class="job-actions">
       <button class="open-archive-job" type="button" data-job-key="${escapeHtml(job.jobKey)}">פתח והעבר לארכיון</button>
-      <button class="resolve-job-company" type="button" data-job-key="${escapeHtml(job.jobKey)}">בדוק חברה למעקב</button>
+      <button class="resolve-job-company" type="button" data-job-key="${escapeHtml(job.jobKey)}">העבר חברה למועמדות</button>
       <button class="archive-job" type="button" data-job-key="${escapeHtml(job.jobKey)}">רק להעביר לארכיון</button>
     </div></td>
   </tr>`).join('');
@@ -82,7 +82,7 @@ elements.body.addEventListener('click', async (event) => {
   try {
     if (button.classList.contains('resolve-job-company')) {
       await postJson('/api/companies/resolve', { jobKey: button.dataset.jobKey });
-      elements.feedback.innerHTML = 'החברה נשמרה לבדיקה. <a href="/companies">עבור לעמוד החברות כדי לאשר אותה למעקב.</a>';
+      elements.feedback.innerHTML = 'החברה הועברה למועמדות. <a href="/companies">עבור לעמוד החברות (סינון "ממתינות") כדי לאשר אותה למעקב.</a>';
       return;
     }
     if (button.classList.contains('open-archive-job')) {

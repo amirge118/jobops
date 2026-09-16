@@ -67,6 +67,44 @@ test('company API resolves a suitable job as candidate and watches only after ap
   assert.equal(list.stats.paused, 1);
 });
 
+test('resolving a job for an already-ignored or paused company moves it back to candidate', async (context) => {
+  const { config, baseUrl } = await startCompanyApi(context);
+  const store = createJobStore(config.jobsDbPath);
+  const sighting = store.recordSighting({
+    url: 'https://short.example/jobs/99', company: 'Example', title: 'Backend Engineer', source: 'WhatsApp: Jobs',
+  });
+  store.saveEvaluation(sighting.jobKey, {
+    company: 'Example', title: 'Backend Engineer', summary: 'Backend.', score: 4.5,
+    fitLabel: 'בול מתאים', decisionReason: 'Relevant.', suitable: true,
+    applyUrl: 'https://jobs.lever.co/example/role-id', activeStatus: 'active',
+    contentHash: 'content', profileHash: 'profile', criteriaVersion: 'v1', evaluatedAt: Date.now(),
+  });
+  store.close();
+
+  const first = await (await postJson(`${baseUrl}/api/companies/resolve`, { jobKey: sighting.jobKey })).json();
+  assert.equal(first.candidate.status, 'candidate');
+
+  // The person decided this company isn't relevant right now.
+  await postJson(`${baseUrl}/api/companies/${first.candidate.id}/status`, { status: 'ignored' });
+  let list = await fetch(`${baseUrl}/api/companies`).then((response) => response.json());
+  assert.equal(list.stats.ignored, 1);
+
+  // A new suitable job from the same company shows up; resolving it from
+  // the Decisions page must bring the company back into 'candidate', not
+  // leave it stuck under 'ignored' where it would never be reconsidered.
+  const second = await (await postJson(`${baseUrl}/api/companies/resolve`, { jobKey: sighting.jobKey })).json();
+  assert.equal(second.candidate.id, first.candidate.id);
+  assert.equal(second.candidate.status, 'candidate');
+  list = await fetch(`${baseUrl}/api/companies`).then((response) => response.json());
+  assert.equal(list.stats.candidate, 1);
+  assert.equal(list.stats.ignored, 0);
+
+  // A company already being tracked is left alone — nothing to "move".
+  await postJson(`${baseUrl}/api/companies/${first.candidate.id}/watch`);
+  const third = await (await postJson(`${baseUrl}/api/companies/resolve`, { jobKey: sighting.jobKey })).json();
+  assert.equal(third.candidate.status, 'watched');
+});
+
 test('company API researches a name but still requires explicit watch approval', async (context) => {
   const researchCompany = async (name) => ({
     candidate: {

@@ -123,6 +123,58 @@ test('dashboard exposes WhatsApp backlog and queues one durable history request'
   assert.equal(simpleCrossOriginShape.status, 415);
 });
 
+test('dashboard exposes rolling 36h/7d group stats and ATS-vs-WhatsApp source performance', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-insights-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'data', 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [] } },
+  };
+  const store = createJobStore(config.jobsDbPath);
+  const now = Date.now();
+  const seedRun = (finishedAt, details) => {
+    const runId = store.startRun({ fromTs: finishedAt - 1_000, toTs: finishedAt, sources: ['ats', 'whatsapp'], startedAt: finishedAt - 1_000 });
+    store.finishRun(runId, { status: 'success', details, finishedAt });
+  };
+  // Inside both windows.
+  seedRun(now - 60 * 60 * 1_000, {
+    whatsapp: { groups: [{ name: 'Group A', coverage: { delivered: 5 } }] },
+    processing: { scopes: [
+      { source: 'whatsapp', name: 'Group A', processed: 2, suitable: 1, notSuitable: 1, filtered: 2, failed: 0 },
+      { source: 'ats', name: 'ATS', processed: 4, suitable: 1, notSuitable: 3, filtered: 0, failed: 0 },
+    ] },
+  });
+  // Inside the 7-day window only.
+  seedRun(now - 3 * 24 * 60 * 60 * 1_000, {
+    whatsapp: { groups: [{ name: 'Group A', coverage: { delivered: 3 } }] },
+    processing: { scopes: [{ source: 'whatsapp', name: 'Group A', processed: 1, suitable: 0, notSuitable: 1, filtered: 0, failed: 0 }] },
+  });
+  // Older than both windows — must not be counted anywhere.
+  seedRun(now - 10 * 24 * 60 * 60 * 1_000, {
+    whatsapp: { groups: [{ name: 'Group A', coverage: { delivered: 100 } }] },
+    processing: { scopes: [{ source: 'whatsapp', name: 'Group A', processed: 100, suitable: 100, notSuitable: 0, filtered: 0, failed: 0 }] },
+  });
+  store.close();
+  const server = createDashboardServer({ config, readiness: readyService });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  const short = scan.insights.windows['36h'];
+  assert.equal(short.runsCounted, 1);
+  assert.deepEqual(short.groups, [{ name: 'Group A', received: 5, processed: 2, suitable: 1, notSuitable: 1, filtered: 2, failed: 0, runs: 1 }]);
+  assert.equal(short.sourcePerformance.ats.costPerSuitable, 4);
+  assert.equal(short.sourcePerformance.whatsapp.costPerSuitable, 2);
+
+  const week = scan.insights.windows['7d'];
+  assert.equal(week.runsCounted, 2);
+  assert.deepEqual(week.groups, [{ name: 'Group A', received: 8, processed: 3, suitable: 1, notSuitable: 2, filtered: 2, failed: 0, runs: 2 }]);
+});
+
 test('dashboard command output redacts cryptographic buffers and session identifiers', () => {
   const output = sanitizeCommandOutput(
     "Closing session: { privateKey: <Buffer aa bb cc>, 'AbCdEfGhIjKlMnOpQrStUv==': { chainKey: {} } }",
@@ -222,6 +274,46 @@ test('dashboard API archives one known job and rejects unknown job keys', async 
 
   const missingResponse = await fetch(`${baseUrl}/api/jobs/aaaaaaaaaaaaaaaaaaaaaaaa/archive`, { method: 'POST' });
   assert.equal(missingResponse.status, 404);
+});
+
+test('dashboard reports a failure breakdown with retryable flags and can bulk-archive the unretryable ones', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-failures-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'data', 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [] } },
+  };
+  const store = createJobStore(config.jobsDbPath);
+  const blocked = store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ats' });
+  const timedOut = store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ats' });
+  store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.' });
+  store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.' });
+  store.close();
+
+  const server = createDashboardServer({ config });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  assert.deepEqual(scan.failures.breakdown, [
+    { code: 'bot_challenge', count: 1, retryable: false },
+    { code: 'timeout', count: 1, retryable: true },
+  ]);
+  assert.equal(scan.failures.retryableTotal, 1);
+  assert.equal(scan.failures.nonRetryableTotal, 1);
+
+  const archivedResponse = await fetch(`${baseUrl}/api/jobs/archive-failed`, { method: 'POST' });
+  assert.equal(archivedResponse.status, 200);
+  const archived = await archivedResponse.json();
+  assert.equal(archived.archived, 1);
+
+  const after = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  assert.deepEqual(after.failures.breakdown, [{ code: 'timeout', count: 1, retryable: true }]);
+  assert.equal(after.failures.nonRetryableTotal, 0);
 });
 
 test('dashboard serves three real pages and focused page APIs', async (context) => {

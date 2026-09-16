@@ -22,7 +22,6 @@
             <button class="button button-primary" type="submit">הפעל סריקה</button>
           </form>
           <div class="secondary-actions">
-            <button id="retry-failed" class="button button-secondary" type="button">נסה שוב קישורים שנכשלו</button>
             <button id="verify-groups" class="button button-secondary" type="button">אמת קבוצות WhatsApp</button>
             <button id="mark-read" class="button button-secondary" type="button">סמן קבוצות כנקראו</button>
             <button id="open-jobs" class="button button-secondary" type="button">פתח התאמות חדשות ב-Chrome</button>
@@ -53,6 +52,12 @@
           <div class="history-groups-wrap"><table class="history-groups"><thead><tr><th>קבוצה</th><th>קורא עכשיו?</th><th>ממתין לעיבוד</th><th>עובד לאחרונה</th><th></th></tr></thead><tbody id="history-groups-body"></tbody></table></div>
         </section>
 
+        <section id="source-performance-panel" class="source-performance-panel" aria-labelledby="source-performance-title">
+          <div class="section-heading"><div><p class="step">עלות מול תפוקה</p><h2 id="source-performance-title">ATS מול WhatsApp — עלות לכל משרה מתאימה</h2></div></div>
+          <p class="history-summary">משווה כמה משרות כל מקור שלח לניקוד מול כמה יצאו מתאימות, לאורך זמן — לא רק בריצה האחרונה. משרות שסוננו מקומית לפני ניקוד לא נכללות (הן לא עולות טוקנים).</p>
+          <div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>מקור</th><th>עובדו (36 שעות)</th><th>מתאימות (36 שעות)</th><th>עלות לכל התאמה (36 שעות)</th><th>עובדו (שבוע)</th><th>מתאימות (שבוע)</th><th>עלות לכל התאמה (שבוע)</th></tr></thead><tbody id="source-performance-body"></tbody></table></div>
+        </section>
+
         <section id="readiness-panel" class="readiness-panel" aria-labelledby="readiness-title">
           <div class="health-heading"><div><p class="step">לפני שמתחילים</p><h2 id="readiness-title">האם המערכת מוכנה לסריקה?</h2></div><button id="refresh-readiness" class="button button-secondary" type="button">בדוק שוב</button></div>
           <p id="readiness-summary" class="readiness-summary">בודק את סביבת ההפעלה…</p>
@@ -66,18 +71,21 @@
         <section id="scan-result-panel" class="scan-result-panel" data-state="empty" aria-labelledby="result-title">
           <div class="result-heading"><div><p class="step">סריקה אחרונה</p><h2 id="result-title">עדיין לא בוצעה סריקה</h2></div><span id="result-time"></span></div>
           <p id="result-summary" class="result-summary">לאחר סריקה תוצג כאן תשובה קצרה וברורה.</p>
+          <div id="failure-overview" class="failure-overview" hidden>
+            <div class="failure-overview-actions">
+              <button id="retry-failed" class="button button-secondary" type="button">נסה שוב כשלים ניתנים לתיקון</button>
+              <button id="archive-failed" class="button button-secondary" type="button">רוקן כשלים שלא ניתן לתקן</button>
+            </div>
+            <div class="audit-table-wrap"><table class="failure-table"><thead><tr><th>סוג כשל</th><th>כמות</th><th>ניתן לתיקון?</th></tr></thead><tbody id="failure-breakdown-body"></tbody></table></div>
+          </div>
           <div id="diagnosis-issues" class="diagnosis-issues" hidden></div>
           <details id="source-details" class="source-details">
             <summary>פירוט לפי מקור וקבוצה</summary>
             <div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>מקור / קבוצה</th><th>כיסוי</th><th>הודעות / משרות</th><th>קישורים</th><th>תוצאת עיבוד</th><th>מצב</th></tr></thead><tbody id="run-audit-body"></tbody></table><div id="run-audit-empty" class="empty-state audit-empty"><strong>אין נתוני מקור</strong></div></div>
           </details>
-          <details id="technical-details" class="technical-details">
-            <summary>פרטים לתמיכה</summary>
-            <code id="technical-summary" dir="ltr">No scan yet</code>
-          </details>
         </section>
 
-        <section id="activity-card" class="activity-card" hidden aria-live="polite"><div><span id="activity-kicker" class="step">פעילות אחרונה</span><strong id="activity-title"></strong></div><span id="activity-time"></span><details id="activity-details"><summary>פלט הפעולה</summary><pre id="activity-output"></pre></details></section>
+        <section id="activity-card" class="activity-card" hidden aria-live="polite"><div><span id="activity-kicker" class="step">פעילות אחרונה</span><strong id="activity-title"></strong></div><span id="activity-time"></span></section>
       </main>
       <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
     </div>

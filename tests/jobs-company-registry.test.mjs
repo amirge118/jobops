@@ -228,12 +228,15 @@ test('store migration adds Comeet and official HTML to an existing company sourc
   store.close();
 });
 
-test('configured official HTML upgrade activates an auto-paused unsupported company', () => {
+test('configured official HTML upgrade activates an auto-candidate unsupported company', () => {
   const store = newStore();
   store.importConfiguredCompanies([{
     name: 'Appcharge', careers_url: 'https://www.appcharge.com/careers', enabled: false,
   }], 100);
-  assert.equal(store.listCompanies()[0].status, 'paused');
+  // An unresolved source is the scanner's problem, not the user's choice —
+  // it must land in 'candidate' (awaiting a working source), never 'paused'
+  // (reserved for a deliberate "השהה" by the user).
+  assert.equal(store.listCompanies()[0].status, 'candidate');
 
   store.importConfiguredCompanies([{
     name: 'Appcharge', careers_url: 'https://www.appcharge.com/careers',
@@ -244,6 +247,36 @@ test('configured official HTML upgrade activates an auto-paused unsupported comp
   assert.equal(company.status, 'watched');
   assert.equal(company.resolutionStatus, 'resolved');
   assert.deepEqual(company.sources.map((source) => source.provider), ['official-html']);
+  store.close();
+});
+
+test('reclassifyAutoPausedCompanies moves only the auto-paused-while-unsupported rows to candidate', () => {
+  const store = newStore();
+  // Pre-fix data shape: a configured company stuck at 'paused' purely
+  // because its source was never resolvable — nothing the user chose.
+  store.importConfiguredCompanies([{
+    name: 'Appcharge', careers_url: 'https://www.appcharge.com/careers', enabled: false,
+  }], 100);
+  store.setCompanyStatus(store.listCompanies()[0].id, 'paused', 150);
+  assert.equal(store.listCompanies()[0].status, 'paused');
+
+  // A company the user genuinely, deliberately paused (any other discovery
+  // source) must be left exactly where it is.
+  const manual = store.upsertCompanyCandidate(resolveCompanyCandidate({
+    company: 'Deliberately Paused Co', jobUrl: 'https://jobs.lever.co/deliberate/role-id',
+    discoverySource: 'manual',
+  }), 200);
+  store.setCompanyStatus(manual.company.id, 'paused', 250);
+
+  const result = store.reclassifyAutoPausedCompanies(300);
+  assert.deepEqual(result.reclassified, ['Appcharge']);
+
+  const byName = Object.fromEntries(store.listCompanies().map((company) => [company.name, company.status]));
+  assert.equal(byName.Appcharge, 'candidate');
+  assert.equal(byName['Deliberately Paused Co'], 'paused');
+
+  // Idempotent: nothing left to fix on a second run.
+  assert.deepEqual(store.reclassifyAutoPausedCompanies(400).reclassified, []);
   store.close();
 });
 
@@ -389,14 +422,20 @@ test('configured company import is additive, idempotent, and preserves user stat
   const store = newStore();
   const entries = [
     { name: 'Enabled Co', careers_url: 'https://jobs.lever.co/enabled', enabled: true },
-    { name: 'Paused Co', careers_url: 'https://jobs.ashbyhq.com/paused', enabled: false },
+    // portals.yml has no way to express "the user deliberately doesn't want
+    // this company tracked" — enabled: false here only ever means "not
+    // scannable/curated yet" (the state we set while a source is stuck), so
+    // import must land it in 'candidate', never 'paused'. Deliberate pausing
+    // is exclusively a dashboard action (setCompanyStatus via the "השהה"
+    // button), which importConfiguredCompanies never touches.
+    { name: 'Not Yet Enabled Co', careers_url: 'https://jobs.ashbyhq.com/not-yet-enabled', enabled: false },
   ];
 
   assert.deepEqual(store.importConfiguredCompanies(entries, 100), { imported: 2, skipped: 0 });
   const enabled = store.listCompanies().find((company) => company.name === 'Enabled Co');
-  const paused = store.listCompanies().find((company) => company.name === 'Paused Co');
+  const notYetEnabled = store.listCompanies().find((company) => company.name === 'Not Yet Enabled Co');
   assert.equal(enabled.status, 'watched');
-  assert.equal(paused.status, 'paused');
+  assert.equal(notYetEnabled.status, 'candidate');
 
   store.setCompanyStatus(enabled.id, 'ignored', 200);
   assert.deepEqual(store.importConfiguredCompanies(entries, 300), { imported: 2, skipped: 0 });

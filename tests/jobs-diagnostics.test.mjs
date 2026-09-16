@@ -108,32 +108,6 @@ test('detail history always includes the final failure after more than 500 event
   assert.equal(run.eventCount, 511);
 });
 
-test('evaluateCandidates reports page-content length distribution ahead of scoring', async (context) => {
-  const store = createJobStore(temporary(context));
-  context.after(() => store.close());
-  const lengths = [100, 5_000, 9_000]; // one over the 8,000-char pageText cap
-  const candidates = lengths.map((length, index) => ({
-    ...store.recordSighting({ url: `https://example.com/jobs/${index}`, source: 'ATS: Example' }),
-    url: `https://example.com/jobs/${index}`,
-  }));
-  const pages = new Map(candidates.map((candidate, index) => [candidate.url, 'x'.repeat(lengths[index])]));
-  let stats = null;
-  await evaluateCandidates({
-    candidates, config: { decision: { criteriaVersion: 'v1' } }, store,
-    fetcher: { fetch: async (url) => ({ status: 'active', finalUrl: url, content: pages.get(url), contentHash: url }) },
-    scorer: { profileHash: 'p', scoreBatchSettled: async () => {} },
-    onContentStats: (value) => { stats = value; },
-  });
-
-  assert.equal(stats.count, 3);
-  assert.equal(stats.minChars, 100);
-  assert.equal(stats.maxChars, 9_000);
-  assert.equal(stats.avgChars, Math.round((100 + 5_000 + 9_000) / 3));
-  assert.equal(stats.medianChars, 5_000);
-  assert.equal(stats.capChars, 8_000);
-  assert.equal(stats.atOrOverCapCount, 1);
-});
-
 test('a WhatsApp link with a negative-keyword title is filtered locally, never reaching the scorer — an ATS link with the same text is not', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
@@ -161,7 +135,9 @@ test('a WhatsApp link with a negative-keyword title is filtered locally, never r
   });
 
   assert.equal(scoreCalls, 1, 'only the ATS candidate should reach the scorer');
-  assert.equal(outcomes.get(whatsappCandidate.jobKey).status, 'not-suitable');
+  // A distinct 'filtered' outcome (not 'not-suitable') so per-source cost
+  // aggregation can tell "screened for free" apart from "scored by Codex".
+  assert.equal(outcomes.get(whatsappCandidate.jobKey).status, 'filtered');
   const filtered = store.getJob(whatsappCandidate.jobKey);
   assert.equal(filtered.suitable, 0);
   assert.equal(filtered.evaluated_at != null, true, 'must be recorded as resolved, not left pending for retry');
@@ -200,6 +176,46 @@ test('a scoring failure is stored with its specific reason, while a page-fetch f
   // HTTP-status fallback ("http_error") would only make it coarser, so it
   // must be left untouched.
   assert.equal(store.getJob(blockedCandidate.jobKey).last_error_code, 'access_blocked');
+});
+
+test('a page with no recognized apply control still reaches the scorer, while an anti-bot block does not', async (context) => {
+  const store = createJobStore(temporary(context));
+  context.after(() => store.close());
+  const noApplyControl = { ...store.recordSighting({ url: 'https://example.com/jobs/no-apply', source: 'ATS: Example' }), url: 'https://example.com/jobs/no-apply' };
+  const botBlocked = { ...store.recordSighting({ url: 'https://example.com/jobs/bot', source: 'ATS: Example' }), url: 'https://example.com/jobs/bot' };
+  let scoredJobKeys = [];
+
+  await evaluateCandidates({
+    candidates: [noApplyControl, botBlocked], config: { decision: { criteriaVersion: 'v1' } }, store,
+    fetcher: {
+      fetch: async (url) => url.endsWith('/bot')
+        ? { status: 'uncertain', code: 'bot_challenge', reason: 'anti-bot challenge', contentHash: 'h' }
+        : { status: 'uncertain', code: 'no_apply_control', finalUrl: url, content: 'Backend role, no visible apply link.', contentHash: 'h' },
+    },
+    scorer: {
+      profileHash: 'p',
+      scoreBatchSettled: async (items, { onProgress }) => {
+        scoredJobKeys = items.map((item) => item.candidate.jobKey);
+        onProgress({
+          completed: items.length, total: items.length, failed: 0,
+          results: items.map((item) => ({
+            jobKey: item.candidate.jobKey, suitable: true, score: 4.5, fitLabel: 'בול מתאים',
+            summary: 's', decisionReason: 'r', company: 'C', title: 'T',
+            applyUrl: item.candidate.url, activeStatus: item.page.status,
+          })),
+          failures: [],
+        });
+      },
+    },
+  });
+
+  // no_apply_control alone isn't a reason to fail a job unseen anymore —
+  // Codex gets to judge it on content, same as any other active page.
+  assert.deepEqual(scoredJobKeys, [noApplyControl.jobKey]);
+  assert.equal(store.getJob(noApplyControl.jobKey).active_status, 'active');
+  assert.equal(store.getJob(noApplyControl.jobKey).last_error_code, null);
+  // bot_challenge is a real site-level block — still never reaches Codex.
+  assert.equal(store.getJob(botBlocked.jobKey).last_error_code, 'bot_challenge');
 });
 
 test('failed evaluation keeps retry identity and reports the actual processing stage', async (context) => {
