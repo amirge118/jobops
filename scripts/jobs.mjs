@@ -11,11 +11,12 @@ import { createJobPageFetcher } from './jobs/fetch-page.mjs';
 import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
-import { createJobScorer, JOB_PAGE_TEXT_CAP_CHARS } from './jobs/score-job.mjs';
+import { createJobScorer } from './jobs/score-job.mjs';
 import { createJobStore } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
 import { createRunLifecycle, describeFailure, safeTargetUrl } from './jobs/diagnostics.mjs';
+import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
 import { buildNegativeTitleFilter, loadTitleFilterNegative } from './scan.mjs';
 
 export function parseArgs(argv) {
@@ -103,6 +104,7 @@ export function summarizeProcessingResults(candidates, outcomes) {
       notSuitable: 0,
       failed: 0,
       alreadyProcessed: 0,
+      filtered: 0,
       failureReasons: {},
     };
     row.links += 1;
@@ -114,6 +116,11 @@ export function summarizeProcessingResults(candidates, outcomes) {
       row.failureReasons[code] = Number(row.failureReasons[code] || 0) + 1;
     } else if (outcome.status === 'already-processed') {
       row.alreadyProcessed += 1;
+    } else if (outcome.status === 'filtered') {
+      // Screened locally by the negative-keyword filter, before ever
+      // reaching Codex — kept out of `processed` so per-source cost
+      // comparisons only count items that actually cost scoring tokens.
+      row.filtered += 1;
     } else {
       row.processed += 1;
       if (outcome.status === 'suitable') row.suitable += 1;
@@ -124,14 +131,14 @@ export function summarizeProcessingResults(candidates, outcomes) {
 
   const rows = [...scopes.values()];
   const totals = rows.reduce((summary, row) => {
-    for (const field of ['links', 'processed', 'suitable', 'notSuitable', 'failed', 'alreadyProcessed']) {
+    for (const field of ['links', 'processed', 'suitable', 'notSuitable', 'failed', 'alreadyProcessed', 'filtered']) {
       summary[field] += row[field];
     }
     for (const [code, count] of Object.entries(row.failureReasons)) {
       summary.failureReasons[code] = Number(summary.failureReasons[code] || 0) + Number(count);
     }
     return summary;
-  }, { links: 0, processed: 0, suitable: 0, notSuitable: 0, failed: 0, alreadyProcessed: 0, failureReasons: {} });
+  }, { links: 0, processed: 0, suitable: 0, notSuitable: 0, failed: 0, alreadyProcessed: 0, filtered: 0, failureReasons: {} });
 
   return { totals, scopes: rows };
 }
@@ -348,10 +355,9 @@ function reportPaths(reportsDir, generatedAt) {
   };
 }
 
-export async function evaluateCandidates({ candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {}, onContentStats = () => {} }) {
+export async function evaluateCandidates({ candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {} }) {
   const outcomes = new Map();
   const pendingScores = [];
-  const contentLengths = [];
   let processingStage = 'page-fetch';
   let titleFilteredCount = 0;
   // ATS candidates are already screened by portals.yml's title_filter before
@@ -420,6 +426,13 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
       continue;
     }
 
+    if (page.status === 'uncertain' && page.code === 'no_apply_control') {
+      // Content loaded, no recognized apply control — treat as active and
+      // let Codex judge on content merits instead of failing it unseen.
+      // Revisit only if this turns out to hurt scoring quality in practice.
+      page = { ...page, status: 'active' };
+    }
+
     if (page.status !== 'active') {
       if (page.status === 'uncertain') {
         recordFailure(candidate, page.code || 'page_uncertain', page.reason || 'The job page could not be verified.');
@@ -468,35 +481,13 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
         criteriaVersion: config.decision.criteriaVersion,
         evaluatedAt: Date.now(),
       });
-      outcomes.set(candidate.jobKey, { status: 'not-suitable' });
+      outcomes.set(candidate.jobKey, { status: 'filtered' });
       continue;
     }
 
     pendingScores.push({ candidate, page });
-    contentLengths.push(page.content.length);
   }
   if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי מילות מפתח שליליות, לפני שליחה לניקוד.`);
-
-  // Documents, per run, how close real job pages come to the pageText
-  // truncation cap — the biggest single cost component in a scoring batch,
-  // but one that must not be lowered blind (real accuracy risk). This turns
-  // "is 8,000 chars too generous?" from a guess into an answerable question
-  // after a few runs' worth of real data.
-  if (contentLengths.length > 0) {
-    const sorted = [...contentLengths].sort((left, right) => left - right);
-    const sum = sorted.reduce((total, value) => total + value, 0);
-    const percentile = (fraction) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
-    onContentStats({
-      count: sorted.length,
-      minChars: sorted[0],
-      maxChars: sorted[sorted.length - 1],
-      avgChars: Math.round(sum / sorted.length),
-      medianChars: percentile(0.5),
-      p90Chars: percentile(0.9),
-      capChars: JOB_PAGE_TEXT_CAP_CHARS,
-      atOrOverCapCount: contentLengths.filter((length) => length >= JOB_PAGE_TEXT_CAP_CHARS).length,
-    });
-  }
 
   const persistResult = (result) => {
     const item = pendingScores.find(({ candidate }) => candidate.jobKey === result.jobKey);
@@ -628,7 +619,10 @@ export async function runJobs(argv = process.argv.slice(2)) {
     if (options.retryOnly) console.log('ניסיון חוזר: מעבד רק קישורים שנכשלו או טרם קיבלו החלטה; המקורות לא נסרקים מחדש.');
     printSourceSummary(runDetails);
     const candidateSightings = sourceResults.flatMap((result) => result.candidates);
-    const retryCandidates = filterPendingCandidatesForSources(store.listPendingEvaluation(), sources);
+    const retryCandidates = filterPendingCandidatesForSources(
+      store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }),
+      sources,
+    );
     const currentJobKeys = new Set(candidateSightings.map((candidate) => candidate.jobKey));
     const processingCandidates = [
       ...candidateSightings,
@@ -649,13 +643,6 @@ export async function runJobs(argv = process.argv.slice(2)) {
         for (const scope of scopes.values()) store.recordRunEvent(runId, {
           source: scope.source, scope: 'job', scopeKey: scope.name, stage,
           status: 'failed', details: { ...failure, jobKey: candidate.jobKey, host: safeTargetUrl(candidate.url) },
-        });
-      },
-      onContentStats: (stats) => {
-        console.log(`אורך תוכן שנשלח לניקוד (${stats.count} משרות): ממוצע ${stats.avgChars}, חציון ${stats.medianChars}, P90 ${stats.p90Chars}, מקסימום ${stats.maxChars} תווים; ${stats.atOrOverCapCount} הגיעו לתקרת ${stats.capChars} התווים.`);
-        if (runId) store.recordRunEvent(runId, {
-          source: 'system', scope: 'run', scopeKey: String(runId), stage: 'content-length-stats',
-          status: 'complete', details: stats,
         });
       },
     });

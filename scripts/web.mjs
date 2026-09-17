@@ -23,6 +23,7 @@ import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { blockersForAction, createReadinessService } from './dashboard/readiness.mjs';
 import { buildScanDiagnosis } from './dashboard/scan-diagnosis.mjs';
 import { parseDashboardOptions } from './jobs/dashboard.mjs';
+import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
 
 export { runCommand, sanitizeCommandOutput } from './dashboard/actions.mjs';
 
@@ -240,8 +241,13 @@ export function createDashboardServer({
             });
           }
           const saved = store.upsertCompanyCandidate(candidate);
+          // Explicitly flagging a job's company from the Decisions page means
+          // "consider tracking this" — guarantee it lands in 'candidate',
+          // even if it was previously ignored or paused (not just on first
+          // discovery, which upsertCompanyCandidate alone would cover).
+          const company = store.markCompanyAsCandidate(saved.company.id);
           sendJson(response, 200, {
-            candidate: saved.company,
+            candidate: company,
             sources: saved.sources,
             resolvedSource: candidate.source,
           });
@@ -462,6 +468,18 @@ export function createDashboardServer({
           store.close();
         }
         sendJson(response, 200, { archived: true, state: snapshot() });
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/jobs/archive-failed') {
+        const store = createJobStore(config.jobsDbPath);
+        let result;
+        try {
+          result = store.archiveJobsByErrorCode([...NON_RETRYABLE_FAILURE_CODES]);
+        } finally {
+          store.close();
+        }
+        sendJson(response, 200, { ...result, state: snapshot() });
         return;
       }
 

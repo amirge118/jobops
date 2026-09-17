@@ -160,6 +160,12 @@ export function isChallengeResult(result) {
   return result?.result === 'uncertain' && CHALLENGE_CODES.has(result.code);
 }
 
+// A WAF/anti-bot block is a site-level decision, not a transport failure —
+// retrying does not help and can make it worse (see the headed-retry
+// circuit breaker in fetch-page.mjs). Reuses CHALLENGE_CODES: both codes
+// mean the same thing — the site blocked us, not "try again later."
+export const NON_RETRYABLE_FAILURE_CODES = CHALLENGE_CODES;
+
 // Lazily owns a single headed browser/page, created only on first use and reused
 // across URLs. Headed Chromium needs a display, so launch can fail in headless/CI
 // environments — in that case get() returns null and callers degrade to the

@@ -1,4 +1,6 @@
 import { createJobStore } from '../jobs/store.mjs';
+import { aggregateGroupStats, aggregateSourcePerformance, STATS_WINDOWS } from '../jobs/insights.mjs';
+import { NON_RETRYABLE_FAILURE_CODES } from '../liveness-browser.mjs';
 
 export function dashboardSettings(config) {
   return {
@@ -72,6 +74,8 @@ export function createDashboardQueries(config, action) {
             lastRunAt: lastRun?.finished_at || lastRun?.started_at || null,
             received: Number(runGroup?.coverage?.delivered ?? runGroup?.messages ?? 0),
             links: Number(processing?.links ?? runGroup?.candidates ?? 0),
+            processed: Number(processing?.processed || 0),
+            filtered: Number(processing?.filtered || 0),
             suitable: Number(processing?.suitable || 0),
             notSuitable: Number(processing?.notSuitable || 0),
             coverage: runGroup?.coverage?.status || null,
@@ -86,6 +90,32 @@ export function createDashboardQueries(config, action) {
       },
       request: latestRequest,
     };
+  };
+
+  // Rolling-window view across every finished run, not just the last one —
+  // a single run's numbers can't tell "which WhatsApp group actually brings
+  // jobs" or "is ATS or WhatsApp costing more per suitable job" apart from
+  // noise. See scripts/jobs/insights.mjs for how a window is summed.
+  const insights = (store) => {
+    const now = Date.now();
+    const windows = {};
+    for (const [key, spanMs] of Object.entries(STATS_WINDOWS)) {
+      const runs = store.listRuns({ sinceMs: now - spanMs });
+      windows[key] = { groups: aggregateGroupStats(runs), sourcePerformance: aggregateSourcePerformance(runs), runsCounted: runs.length };
+    }
+    return { windows };
+  };
+
+  // What's currently stuck and why — independent of any one run, so it
+  // reflects the real outstanding backlog rather than just the last scan.
+  const failures = (store) => {
+    const breakdown = store.getFailureBreakdown().map((row) => ({
+      ...row,
+      retryable: !NON_RETRYABLE_FAILURE_CODES.has(row.code),
+    }));
+    const retryableTotal = breakdown.filter((row) => row.retryable).reduce((sum, row) => sum + row.count, 0);
+    const nonRetryableTotal = breakdown.filter((row) => !row.retryable).reduce((sum, row) => sum + row.count, 0);
+    return { breakdown, retryableTotal, nonRetryableTotal };
   };
 
   const snapshot = () => withStore((store) => ({
@@ -119,6 +149,8 @@ export function createDashboardQueries(config, action) {
         action: { ...action },
         settings: dashboardSettings(config),
         whatsappHistory: whatsappHistory(store),
+        insights: insights(store),
+        failures: failures(store),
       }));
     },
 

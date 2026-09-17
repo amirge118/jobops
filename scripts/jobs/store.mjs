@@ -739,6 +739,41 @@ export function createJobStore(databasePath) {
       return true;
     },
 
+    // Guarantees a company ends up in 'candidate' — used when a person
+    // explicitly flags a company as worth tracking (e.g. "בדוק חברה למעקב"
+    // on the Decisions page), regardless of whatever status it happened to
+    // have before: brand new, previously ignored, or previously paused.
+    // Unlike upsertCompanyCandidate (which never touches an existing row's
+    // status), this always lands the company where the person asked for it
+    // to go. A company already watched is left alone — there's nothing to
+    // move for a company already being tracked.
+    markCompanyAsCandidate(id, at = Date.now()) {
+      const normalizedId = companyId(id);
+      const company = getCompanySnapshot(normalizedId);
+      if (!company) throw new CompanyRegistryError('company_not_found', 'Company was not found');
+      if (company.status !== 'watched' && company.status !== 'candidate') {
+        this.setCompanyStatus(normalizedId, 'candidate', at);
+        return getCompanySnapshot(normalizedId);
+      }
+      return company;
+    },
+
+    // One-time repair for companies that importConfiguredCompanies previously
+    // (incorrectly) forced to 'paused' just because their source wasn't
+    // resolvable yet — before the fix above, that was indistinguishable from
+    // the user deliberately pausing a company. Only touches rows matching
+    // that exact, narrow signature, so a company the user genuinely paused
+    // (any other discovery_source or resolution_status) is left untouched.
+    // Safe to run more than once: nothing left to reclassify is a no-op.
+    reclassifyAutoPausedCompanies(at = Date.now()) {
+      const rows = db.prepare(`
+        SELECT id, name FROM companies
+        WHERE status = 'paused' AND discovery_source = 'configured' AND resolution_status = 'unsupported'
+      `).all();
+      for (const row of rows) this.setCompanyStatus(row.id, 'candidate', at);
+      return { reclassified: rows.map((row) => row.name) };
+    },
+
     importConfiguredCompanies(entries, at = Date.now()) {
       if (!Array.isArray(entries)) throw new CompanyRegistryError('invalid_import', 'Configured companies must be an array');
       if (entries.length > 2_000) throw new CompanyRegistryError('import_too_large', 'Configured company import exceeds 2000 entries');
@@ -819,12 +854,19 @@ export function createJobStore(databasePath) {
             normalizedName,
           });
           const saved = this.upsertCompanyCandidate(candidate, at);
-          const autoPausedUnsupportedUpgrade = preexisting?.status === 'paused' &&
+          // A source that wasn't enabled/resolvable is the scanner's problem,
+          // not a choice the user made — it belongs in 'candidate' (awaiting
+          // a working source), never 'paused' (which means the user
+          // deliberately doesn't want this company tracked, e.g. via the
+          // "השהה" button). This block only ever revisits a company the sync
+          // itself previously placed in 'candidate' for this exact reason, so
+          // it never overwrites a status the user picked themselves.
+          const autoCandidateUnsupportedUpgrade = preexisting?.status === 'candidate' &&
             preexisting?.resolution_status === 'unsupported' &&
             preexisting?.discovery_source === 'configured';
-          if (!preexisting || autoPausedUnsupportedUpgrade) {
+          if (!preexisting || autoCandidateUnsupportedUpgrade) {
             if (candidate.source?.enabled && entry?.enabled !== false) this.approveCompany(saved.company.id, at);
-            else this.setCompanyStatus(saved.company.id, 'paused', at);
+            else this.setCompanyStatus(saved.company.id, 'candidate', at);
           }
           imported += 1;
         } catch (error) {
@@ -1010,8 +1052,17 @@ export function createJobStore(databasePath) {
       return db.prepare('SELECT COUNT(*) AS count FROM jobs').get().count;
     },
 
-    listPendingEvaluation({ limit = 5_000 } = {}) {
+    // excludeErrorCodes lets a caller skip failures classified as not worth
+    // retrying (e.g. a site-level anti-bot block) — a job that never got a
+    // real error (evaluated_at IS NULL, last_error_code IS NULL) is always
+    // included regardless, since that's a brand-new candidate, not a stuck
+    // failure.
+    listPendingEvaluation({ limit = 5_000, excludeErrorCodes = [] } = {}) {
       const boundedLimit = Math.max(1, Math.min(Number(limit) || 5_000, 10_000));
+      const codes = Array.isArray(excludeErrorCodes) ? excludeErrorCodes.filter(Boolean) : [];
+      const excludeClause = codes.length
+        ? `AND (last_error_code IS NULL OR last_error_code NOT IN (${codes.map(() => '?').join(', ')}))`
+        : '';
       return db.prepare(`
         SELECT
           job_key AS jobKey,
@@ -1023,9 +1074,10 @@ export function createJobStore(databasePath) {
         FROM jobs
         WHERE archived_at IS NULL
           AND (evaluated_at IS NULL OR last_error_code IS NOT NULL)
+          ${excludeClause}
         ORDER BY first_seen_at ASC
         LIMIT ?
-      `).all(boundedLimit).map(({ sourcesJson, ...job }) => ({
+      `).all(...codes, boundedLimit).map(({ sourcesJson, ...job }) => ({
         ...job,
         source: parseSources(sourcesJson)[0] || 'retry',
       }));
@@ -1223,6 +1275,54 @@ export function createJobStore(databasePath) {
         WHERE job_key = ? AND archived_at IS NULL
       `).run(at, jobKey);
       return result.changes === 1;
+    },
+
+    // A reliable "what's failing right now" view — independent of any one
+    // run, since a stuck failure keeps re-appearing across runs until it's
+    // fixed, retried successfully, or archived.
+    getFailureBreakdown() {
+      return db.prepare(`
+        SELECT last_error_code AS code, COUNT(*) AS count
+        FROM jobs
+        WHERE archived_at IS NULL AND last_error_code IS NOT NULL
+        GROUP BY last_error_code
+        ORDER BY count DESC, last_error_code ASC
+      `).all();
+    },
+
+    // Bulk version of archiveJob for "clear every failure of this kind" —
+    // same field-nulling as a single archive, just scoped by error code
+    // instead of by job key. A no-op (never a malformed `IN ()`) on an
+    // empty code list.
+    archiveJobsByErrorCode(codes, at = Date.now()) {
+      const safeCodes = Array.isArray(codes) ? codes.filter(Boolean) : [];
+      if (safeCodes.length === 0) return { archived: 0 };
+      const result = db.prepare(`
+        UPDATE jobs SET
+          company = NULL,
+          title = NULL,
+          summary = NULL,
+          score = NULL,
+          fit_label = NULL,
+          decision_reason = NULL,
+          fit_breakdown_json = NULL,
+          suitable = 0,
+          active_status = 'archived',
+          apply_url = canonical_url,
+          sources_json = '[]',
+          content_hash = NULL,
+          profile_hash = NULL,
+          criteria_version = NULL,
+          evaluated_at = NULL,
+          presented_at = NULL,
+          opened_at = NULL,
+          last_error_code = NULL,
+          last_error_reason = NULL,
+          last_attempted_at = NULL,
+          archived_at = ?
+        WHERE archived_at IS NULL AND last_error_code IN (${safeCodes.map(() => '?').join(', ')})
+      `).run(at, ...safeCodes);
+      return { archived: result.changes };
     },
 
     getFreshPage(canonicalUrl, { now = Date.now(), ttlMs }) {
@@ -1706,6 +1806,30 @@ export function createJobStore(databasePath) {
     getLastRun() {
       const row = db.prepare('SELECT id FROM runs ORDER BY started_at DESC LIMIT 1').get();
       return row ? this.getRun(row.id) : null;
+    },
+
+    // Lightweight window query for rolling aggregates (per-group WhatsApp
+    // stats, ATS-vs-WhatsApp cost comparisons): each finished run already
+    // carries its own per-source, per-group breakdown in details_json
+    // (see summarizeProcessingResults/summarizeSourceResults in jobs.mjs),
+    // so summing across a time window needs no new event stream — just the
+    // finished runs whose window it falls in. Unfinished runs are excluded:
+    // their details_json may be a stale mid-run snapshot or absent.
+    listRuns({ sinceMs, limit = 500 } = {}) {
+      const boundedLimit = Math.max(1, Math.min(Number(limit) || 500, 2_000));
+      const rows = db.prepare(`
+        SELECT id, started_at, finished_at, status, details_json FROM runs
+        WHERE finished_at IS NOT NULL AND finished_at >= ?
+        ORDER BY finished_at DESC
+        LIMIT ?
+      `).all(Number(sinceMs) || 0, boundedLimit);
+      return rows.map((row) => ({
+        id: row.id,
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        status: row.status,
+        details: parseJson(row.details_json, null),
+      }));
     },
 
     getLastRunSummary() {

@@ -345,6 +345,66 @@ test('a failed re-evaluation keeps the previous decision and remains retryable',
   store.close();
 });
 
+test('listPendingEvaluation excludes chosen error codes but keeps brand-new and other-failed candidates', () => {
+  const store = newStore();
+  const fresh = store.recordSighting({ url: 'https://example.com/jobs/fresh', source: 'ATS: example', seenAt: 100 });
+  const blocked = store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ATS: example', seenAt: 200 });
+  const timedOut = store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ATS: example', seenAt: 300 });
+  store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 400 });
+  store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 500 });
+
+  const all = store.listPendingEvaluation();
+  assert.deepEqual(all.map((job) => job.jobKey).sort(), [blocked.jobKey, fresh.jobKey, timedOut.jobKey].sort());
+
+  const excluding = store.listPendingEvaluation({ excludeErrorCodes: ['bot_challenge', 'access_blocked'] });
+  assert.deepEqual(excluding.map((job) => job.jobKey).sort(), [fresh.jobKey, timedOut.jobKey].sort());
+  store.close();
+});
+
+test('getFailureBreakdown groups outstanding failures by code and ignores archived jobs', () => {
+  const store = newStore();
+  const a = store.recordSighting({ url: 'https://example.com/jobs/a', source: 'ATS: example', seenAt: 100 });
+  const b = store.recordSighting({ url: 'https://example.com/jobs/b', source: 'ATS: example', seenAt: 200 });
+  const c = store.recordSighting({ url: 'https://example.com/jobs/c', source: 'ATS: example', seenAt: 300 });
+  store.markEvaluationFailure(a.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 400 });
+  store.markEvaluationFailure(b.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 500 });
+  store.markEvaluationFailure(c.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 600 });
+
+  assert.deepEqual(store.getFailureBreakdown(), [
+    { code: 'bot_challenge', count: 2 },
+    { code: 'timeout', count: 1 },
+  ]);
+
+  assert.equal(store.archiveJob(a.jobKey, 700), true);
+  // Both codes are tied at 1 now; the query breaks ties alphabetically by code.
+  assert.deepEqual(store.getFailureBreakdown(), [
+    { code: 'bot_challenge', count: 1 },
+    { code: 'timeout', count: 1 },
+  ]);
+  store.close();
+});
+
+test('archiveJobsByErrorCode clears only the matching outstanding failures and no-ops on an empty list', () => {
+  const store = newStore();
+  const a = store.recordSighting({ url: 'https://example.com/jobs/a', source: 'ATS: example', seenAt: 100 });
+  const b = store.recordSighting({ url: 'https://example.com/jobs/b', source: 'ATS: example', seenAt: 200 });
+  store.markEvaluationFailure(a.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 300 });
+  store.markEvaluationFailure(b.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 400 });
+
+  assert.deepEqual(store.archiveJobsByErrorCode([], 500), { archived: 0 });
+  assert.equal(store.getJob(a.jobKey).archived_at, null);
+
+  assert.deepEqual(store.archiveJobsByErrorCode(['bot_challenge', 'access_blocked'], 600), { archived: 1 });
+  assert.equal(store.getJob(a.jobKey).archived_at, 600);
+  assert.equal(store.getJob(b.jobKey).archived_at, null);
+  assert.deepEqual(store.getFailureBreakdown(), [{ code: 'timeout', count: 1 }]);
+  assert.equal(store.listPendingEvaluation().some((job) => job.jobKey === a.jobKey), false);
+
+  // Idempotent: nothing left to archive for that code.
+  assert.deepEqual(store.archiveJobsByErrorCode(['bot_challenge'], 700), { archived: 0 });
+  store.close();
+});
+
 test('last successful run must cover every requested source', () => {
   const store = newStore();
   const atsOnly = store.startRun({ fromTs: 0, toTs: 10, sources: ['ats'], startedAt: 10 });

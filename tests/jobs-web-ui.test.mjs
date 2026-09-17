@@ -28,7 +28,7 @@ test('scan page exposes readiness and one automatic latest-result diagnosis', ()
   assert.match(app, /function renderReadiness\(nextReadiness\)/);
   assert.match(app, /function renderDiagnosis\(diagnosis, lastRun\)/);
   assert.match(app, /function renderRunAudit\(lastRun\)/);
-  assert.match(app, /function renderWhatsAppHistory\(history\)/);
+  assert.match(app, /function renderWhatsAppHistory\(history, insights\)/);
   assert.match(app, /runAction\('process-backlog', \{ days: 7 \}\)/);
   assert.match(app, /lastCollectedAt/);
   assert.match(app, /runAction\('retry-failed'\)/);
@@ -36,16 +36,17 @@ test('scan page exposes readiness and one automatic latest-result diagnosis', ()
   assert.doesNotMatch(app, /diagnostics\/history/);
 });
 
-test('action output gives terminal QR codes a full-width readable surface', () => {
-  const css = readWeb('styles.css');
+test('scan page turns the last-scan panel into a failure overview with retry/discard actions', () => {
+  const html = readWeb('scan.html');
   const app = readWeb('pages', 'scan-page.js');
 
-  assert.match(css, /\.activity-card details\s*\{[^}]*flex-basis:\s*100%/s);
-  assert.match(css, /\.activity-card pre\s*\{[^}]*white-space:\s*pre;/s);
-  assert.match(css, /\.activity-card pre\s*\{[^}]*font-size:\s*1\.15rem;/s);
-  assert.match(css, /\.activity-card pre\s*\{[^}]*max-height:\s*80vh;/s);
-  assert.match(app, /elements\.activityDetails\.open = true;/);
-  assert.match(app, /elements\.activityOutput\.scrollTop = elements\.activityOutput\.scrollHeight/);
+  assert.match(html, /id="failure-overview" class="failure-overview" hidden/);
+  assert.match(html, /id="failure-breakdown-body"/);
+  assert.match(html, /id="archive-failed"/);
+  assert.match(app, /function renderFailureOverview\(failures\)/);
+  assert.match(app, /postJson\('\/api\/jobs\/archive-failed'\)/);
+  assert.match(app, /bot_challenge: 'חסימת אתר \(הגנת אנטי-בוט\)'/);
+  assert.match(app, /navigation_error: 'שגיאת ניווט בדפדפן'/);
 });
 
 test('dashboard keeps readiness and source details compact', () => {
@@ -54,7 +55,7 @@ test('dashboard keeps readiness and source details compact', () => {
   const app = readWeb('pages', 'scan-page.js');
 
   assert.match(html, /id="source-details" class="source-details"/);
-  assert.match(html, /id="technical-details" class="technical-details"/);
+  assert.doesNotMatch(html, /id="technical-details"/);
   assert.match(css, /\.summary-grid\s*\{[^}]*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
   assert.match(css, /\.summary-grid article\s*\{[^}]*min-height:\s*84px/s);
   assert.match(css, /\.readiness-grid\s*\{[^}]*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
@@ -67,7 +68,7 @@ test('decisions and companies keep explicit user-controlled actions', () => {
   const decisions = readWeb('pages', 'decisions-page.js');
   const companies = readWeb('pages', 'companies-page.js');
 
-  assert.match(decisions, /בדוק חברה למעקב/);
+  assert.match(decisions, /העבר חברה למועמדות/);
   assert.match(decisions, /openAndArchiveJob\(job, archiveJob\)/);
   assert.match(companies, /אשר והוסף למעקב/);
   assert.match(companies, /נדרש אישור לפני הוספה למעקב/);
