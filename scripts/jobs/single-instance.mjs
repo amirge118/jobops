@@ -19,6 +19,9 @@ export function acquireSingleInstance(lockPath, {
   pid = process.pid,
   startedAt = Date.now(),
   probe = processState,
+  name = 'WhatsApp collector',
+  errorCode = 'JOBOPS_COLLECTOR_ALREADY_RUNNING',
+  errorMessage = `${name} already running; lock already held.`,
 } = {}) {
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
@@ -40,8 +43,8 @@ export function acquireSingleInstance(lockPath, {
       if (error.code !== 'EEXIST') throw error;
       const current = readLock(lockPath);
       if (current && probe(current.pid) === 'alive') {
-        const lockError = new Error('WhatsApp collector already running; lock already held.');
-        lockError.code = 'JOBOPS_COLLECTOR_ALREADY_RUNNING';
+        const lockError = new Error(errorMessage);
+        lockError.code = errorCode;
         throw lockError;
       }
       // A malformed lock, or one whose process is gone, cannot own the session.
@@ -50,5 +53,5 @@ export function acquireSingleInstance(lockPath, {
     }
   }
 
-  throw new Error('Unable to acquire WhatsApp collector lock.');
+  throw new Error(`Unable to acquire ${name} lock.`);
 }

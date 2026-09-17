@@ -16,6 +16,7 @@ import { createJobStore } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
 import { createRunLifecycle, describeFailure, safeTargetUrl } from './jobs/diagnostics.mjs';
+import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
 import { buildNegativeTitleFilter, loadTitleFilterNegative } from './scan.mjs';
 
@@ -521,6 +522,33 @@ export async function runJobs(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = loadJobsConfig();
   process.chdir(config.rootDir);
+  // Scheduled scans (launchd) and a manually triggered dashboard scan are
+  // separate OS processes with no shared in-memory state, so the dashboard's
+  // own "only one action at a time" bookkeeping can't see a scheduled run.
+  // A real overlap is rare but not impossible, and SQLite only tolerates one
+  // writer at a time — so skip cleanly rather than risk two scans writing at
+  // once. A dry run never touches the real database and is exempt.
+  let scanLock = null;
+  if (!options.dryRun) {
+    try {
+      scanLock = acquireSingleInstance(path.join(path.dirname(config.jobsDbPath), '.scan.lock'), {
+        name: 'jobOps scan',
+        errorCode: 'JOBOPS_SCAN_ALREADY_RUNNING',
+      });
+    } catch (error) {
+      if (error.code !== 'JOBOPS_SCAN_ALREADY_RUNNING') throw error;
+      console.log('סריקה אחרת כבר פועלת על אותו מסד נתונים; מדלג על הריצה הזו.');
+      return;
+    }
+  }
+  try {
+    return await runJobsLocked(options, config);
+  } finally {
+    scanLock?.release();
+  }
+}
+
+async function runJobsLocked(options, config) {
   const store = createJobStore(options.dryRun ? ':memory:' : config.jobsDbPath);
   // portals.yml bootstraps the registry without overwriting decisions already
   // made in the dashboard (watch, pause, or ignore).

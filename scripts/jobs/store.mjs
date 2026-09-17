@@ -148,6 +148,12 @@ export function createJobStore(databasePath) {
   const db = new Database(databasePath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // WAL allows concurrent readers but still only one writer at a time. The
+  // single-instance scan lock (see jobs/single-instance.mjs) keeps two scans
+  // from overlapping, but a short-lived writer (a dashboard action, a probe)
+  // can still legitimately hold a write transaction for a moment — wait
+  // rather than fail outright on that brief contention.
+  db.pragma('busy_timeout = 5000');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS jobs (

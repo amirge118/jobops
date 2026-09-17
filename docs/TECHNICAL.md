@@ -101,6 +101,7 @@ npm run jobs:import-whatsapp-links -- --group "GROUP" --file links.json # one-ti
 npm run jobs -- --whatsapp-backlog --days 7 # process seven days already queued locally
 npm run jobs -- --whatsapp-backlog          # process the next bounded history batch
 npm run diagnostics -- --latest        # print the newest safe diagnostic record
+npm run jobs:schedule:install          # unattended scans: WhatsApp 10/15/20, ATS at 14:00
 npm run start:local                    # recommended: Collector + dashboard from macOS Terminal
 npm run stop:local                     # stop only this project's dashboard
 npm run restart:local                  # stop stale dashboard and start a clean one
@@ -144,6 +145,39 @@ collection time and the latest received, linked, suitable, failed, and pending c
 decline a linked-device history request; this is reported per group as `history_no_response` rather
 than being presented as an empty group. Pending message bodies older than seven days are erased while
 their minimal deduplication identity is retained.
+
+### Scheduled scans
+
+A scan can run unattended on a fixed schedule instead of only from the dashboard button. Two
+independent macOS LaunchAgents are available: WhatsApp groups at `10:00`, `15:00`, and `20:00`,
+and an ATS run once daily at `14:00`. Neither passes `--open`, so unattended matches wait for
+review on `/decisions` rather than opening a flood of Chrome tabs while no one is watching.
+
+```bash
+npm run jobs:schedule:install    # install both LaunchAgents
+npm run jobs:schedule:status     # confirm they're loaded and see each schedule
+npm run jobs:schedule:uninstall  # remove both; the database and config are untouched
+```
+
+The schedule itself lives in `SCHEDULES` in
+[`scripts/jobs/scheduled-scan-service.mjs`](../scripts/jobs/scheduled-scan-service.mjs) — edit
+the `times` array for either entry and reinstall to change it. Each entry becomes its own
+LaunchAgent (`com.amirgefen.jobops.scan-ats`, `com.amirgefen.jobops.scan-whatsapp`) because one
+`StartCalendarInterval` always fires the same fixed command, so a source that runs at several
+times a day and one that runs once cannot share a single agent.
+
+A scheduled run and a manually triggered dashboard scan are separate OS processes with no shared
+state, so the dashboard's own "only one action at a time" bookkeeping cannot see a launchd-fired
+scan. `runJobs()` therefore takes a single-instance file lock
+(`data/.scan.lock`, via the same `acquireSingleInstance` the WhatsApp Collector uses for its own
+session) before writing anything: if another scan is already in progress, it logs that and exits
+cleanly rather than risk two writers on the same SQLite database at once. A dry run is exempt,
+since it never touches the real database. This is a rare collision in practice, not something to
+watch for day to day.
+
+macOS does not run a `StartCalendarInterval` job while the Mac is asleep; a missed time is not
+retried, it simply waits for the next scheduled time. If the Mac is reliably asleep through one of
+these times, adjust `SCHEDULES` to a time it's normally awake instead.
 
 ### Two-minute dashboard workflow
 

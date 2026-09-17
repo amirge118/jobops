@@ -38,6 +38,18 @@ test('single-instance lock rejects a live owner and recovers a stale lock', (con
   assert.equal(fs.existsSync(lockPath), false);
 });
 
+test('single-instance lock supports a custom name/code for non-collector callers', (context) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-lock-scan-'));
+  context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const lockPath = path.join(dir, 'scan.lock');
+  const first = acquireSingleInstance(lockPath, { pid: 111, probe: (pid) => pid === 111 ? 'alive' : 'dead', name: 'jobOps scan', errorCode: 'JOBOPS_SCAN_ALREADY_RUNNING' });
+  assert.throws(
+    () => acquireSingleInstance(lockPath, { pid: 222, probe: () => 'alive', name: 'jobOps scan', errorCode: 'JOBOPS_SCAN_ALREADY_RUNNING' }),
+    (error) => error.code === 'JOBOPS_SCAN_ALREADY_RUNNING' && /jobOps scan already running/.test(error.message),
+  );
+  first.release();
+});
+
 test('collector diagnostics classify session failures without persisting raw material', () => {
   const result = describeFailure(new Error('Bad MAC while decrypting secret-message-body'));
   assert.equal(result.code, 'decrypt_failed');
