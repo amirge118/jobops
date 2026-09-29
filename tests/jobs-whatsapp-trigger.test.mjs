@@ -30,7 +30,7 @@ test('the decision waits for a well-filled batch unless the oldest job waited to
   assert.deepEqual(shouldProcess({ newJobs: 3, waitedMinutes: 30, settings }), { run: false, reason: 'waiting_for_more' });
   assert.deepEqual(shouldProcess({ newJobs: 8, waitedMinutes: 0, settings }), { run: true, reason: 'enough_jobs' });
   assert.deepEqual(shouldProcess({ newJobs: 1, waitedMinutes: 120, settings }), { run: true, reason: 'waited_too_long' });
-  assert.deepEqual(triggerSettings({}), { minNewJobs: 8, maxWaitMinutes: 120, lookbackDays: 7 });
+  assert.deepEqual(triggerSettings({}), { minNewJobs: 10, maxWaitMinutes: 120, lookbackDays: 7 });
 });
 
 test('only unique, unknown job links count as new jobs, and the check changes nothing', () => {

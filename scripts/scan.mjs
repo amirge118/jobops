@@ -165,6 +165,19 @@ export function loadTitleFilterNegative(portalsPath) {
   }
 }
 
+// The positive half (plus always_allow) of the same list, for callers that
+// screen a page prefix rather than a clean title. Tolerant like the above.
+export function loadTitleFilterPositive(portalsPath) {
+  try {
+    if (!existsSync(portalsPath)) return { positive: [], always_allow: [] };
+    const filter = parseYaml(readFileSync(portalsPath, 'utf-8'))?.title_filter || {};
+    const strings = (list) => (Array.isArray(list) ? list.filter((keyword) => typeof keyword === 'string') : []);
+    return { positive: strings(filter.positive), always_allow: strings(filter.always_allow) };
+  } catch {
+    return { positive: [], always_allow: [] };
+  }
+}
+
 // ── Location filter ─────────────────────────────────────────────────
 // Optional. If `location_filter` is absent from portals.yml, all locations pass.
 // Semantics (case-insensitive substring, in this order):

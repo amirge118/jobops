@@ -27,6 +27,20 @@ export function resolveCodexBinary(config) {
 
 const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 
+// "Lean" calls answer from the prompt alone (scoring, resume analysis), so
+// the agent tooling Codex adds to every call is pure cost. Measured on
+// 2026-09-29 with a one-word prompt on gpt-reserve: 14,192 input tokens by
+// default, 10,041 with these features disabled, and 6,527 with Codex's base
+// instructions replaced by a short task-only file. Calls that browse (company
+// research) keep the full default agent.
+export const LEAN_DISABLED_FEATURES = Object.freeze([
+  'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'goals',
+  'image_generation', 'multi_agent', 'personality', 'plugins', 'remote_plugin', 'skill_search', 'sleep_tool',
+  'tool_suggest', 'view_image', 'shell_tool', 'unified_exec', 'hooks', 'mentions_v2', 'in_app_browser',
+  'workspace_dependencies', 'skill_mcp_dependency_install', 'guardian_approval',
+]);
+export const LEAN_INSTRUCTIONS_PATH = path.join(MODULE_DIR, 'codex-instructions.md');
+
 export async function runCodexExec({
   prompt,
   schemaPath = DEFAULT_SCHEMA_PATH,
@@ -41,6 +55,7 @@ export async function runCodexExec({
   timeoutMs = 120_000,
   liveSearch = false,
   maxOutputBytes = 2 * 1024 * 1024,
+  lean = !liveSearch,
   now = Date.now,
 }) {
   // Once this process has seen the account's usage limit, further calls
@@ -64,6 +79,10 @@ export async function runCodexExec({
   ];
   if (model) args.push('--model', model);
   if (REASONING_EFFORTS.has(reasoningEffort)) args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
+  if (lean) {
+    args.push('-c', `model_instructions_file=${JSON.stringify(LEAN_INSTRUCTIONS_PATH)}`);
+    for (const feature of LEAN_DISABLED_FEATURES) args.push('--disable', feature);
+  }
   args.push('-');
   const startedAt = now();
   const report = (fields) => reportCodexCall({
@@ -190,8 +209,8 @@ Hard caps (apply after the anchors):
 - cvMatch 5 requires every stated must-have to be evidenced in the profile; otherwise cvMatch <= 4.
 - When the posting does not state something, score that dimension by the "unknown" anchor and list it in uncertainties — never assume the favourable case.
 
-Evidence: for each of cvMatch, seniority, roleScope, location, sector return one concise Hebrew sentence that names the specific job requirement and the profile fact (or its absence) behind the number. Never write generic evidence.
-- Return one short Hebrew summary, one concise Hebrew decision reason, and up to three concise Hebrew uncertainties per job.
+Evidence: for each of cvMatch, seniority, roleScope, location, sector return one concise Hebrew sentence (at most 15 words) that names the specific job requirement and the profile fact (or its absence) behind the number. Never write generic evidence.
+- Return one short Hebrew summary (at most 20 words), one concise Hebrew decision reason (at most 15 words), and up to two Hebrew uncertainties (at most 12 words each) per job. Brevity is required: every output token is paid for.
 - Preserve every supplied jobKey exactly and return exactly one result for each job.`;
 }
 

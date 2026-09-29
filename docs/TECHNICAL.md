@@ -541,9 +541,12 @@ model, because `--ignore-user-config` deliberately ignores your personal Codex c
 `scoring.reasoningEffort`, `resumeGap.model`, and `resumeGap.reasoningEffort` are optional
 overrides.
 
-A ChatGPT account's Codex usage limit is checked before every run: a stored block (with the reset
-time Codex reports, e.g. "try again at 1:43 PM") skips the run; a successful call in the last two
-hours is trusted; otherwise one tiny probe call runs (a call rejected for the limit costs nothing).
+A ChatGPT account's Codex usage limit is checked before every run from recorded evidence only: a
+stored block (with the reset time Codex reports, e.g. "try again at 1:43 PM") skips the run. No test
+call is made — measured, even a one-word `codex exec` call costs ~14k input tokens of Codex's own
+agent instructions, while a call rejected for the limit costs nothing, so simply running is the
+cheapest check. That same fixed ~14k per call is why `scoring.batchSize` is 10: a larger batch
+spreads it over more jobs.
 When the limit is hit mid-run, the rest of that run makes no further Codex calls, and the unscored
 jobs stay pending for automatic retry. Scheduled runs and the WhatsApp trigger skip entirely while
 blocked, and every source resumes from its last success afterwards. The dashboard shows the block as

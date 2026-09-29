@@ -65,7 +65,7 @@ function normalizeScreenPass(value) {
 
 function promptPrefix(profile, currentResume) {
   return `You analyze gaps between a job and the candidate's exact current resume.
-Return only the JSON required by the output schema. Write explanation, suggestion, note and reason in concise Hebrew.
+Return only the JSON required by the output schema. Write explanation, suggestion, note and reason in concise Hebrew: at most 20 words each (priority at most 10 words). Brevity is required: every output token is paid for.
 
 Verified candidate profile (evidence source; it may contain facts omitted from the resume):
 ${String(profile || '').trim()}

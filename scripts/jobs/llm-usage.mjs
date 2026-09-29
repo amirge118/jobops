@@ -104,31 +104,19 @@ function normalizeUsage(usage) {
   };
 }
 
-// Is there Codex quota right now? Cheapest evidence first:
-//   1. a known block (from a failed call) that has not reset -> no
-//   2. a successful call in the last `freshMs` -> yes, without spending
-//   3. otherwise one tiny probe call (a rejected call costs nothing)
-// Transient probe failures (network, timeout) do not block the run.
-export async function checkCodexQuota({ store, probe, now = Date.now(), freshMs = 2 * 60 * 60 * 1000 }) {
-  const state = store.getLlmQuota();
+// Is there Codex quota right now? Only recorded evidence is used: a block
+// set by a call that hit the usage limit (with Codex's reset time), until it
+// resets. No test call is made: measured on 2026-09-29, even a one-word call
+// costs ~14k input tokens (Codex's own agent instructions), while a call
+// rejected for the limit costs nothing, so simply running is the cheapest
+// check. The first rejection then stops the rest of that run.
+export function checkCodexQuota({ store, now = Date.now() }) {
   const memory = inMemoryBlockedUntil(now);
   if (memory) return { available: false, until: memory, basis: 'memory' };
+  const state = store.getLlmQuota();
   if (state.blockedUntil && state.blockedUntil > now) {
     noteUsageLimit(state.blockedUntil);
     return { available: false, until: state.blockedUntil, basis: 'stored' };
   }
-  if (state.lastSuccessAt && now - state.lastSuccessAt < freshMs) return { available: true, basis: 'recent_success' };
-  if (!probe) return { available: true, basis: 'unchecked' };
-  try {
-    await probe();
-    return { available: true, basis: 'probe' };
-  } catch (error) {
-    if (isUsageLimitMessage(error?.message)) {
-      const until = parseUsageLimitReset(error.message, now);
-      store.setLlmBlocked({ until, reason: 'usage_limit', at: now });
-      noteUsageLimit(until);
-      return { available: false, until, basis: 'probe' };
-    }
-    return { available: true, basis: 'probe_inconclusive' };
-  }
+  return { available: true, basis: state.lastSuccessAt ? 'recent_success' : 'unknown' };
 }

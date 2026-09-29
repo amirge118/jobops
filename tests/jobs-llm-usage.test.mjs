@@ -127,26 +127,18 @@ test('calls are stored and summarized per purpose and per run, and quota state f
   store.close();
 });
 
-test('the quota check skips when blocked, trusts a recent success, and otherwise probes once', async () => {
+test('the quota check uses only recorded evidence and never spends a call', () => {
   resetInMemoryQuota();
   const store = tempStore();
   const now = 10_000_000;
-  let probes = 0;
+  assert.deepEqual(checkCodexQuota({ store, now }), { available: true, basis: 'unknown' });
   store.setLlmBlocked({ until: now + 60_000, at: now });
-  assert.deepEqual(await checkCodexQuota({ store, now, probe: async () => { probes += 1; } }), { available: false, until: now + 60_000, basis: 'stored' });
+  assert.deepEqual(checkCodexQuota({ store, now }), { available: false, until: now + 60_000, basis: 'stored' });
   resetInMemoryQuota();
-  store.noteLlmSuccess(now - 60_000);
-  assert.equal((await checkCodexQuota({ store, now, probe: async () => { probes += 1; } })).basis, 'recent_success');
-  assert.equal(probes, 0);
-
-  const stale = tempStore();
-  const limited = await checkCodexQuota({ store: stale, now, probe: async () => { throw new Error(LIMIT); } });
-  assert.equal(limited.available, false);
-  assert.ok(stale.getLlmQuota().blockedUntil > now);
-  resetInMemoryQuota();
-  const flaky = tempStore();
-  assert.deepEqual(await checkCodexQuota({ store: flaky, now, probe: async () => { throw new Error('fetch failed'); } }), { available: true, basis: 'probe_inconclusive' });
-  for (const s of [store, stale, flaky]) s.close();
+  assert.equal(checkCodexQuota({ store, now: now + 120_000 }).available, true, 'a block ends at its reset time');
+  store.noteLlmSuccess(now + 130_000);
+  assert.deepEqual(checkCodexQuota({ store, now: now + 140_000 }), { available: true, basis: 'recent_success' });
+  store.close();
   resetInMemoryQuota();
 });
 
@@ -212,4 +204,63 @@ test('the dashboard serves daily usage by source for the statistics page', async
   const html = fs.readFileSync(new URL('../web/decision-stats.html', import.meta.url), 'utf8');
   assert.match(html, /id="llm-daily-body"/);
   assert.match(html, /\/pages\/llm-usage-section\.js/);
+});
+
+test('scoring calls run lean (task-only instructions, agent tools off); browsing calls keep the full agent', async () => {
+  resetInMemoryQuota();
+  const { LEAN_INSTRUCTIONS_PATH } = await import('../scripts/jobs/score-job.mjs');
+  const calls = [];
+  await runCodexExec({ prompt: 'x', schemaPath: '/s', cwd: '/tmp', binary: '/c', spawnProcess: fakeSpawn(jsonlOk({ ok: true }), 0, calls) });
+  await runCodexExec({ prompt: 'x', schemaPath: '/s', cwd: '/tmp', binary: '/c', liveSearch: true, spawnProcess: fakeSpawn(jsonlOk({ ok: true }), 0, calls) });
+  const [lean, browsing] = calls;
+  assert.ok(lean.includes(`model_instructions_file=${JSON.stringify(LEAN_INSTRUCTIONS_PATH)}`));
+  for (const feature of ['apps', 'browser_use', 'computer_use', 'plugins', 'shell_tool', 'multi_agent']) {
+    assert.ok(lean.join(' ').includes(`--disable ${feature}`), feature);
+  }
+  assert.equal(lean.at(-1), '-', 'the prompt is still read from stdin last');
+  assert.ok(fs.existsSync(LEAN_INSTRUCTIONS_PATH));
+  assert.ok(!browsing.some((arg) => arg.startsWith('model_instructions_file')));
+  assert.ok(!browsing.includes('--disable'));
+  assert.ok(browsing.includes('--search'));
+});
+
+test('resume analysis waits for a worthwhile batch or for the oldest job to wait long enough', async () => {
+  const { analyzeSuitableResumeGaps } = await import('../scripts/jobs.mjs');
+  const now = 100 * 3_600_000;
+  let calls = 0;
+  const analyzer = {
+    version: 'v', async analyzeBatchSettled(jobs, { onProgress }) {
+      calls += 1;
+      onProgress?.({ completed: jobs.length, total: jobs.length, failed: 0, results: [], failures: [] });
+      return { results: [], failures: [] };
+    },
+  };
+  const context = { resumeAvailable: true, profileHash: 'p', resumeHash: 'r', profile: '', currentResume: '' };
+  const storeWith = (ages) => ({
+    listResumeGapCandidates: () => ages.map((hours, index) => ({ jobKey: `j${index}`, profileHash: 'p', contentHash: `c${index}`, evaluatedAt: now - hours * 3_600_000 })),
+  });
+  const run = (ages, config = {}) => analyzeSuitableResumeGaps({ config, store: storeWith(ages), analyzer, candidateContext: context, now });
+
+  assert.equal((await run([1, 2])).status, 'deferred');
+  assert.equal(calls, 0);
+  await run([1, 2, 3, 4, 5]);
+  assert.equal(calls, 1, 'five waiting jobs fill a batch');
+  await run([13]);
+  assert.equal(calls, 2, 'one job that waited 13h is analyzed');
+  await run([1], { resumeGap: { minBatch: 1 } });
+  assert.equal(calls, 3);
+});
+
+test('the WhatsApp title prefilter reads the positive list and always_allow from portals.yml', async () => {
+  const { buildTitleFilter, loadTitleFilterPositive } = await import('../scripts/scan.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-portals-'));
+  const file = path.join(dir, 'portals.yml');
+  fs.writeFileSync(file, 'title_filter:\n  positive: ["Backend", "Data Engineer"]\n  negative: ["Junior"]\n  always_allow: ["Platform"]\n');
+  const loaded = loadTitleFilterPositive(file);
+  assert.deepEqual(loaded, { positive: ['Backend', 'Data Engineer'], always_allow: ['Platform'] });
+  const passes = buildTitleFilter({ ...loaded, negative: [] });
+  assert.equal(passes('Senior Backend Engineer at Acme · Tel Aviv'), true);
+  assert.equal(passes('Platform Team Lead'), true);
+  assert.equal(passes('Marketing Manager at Acme'), false);
+  assert.deepEqual(loadTitleFilterPositive(path.join(dir, 'missing.yml')), { positive: [], always_allow: [] });
 });

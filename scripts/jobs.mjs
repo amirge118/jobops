@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 import { loadJobsConfig, readCandidateContext } from './jobs/config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
@@ -12,7 +12,7 @@ import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
 import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
-import { createJobScorer, resolveCodexBinary, runCodexExec } from './jobs/score-job.mjs';
+import { createJobScorer } from './jobs/score-job.mjs';
 import { checkCodexQuota, setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { createJobStore, sourceKindOf } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
@@ -21,7 +21,7 @@ import { scanLinkedIn } from './jobs/sources/linkedin.mjs';
 import { createRunLifecycle, describeFailure, hasFailureReason, safeTargetUrl } from './jobs/diagnostics.mjs';
 import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
-import { buildNegativeTitleFilter, loadTitleFilterNegative } from './scan.mjs';
+import { buildNegativeTitleFilter, buildTitleFilter, loadTitleFilterNegative, loadTitleFilterPositive } from './scan.mjs';
 
 function numericFlag(argv, name, { max = Infinity } = {}) {
   const index = argv.indexOf(name);
@@ -543,6 +543,18 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   const passesNegativeTitleFilter = config.rootDir
     ? buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')))
     : () => true;
+  // The positive half: a WhatsApp page whose title area names none of the
+  // target roles never reaches Codex (a scored job costs ~2.6k+ tokens).
+  // Checked against a wider 600-char prefix than the negative check, and
+  // validated on 2026-09-29: none of the suitable WhatsApp jobs on record
+  // would have been dropped even at 300 chars. Disable with
+  // sources.whatsapp.titlePrefilter: false.
+  const positiveTitle = config.rootDir && config.sources?.whatsapp?.titlePrefilter !== false
+    ? loadTitleFilterPositive(path.join(config.rootDir, 'portals.yml'))
+    : { positive: [] };
+  const passesPositiveTitleFilter = positiveTitle.positive.length
+    ? buildTitleFilter({ ...positiveTitle, negative: [] })
+    : () => true;
   const recordFailure = (candidate, code, reason) => {
     const fallback = /scor/.test(code) ? 'scoring_failed' : /browser/.test(code) ? 'browser_error' : 'page_uncertain';
     // Source-specific codes with their own explanation (linkedin_*) keep it,
@@ -640,15 +652,23 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     // prefix (where a fetched job page's own title/heading actually lives),
     // not the whole page — matching the ATS filter's intent of screening a
     // title, not a description.
-    if (String(candidate.source || '').startsWith('WhatsApp:') && !passesNegativeTitleFilter(page.content.slice(0, 300))) {
+    const fromWhatsApp = String(candidate.source || '').startsWith('WhatsApp:');
+    const titleBlock = !fromWhatsApp ? null
+      : !passesNegativeTitleFilter(page.content.slice(0, 300)) ? 'negative'
+        : !passesPositiveTitleFilter(page.content.slice(0, 600)) ? 'positive' : null;
+    if (titleBlock) {
       titleFilteredCount += 1;
       store.saveEvaluation(candidate.jobKey, {
         company: candidate.company || 'חברה לא ידועה',
         title: candidate.title || 'משרה לא ידועה',
-        summary: 'המשרה סוננה מקומית על פי מילת מפתח שלילית בכותרת, לפני שליחה לניקוד.',
+        summary: titleBlock === 'negative'
+          ? 'המשרה סוננה מקומית על פי מילת מפתח שלילית בכותרת, לפני שליחה לניקוד.'
+          : 'המשרה סוננה מקומית: תחילת העמוד אינה מזכירה אף תפקיד יעד, לפני שליחה לניקוד.',
         score: 1,
         fitLabel: 'לא מתאים',
-        decisionReason: 'נחסמה על ידי סינון מילות מפתח (title_filter.negative ב-portals.yml).',
+        decisionReason: titleBlock === 'negative'
+          ? 'נחסמה על ידי סינון מילות מפתח (title_filter.negative ב-portals.yml).'
+          : 'לא נמצאה אף מילת תפקיד מ-title_filter.positive ב-portals.yml בכותרת העמוד.',
         suitable: false,
         applyUrl: page.finalUrl || candidate.url,
         activeStatus: page.status,
@@ -663,7 +683,7 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
 
     pendingScores.push({ candidate, page });
   }
-  if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי מילות מפתח שליליות, לפני שליחה לניקוד.`);
+  if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי כותרת (מילות מפתח שליליות או ללא תפקיד יעד), לפני שליחה לניקוד.`);
 
   const persistResult = (result) => {
     const item = pendingScores.find(({ candidate }) => candidate.jobKey === result.jobKey);
@@ -702,6 +722,7 @@ export async function analyzeSuitableResumeGaps({
   candidateContext,
   onStage = () => {},
   limit = 50,
+  now = Date.now(),
 }) {
   if (!candidateContext.resumeAvailable) {
     console.log('ניתוח שיפורי קורות החיים דולג: חסר profile/03-current-resume.md.');
@@ -724,6 +745,17 @@ export async function analyzeSuitableResumeGaps({
 
   if (candidates.length === 0) {
     return { status: 'complete', analyzed: 0, failed: 0 };
+  }
+
+  // Resume analysis is not urgent, and every Codex call pays a fixed ~6.5k
+  // input tokens before any job text. Wait until a batch is worth it, or
+  // until the oldest suitable job has waited long enough.
+  const minBatch = Math.max(1, Number(config.resumeGap?.minBatch) || 5);
+  const maxWaitMs = Math.max(0, Number(config.resumeGap?.maxWaitHours ?? 12)) * 60 * 60 * 1000;
+  const oldestEvaluatedAt = Math.min(...candidates.map((job) => Number(job.evaluatedAt) || now));
+  if (candidates.length < minBatch && now - oldestEvaluatedAt < maxWaitMs) {
+    console.log(`ניתוח קורות חיים נדחה: ${candidates.length} משרות מתאימות ממתינות (מנתחים מ-${minBatch}, או אחרי ${Math.round(maxWaitMs / 3_600_000)} שעות).`);
+    return { status: 'deferred', analyzed: 0, failed: 0, waiting: candidates.length };
   }
 
   onStage('resume-gap-analysis');
@@ -812,24 +844,6 @@ export async function runJobs(argv = process.argv.slice(2)) {
   }
 }
 
-const PROBE_SCHEMA_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'jobs', 'probe.schema.json');
-
-// A tiny call that tells whether the ChatGPT/Codex account has quota left.
-// A call rejected for the usage limit costs nothing.
-export function probeCodex(config) {
-  return runCodexExec({
-    prompt: 'Return {"ok": true}.',
-    schemaPath: PROBE_SCHEMA_PATH,
-    cwd: config.rootDir,
-    model: config.scoring?.model || null,
-    reasoningEffort: 'low',
-    purpose: 'probe',
-    items: 0,
-    binary: resolveCodexBinary(config),
-    timeoutMs: 60_000,
-  });
-}
-
 function formatTokens(value) {
   return Number(value || 0).toLocaleString('en-US');
 }
@@ -874,7 +888,7 @@ async function runJobsLocked(options, config) {
   // coverage forward for jobs that then wait. Skip the whole run instead:
   // every source resumes from its last success once quota is back.
   if (!options.dryRun) {
-    const quota = await checkCodexQuota({ store, probe: () => probeCodex(config) });
+    const quota = checkCodexQuota({ store });
     if (!quota.available) {
       store.noteLlmSkip();
       const until = new Date(quota.until).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
