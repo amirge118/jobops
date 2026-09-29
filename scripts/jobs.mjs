@@ -13,7 +13,7 @@ import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
 import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
 import { createJobScorer } from './jobs/score-job.mjs';
-import { checkCodexQuota, setCodexUsageRecorder } from './jobs/llm-usage.mjs';
+import { checkCodexQuota, readCodexRateLimits, setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { createJobStore, sourceKindOf } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
@@ -888,7 +888,7 @@ async function runJobsLocked(options, config) {
   // coverage forward for jobs that then wait. Skip the whole run instead:
   // every source resumes from its last success once quota is back.
   if (!options.dryRun) {
-    const quota = checkCodexQuota({ store });
+    const quota = checkCodexQuota({ store, readRateLimits: () => readCodexRateLimits({ fsModule: fs }) });
     if (!quota.available) {
       store.noteLlmSkip();
       const until = new Date(quota.until).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });

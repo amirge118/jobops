@@ -6,6 +6,12 @@ import { buildDecisionStats } from '../jobs/decision-stats.mjs';
 import { buildSourceValue, SOURCE_VALUE_WINDOW_DAYS } from '../jobs/source-value.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from '../liveness-browser.mjs';
 import { linkedinWindowSettings } from '../jobs/linkedin-window.mjs';
+import { readCodexRateLimits } from '../jobs/llm-usage.mjs';
+import fs from 'node:fs';
+
+function safeRateLimits() {
+  try { return readCodexRateLimits({ fsModule: fs }); } catch { return null; }
+}
 import { DEFAULT_LINKEDIN_LIMITS } from '../jobs/sources/linkedin.mjs';
 
 export function dashboardSettings(config) {
@@ -139,6 +145,7 @@ export function createDashboardQueries(config, action) {
       model: config.scoring?.model || 'default',
       reasoningEffort: config.scoring?.reasoningEffort || null,
       quota: day.quota,
+      rateLimits: config.demo ? null : safeRateLimits(),
       day: day.totals,
       week: week.totals,
       runs: week.runs,

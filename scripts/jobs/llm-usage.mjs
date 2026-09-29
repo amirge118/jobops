@@ -110,7 +110,7 @@ function normalizeUsage(usage) {
 // costs ~14k input tokens (Codex's own agent instructions), while a call
 // rejected for the limit costs nothing, so simply running is the cheapest
 // check. The first rejection then stops the rest of that run.
-export function checkCodexQuota({ store, now = Date.now() }) {
+export function checkCodexQuota({ store, now = Date.now(), readRateLimits = () => null }) {
   const memory = inMemoryBlockedUntil(now);
   if (memory) return { available: false, until: memory, basis: 'memory' };
   const state = store.getLlmQuota();
@@ -118,5 +118,100 @@ export function checkCodexQuota({ store, now = Date.now() }) {
     noteUsageLimit(state.blockedUntil);
     return { available: false, until: state.blockedUntil, basis: 'stored' };
   }
-  return { available: true, basis: state.lastSuccessAt ? 'recent_success' : 'unknown' };
+  // Free: Codex's own local record of the account's usage windows.
+  let rateLimits = null;
+  try { rateLimits = readRateLimits(); } catch { rateLimits = null; }
+  const until = rateLimitBlockedUntil(rateLimits, now);
+  if (until) {
+    store.setLlmBlocked({ until, reason: 'usage_limit', at: now });
+    noteUsageLimit(until);
+    return { available: false, until, basis: 'codex_rate_limits', rateLimits };
+  }
+  return { available: true, basis: rateLimits ? 'codex_rate_limits' : state.lastSuccessAt ? 'recent_success' : 'unknown', rateLimits };
+}
+
+// ---- Free quota status from Codex's own session files ----------------------
+// Every interactive Codex turn writes a `token_count` event with the account's
+// rate-limit windows (5-hour "primary", weekly "secondary": used_percent and
+// resets_at) to ~/.codex/sessions/**/rollout-*.jsonl. Reading the newest one
+// costs nothing — no Codex call — and tells whether a run could score at all.
+// Only the rate_limits object is read; conversation content is never parsed.
+
+const TAIL_BYTES = 512 * 1024;
+const RECENT_FILES = 8;
+
+function listRolloutFiles(root, fsModule) {
+  const files = [];
+  const walk = (dir, depth) => {
+    let entries = [];
+    try { entries = fsModule.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory() && depth < 3) walk(full, depth + 1);
+      else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) {
+        try { files.push({ file: full, mtimeMs: fsModule.statSync(full).mtimeMs }); } catch { /* raced */ }
+      }
+    }
+  };
+  walk(root, 0);
+  return files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, RECENT_FILES);
+}
+
+function lastRateLimitsIn(file, fsModule) {
+  let text;
+  try {
+    const { size } = fsModule.statSync(file);
+    const fd = fsModule.openSync(file, 'r');
+    try {
+      const length = Math.min(size, TAIL_BYTES);
+      const buffer = Buffer.alloc(length);
+      fsModule.readSync(fd, buffer, 0, length, size - length);
+      text = buffer.toString('utf8');
+    } finally { fsModule.closeSync(fd); }
+  } catch { return null; }
+  const lines = text.split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].includes('"rate_limits"')) continue;
+    try {
+      const event = JSON.parse(lines[index]);
+      const limits = event.payload?.rate_limits ?? event.rate_limits;
+      if (limits) return { limits, observedAt: Date.parse(event.timestamp) || null };
+    } catch { /* partial first line of the tail */ }
+  }
+  return null;
+}
+
+function normalizeWindow(window) {
+  if (!window || !Number.isFinite(Number(window.used_percent))) return null;
+  return {
+    usedPercent: Number(window.used_percent),
+    windowMinutes: Number(window.window_minutes) || null,
+    resetsAt: Number(window.resets_at) ? Number(window.resets_at) * 1000 : null,
+  };
+}
+
+export function readCodexRateLimits({ codexHome = `${process.env.HOME}/.codex`, fsModule } = {}) {
+  const files = listRolloutFiles(`${codexHome}/sessions`, fsModule);
+  let newest = null;
+  for (const { file } of files) {
+    const found = lastRateLimitsIn(file, fsModule);
+    if (found && (!newest || (found.observedAt || 0) > (newest.observedAt || 0))) newest = found;
+  }
+  if (!newest) return null;
+  return {
+    observedAt: newest.observedAt,
+    primary: normalizeWindow(newest.limits.primary),
+    secondary: normalizeWindow(newest.limits.secondary),
+    planType: newest.limits.plan_type || null,
+    reachedType: newest.limits.rate_limit_reached_type || null,
+  };
+}
+
+// The earliest moment the account can run again, or null when it can run now.
+export function rateLimitBlockedUntil(rateLimits, now = Date.now()) {
+  if (!rateLimits) return null;
+  const exhausted = [rateLimits.primary, rateLimits.secondary]
+    .filter((window) => window && window.usedPercent >= 100 && window.resetsAt && window.resetsAt > now);
+  if (!exhausted.length) return null;
+  return Math.max(...exhausted.map((window) => window.resetsAt));
 }

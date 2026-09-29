@@ -131,13 +131,13 @@ test('the quota check uses only recorded evidence and never spends a call', () =
   resetInMemoryQuota();
   const store = tempStore();
   const now = 10_000_000;
-  assert.deepEqual(checkCodexQuota({ store, now }), { available: true, basis: 'unknown' });
+  assert.deepEqual(checkCodexQuota({ store, now }), { available: true, basis: 'unknown', rateLimits: null });
   store.setLlmBlocked({ until: now + 60_000, at: now });
   assert.deepEqual(checkCodexQuota({ store, now }), { available: false, until: now + 60_000, basis: 'stored' });
   resetInMemoryQuota();
   assert.equal(checkCodexQuota({ store, now: now + 120_000 }).available, true, 'a block ends at its reset time');
   store.noteLlmSuccess(now + 130_000);
-  assert.deepEqual(checkCodexQuota({ store, now: now + 140_000 }), { available: true, basis: 'recent_success' });
+  assert.deepEqual(checkCodexQuota({ store, now: now + 140_000 }), { available: true, basis: 'recent_success', rateLimits: null });
   store.close();
   resetInMemoryQuota();
 });
@@ -263,4 +263,47 @@ test('the WhatsApp title prefilter reads the positive list and always_allow from
   assert.equal(passes('Platform Team Lead'), true);
   assert.equal(passes('Marketing Manager at Acme'), false);
   assert.deepEqual(loadTitleFilterPositive(path.join(dir, 'missing.yml')), { positive: [], always_allow: [] });
+});
+
+test('the free quota check reads the newest usage windows from Codex session files', async () => {
+  const { readCodexRateLimits, rateLimitBlockedUntil } = await import('../scripts/jobs/llm-usage.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-codex-home-'));
+  const day = path.join(home, 'sessions', '2026', '09', '29');
+  fs.mkdirSync(day, { recursive: true });
+  const event = (timestamp, primary, secondary) => JSON.stringify({ timestamp, type: 'event_msg', payload: { type: 'token_count',
+    rate_limits: { primary: { used_percent: primary, window_minutes: 300, resets_at: 1_790_700_000 },
+      secondary: { used_percent: secondary, window_minutes: 10080, resets_at: 1_791_000_000 }, plan_type: 'plus' } } });
+  fs.writeFileSync(path.join(day, 'rollout-a.jsonl'), [
+    JSON.stringify({ type: 'response_item', payload: { content: 'private conversation text' } }),
+    event('2026-09-29T08:00:00Z', 40, 50),
+    event('2026-09-29T09:00:00Z', 60, 52),
+  ].join('\n'));
+  fs.writeFileSync(path.join(day, 'rollout-b.jsonl'), event('2026-09-29T07:00:00Z', 10, 20));
+
+  const limits = readCodexRateLimits({ codexHome: home, fsModule: fs });
+  assert.deepEqual(limits.primary, { usedPercent: 60, windowMinutes: 300, resetsAt: 1_790_700_000_000 });
+  assert.equal(limits.secondary.usedPercent, 52);
+  assert.equal(limits.observedAt, Date.parse('2026-09-29T09:00:00Z'));
+  assert.equal(rateLimitBlockedUntil(limits, 1_790_600_000_000), null);
+  assert.equal(rateLimitBlockedUntil({ ...limits, primary: { ...limits.primary, usedPercent: 100 } }, 1_790_600_000_000), 1_790_700_000_000);
+  assert.equal(rateLimitBlockedUntil({ ...limits, primary: { ...limits.primary, usedPercent: 100 } }, 1_790_800_000_000), null, 'a passed reset no longer blocks');
+  assert.equal(readCodexRateLimits({ codexHome: path.join(home, 'missing'), fsModule: fs }), null);
+});
+
+test('an exhausted window in Codex\'s own record skips the run without any call', () => {
+  resetInMemoryQuota();
+  const store = tempStore();
+  const now = 1_790_600_000_000;
+  const exhausted = { observedAt: now - 60_000, primary: { usedPercent: 100, windowMinutes: 300, resetsAt: now + 3_600_000 }, secondary: null };
+  const blocked = checkCodexQuota({ store, now, readRateLimits: () => exhausted });
+  assert.deepEqual([blocked.available, blocked.until, blocked.basis], [false, now + 3_600_000, 'codex_rate_limits']);
+  assert.equal(store.getLlmQuota().blockedUntil, now + 3_600_000);
+  resetInMemoryQuota();
+  const fresh = tempStore();
+  const open = checkCodexQuota({ store: fresh, now, readRateLimits: () => ({ ...exhausted, primary: { ...exhausted.primary, usedPercent: 40 } }) });
+  assert.deepEqual([open.available, open.basis], [true, 'codex_rate_limits']);
+  assert.equal(checkCodexQuota({ store: fresh, now, readRateLimits: () => { throw new Error('unreadable'); } }).available, true);
+  store.close();
+  fresh.close();
+  resetInMemoryQuota();
 });

@@ -12,6 +12,7 @@
 //   - the oldest new job has waited `maxWaitMinutes` (so nothing sits long).
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -19,6 +20,7 @@ import { loadJobsConfig } from './config.mjs';
 import { canonicalizeJobUrl } from './core.mjs';
 import { knownNonJobReason } from './fetch-page.mjs';
 import { createJobStore } from './store.mjs';
+import { rateLimitBlockedUntil, readCodexRateLimits } from './llm-usage.mjs';
 
 export const DEFAULT_TRIGGER = Object.freeze({ minNewJobs: 10, maxWaitMinutes: 120, lookbackDays: 7 });
 
@@ -94,7 +96,12 @@ export async function runWhatsAppTrigger({ now = Date.now(), run = runBacklogPro
   } finally { store.close(); }
   let decision = shouldProcess(state);
   // Without Codex quota nothing could be scored; the backlog simply keeps.
-  if (decision.run && quota.blockedUntil && quota.blockedUntil > now) decision = { run: false, reason: 'llm_quota_exhausted' };
+  // Both checks are free: the recorded block and Codex's own local record.
+  let limitedUntil = null;
+  try { limitedUntil = rateLimitBlockedUntil(readCodexRateLimits({ fsModule: fs }), now); } catch { limitedUntil = null; }
+  if (decision.run && ((quota.blockedUntil && quota.blockedUntil > now) || limitedUntil)) {
+    decision = { run: false, reason: 'llm_quota_exhausted' };
+  }
   const stamp = new Date(now).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
   log(`[${stamp}] WhatsApp: ${state.pendingMessages} הודעות ממתינות, ${state.newJobs} משרות חדשות` +
     `${state.newJobs ? `, הוותיקה ממתינה ${state.waitedMinutes} דק׳` : ''} → ${decision.run ? 'מעבד עכשיו' : 'ממתין'} (${decision.reason}).`);
