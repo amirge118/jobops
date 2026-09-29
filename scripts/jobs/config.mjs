@@ -42,12 +42,17 @@ export function readCandidateContext(config) {
     path.join(config.rootDir, 'profile', '02-preferences.md'),
     'Missing candidate preferences',
   );
+  const resumePath = path.join(config.rootDir, 'profile', '03-current-resume.md');
   const profile = fs.readFileSync(profilePath, 'utf8');
   const preferences = fs.readFileSync(preferencesPath, 'utf8');
+  const currentResume = fs.existsSync(resumePath) ? fs.readFileSync(resumePath, 'utf8') : '';
+  const resumeAvailable = currentResume.trim().length >= 20 &&
+    !/\b(?:TODO|REPLACE THIS|PASTE (?:YOUR )?RESUME)\b/i.test(currentResume);
   const profileHash = createHash('sha256')
     .update(profile)
     .update('\n--- preferences ---\n')
     .update(preferences)
     .digest('hex');
-  return { profile, preferences, profileHash };
+  const resumeHash = createHash('sha256').update(currentResume).digest('hex');
+  return { profile, preferences, profileHash, currentResume, resumeHash, resumeAvailable };
 }

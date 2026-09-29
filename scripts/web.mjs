@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadJobsConfig } from './jobs/config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { createDemoEnvironment, runDemoAction } from './jobs/demo.mjs';
-import { createJobStore } from './jobs/store.mjs';
+import { createJobStore, JOB_DECISIONS } from './jobs/store.mjs';
 import {
   CompanyRegistryError,
   normalizeCompanySource,
@@ -23,6 +23,7 @@ import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { blockersForAction, createReadinessService } from './dashboard/readiness.mjs';
 import { buildScanDiagnosis } from './dashboard/scan-diagnosis.mjs';
 import { parseDashboardOptions } from './jobs/dashboard.mjs';
+import { setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
 
 export { runCommand, sanitizeCommandOutput } from './dashboard/actions.mjs';
@@ -117,6 +118,15 @@ export function createDashboardServer({
     bootstrapStore.close();
   }
   const { action, startAction } = createActionController(config, execute);
+  // Company research runs Codex inside this process; its usage is recorded
+  // like scan usage (scans are separate processes with their own recorder).
+  if (!config.demo) {
+    setCodexUsageRecorder((entry) => {
+      const store = createJobStore(config.jobsDbPath);
+      try { store.recordCodexCall(entry); }
+      finally { store.close(); }
+    });
+  }
   const queries = createDashboardQueries(config, action);
   const readinessService = readiness || createReadinessService(config, () => {
     const store = createJobStore(config.jobsDbPath);
@@ -173,6 +183,17 @@ export function createDashboardServer({
         return;
       }
 
+      if (request.method === 'GET' && url.pathname === '/api/llm-usage/daily') {
+        const days = Number(url.searchParams.get('days') || 14);
+        sendJson(response, 200, queries.dailyLlmUsage(days));
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/decision-stats') {
+        sendJson(response, 200, queries.decisionStats());
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname === '/api/diagnostics/history') {
         sendJson(response, 200, queries.diagnosticHistory());
         return;
@@ -180,6 +201,63 @@ export function createDashboardServer({
 
       if (request.method === 'GET' && url.pathname === '/api/companies') {
         sendJson(response, 200, queries.companies());
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/personal-area/items') {
+        const store = createJobStore(config.jobsDbPath);
+        try { sendJson(response, 200, { items: store.listPersonalImprovements() }); }
+        finally { store.close(); }
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/personal-area/items') {
+        const body = requireObjectBody(await readJson(request), [
+          'keyword', 'kind', 'importance', 'explanation', 'suggestion',
+          'sourceCompany', 'sourceTitle', 'sourceJobKey',
+        ]);
+        const store = createJobStore(config.jobsDbPath);
+        try {
+          const { created, item } = store.addPersonalImprovement(body);
+          sendJson(response, created ? 201 : 200, { created, item });
+        } finally { store.close(); }
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/personal-area/items/reorder') {
+        const body = requireObjectBody(await readJson(request), ['orderedIds']);
+        const store = createJobStore(config.jobsDbPath);
+        try { sendJson(response, 200, { items: store.reorderPersonalImprovements(body.orderedIds) }); }
+        finally { store.close(); }
+        return;
+      }
+
+      const personalImprovementDeleteMatch = request.method === 'DELETE'
+        ? url.pathname.match(/^\/api\/personal-area\/items\/([1-9]\d{0,8})$/)
+        : null;
+      if (personalImprovementDeleteMatch) {
+        const store = createJobStore(config.jobsDbPath);
+        try {
+          const removed = store.removePersonalImprovement(Number(personalImprovementDeleteMatch[1]));
+          if (!removed) { sendJson(response, 404, { error: 'Item was not found' }); return; }
+          sendJson(response, 200, { removed: true });
+        } finally { store.close(); }
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/linkedin') {
+        sendJson(response, 200, queries.linkedin());
+        return;
+      }
+
+      // Searches themselves are defined only in config/jobs.yml; the dashboard
+      // can only switch the whole source off or on. The switch changes what
+      // the next scan requests, so it gets the non-simple-JSON CSRF guard.
+      if (request.method === 'POST' && url.pathname === '/api/linkedin/enabled') {
+        requireJsonContentType(request);
+        const body = requireObjectBody(await readJson(request), ['enabled']);
+        if (typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
+        sendJson(response, 200, queries.setLinkedInEnabled(body.enabled));
         return;
       }
 
@@ -454,20 +532,25 @@ export function createDashboardServer({
         return;
       }
 
-      const archiveMatch = request.method === 'POST'
-        ? url.pathname.match(/^\/api\/jobs\/([a-f0-9]{24})\/archive$/)
+      const decisionMatch = request.method === 'POST'
+        ? url.pathname.match(/^\/api\/jobs\/([a-f0-9]{24})\/decision$/)
         : null;
-      if (archiveMatch) {
+      if (decisionMatch) {
+        const body = requireObjectBody(await readJson(request), ['decision']);
+        if (!JOB_DECISIONS.has(body.decision)) {
+          sendJson(response, 400, { error: 'סוג החלטה לא מוכר' });
+          return;
+        }
         const store = createJobStore(config.jobsDbPath);
         try {
-          if (!store.archiveJob(archiveMatch[1])) {
+          if (!store.decideJob(decisionMatch[1], body.decision)) {
             sendJson(response, 404, { error: 'המשרה לא נמצאה או שכבר הועברה לארכיון' });
             return;
           }
         } finally {
           store.close();
         }
-        sendJson(response, 200, { archived: true, state: snapshot() });
+        sendJson(response, 200, { archived: true, decision: body.decision });
         return;
       }
 

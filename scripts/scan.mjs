@@ -121,12 +121,17 @@ function resolveProvider(entry, providers, { skipIds = [] } = {}) {
 
 // ── Title filter ────────────────────────────────────────────────────
 
+// `always_allow` (optional) passes a title even when a negative matches —
+// e.g. "Full Stack (Backend Oriented)" is a backend role despite the
+// "Full Stack" negative. Same precedence as location_filter.always_allow.
 export function buildTitleFilter(titleFilter) {
   const positive = (titleFilter?.positive || []).map(k => k.toLowerCase());
   const negative = (titleFilter?.negative || []).map(k => k.toLowerCase());
+  const alwaysAllow = normalizeKeywordList(titleFilter?.always_allow);
 
   return (title) => {
     const lower = title.toLowerCase();
+    if (alwaysAllow.some(k => lower.includes(k))) return true;
     const hasPositive = positive.length === 0 || positive.some(k => lower.includes(k));
     const hasNegative = negative.some(k => lower.includes(k));
     return hasPositive && !hasNegative;

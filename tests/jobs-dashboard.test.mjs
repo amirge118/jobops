@@ -7,6 +7,7 @@ import path from 'node:path';
 import { buildActionCommand, parseBacklogOptions, parseDashboardOptions } from '../scripts/jobs/dashboard.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import { createDashboardServer, sanitizeCommandOutput } from '../scripts/web.mjs';
+import { blockersForAction } from '../scripts/dashboard/readiness.mjs';
 
 const readyState = {
   checkedAt: 1,
@@ -19,11 +20,70 @@ const readyService = { inspect: async () => readyState };
 
 test('dashboard scan options become a shell-free jobs command', () => {
   const options = parseDashboardOptions({ days: 2, source: 'whatsapp', open: true }, 14);
-  assert.deepEqual(options, { days: 2, source: 'whatsapp', open: true });
+  assert.deepEqual(options, { days: 2, source: 'whatsapp', open: true, linkedinHours: null });
   assert.deepEqual(buildActionCommand('scan', options, '/project'), {
     command: process.execPath,
     args: ['/project/scripts/jobs.mjs', '--days', '2', '--whatsapp-only', '--open'],
   });
+});
+
+test('dashboard LinkedIn scans map to a LinkedIn-only command with an optional manual window', () => {
+  const automatic = parseDashboardOptions({ days: 2, source: 'linkedin' }, 14);
+  assert.deepEqual(buildActionCommand('scan', automatic, '/project').args,
+    ['/project/scripts/jobs.mjs', '--days', '2', '--linkedin-only']);
+  const manual = parseDashboardOptions({ days: 2, source: 'all', linkedinHours: 12 }, 14);
+  assert.deepEqual(buildActionCommand('scan', manual, '/project').args,
+    ['/project/scripts/jobs.mjs', '--days', '2', '--linkedin-hours', '12']);
+  assert.throws(() => parseDashboardOptions({ days: 2, source: 'ats', linkedinHours: 12 }, 14), /linkedinHours/);
+  assert.throws(() => parseDashboardOptions({ days: 2, source: 'linkedin', linkedinHours: 1_000 }, 14), /linkedinHours/);
+  assert.throws(() => parseDashboardOptions({ days: 2, source: 'linkedin', linkedinHours: '1; rm -rf /' }, 14), /linkedinHours/);
+});
+
+test('dashboard LinkedIn API shows config searches read-only and only toggles the whole source', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-linkedin-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'data', 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    sources: {
+      whatsapp: { groups: [] },
+      linkedin: { enabled: true, searches: [{ key: 'analyst', label: 'Analyst', keywords: '"data analyst"', location: 'Israel' }] },
+    },
+  };
+  fs.mkdirSync(path.dirname(config.jobsDbPath), { recursive: true });
+  const server = createDashboardServer({ config, readiness: readyService });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const post = (pathname, body, headers = { 'Content-Type': 'application/json' }) =>
+    fetch(`${baseUrl}${pathname}`, { method: 'POST', headers, body: JSON.stringify(body) });
+
+  const initial = await fetch(`${baseUrl}/api/linkedin`).then((response) => response.json());
+  assert.equal(initial.enabled, true);
+  assert.deepEqual(initial.searches.map((search) => search.label), ['Analyst']);
+
+  // Searches cannot be created or edited from the browser.
+  assert.equal((await post('/api/linkedin/searches', { keywords: 'backend', location: 'Israel' })).status, 404);
+  assert.equal((await post(`/api/linkedin/searches/${initial.searches[0].id}/enabled`, { enabled: false })).status, 404);
+
+  assert.equal((await post('/api/linkedin/enabled', { enabled: 'no' })).status, 400);
+  assert.equal((await post('/api/linkedin/enabled', { enabled: false }, { 'Content-Type': 'text/plain' })).status, 415);
+  const disabled = await post('/api/linkedin/enabled', { enabled: false }).then((response) => response.json());
+  assert.equal(disabled.enabled, false);
+  const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  assert.equal(scan.linkedin.enabled, false);
+  assert.equal(scan.linkedin.searches.length, 1);
+});
+
+test('a LinkedIn-only scan needs the scorer but not the browser or WhatsApp collector', () => {
+  const state = {
+    browser: { status: 'blocked', code: 'browser_unavailable' },
+    scorer: { status: 'ready', code: null },
+    collector: { status: 'blocked', code: 'collector_offline' },
+  };
+  assert.deepEqual(blockersForAction(state, 'scan', { source: 'linkedin' }), []);
+  assert.deepEqual(blockersForAction(state, 'scan', { source: 'all' }).map((item) => item.code), ['browser_unavailable', 'collector_offline']);
 });
 
 test('dashboard accepts only bounded days and known sources', () => {
@@ -236,7 +296,7 @@ test('dashboard API exposes state and prevents overlapping actions', async (cont
   assert.equal(finished.action.output, 'started');
 });
 
-test('dashboard API archives one known job and rejects unknown job keys', async (context) => {
+test('dashboard API records a decision, archives the job, and rejects unknown decisions or keys', async (context) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-archive-'));
   context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   const config = {
@@ -266,14 +326,30 @@ test('dashboard API archives one known job and rejects unknown job keys', async 
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-  const archivedResponse = await fetch(`${baseUrl}/api/jobs/${sighting.jobKey}/archive`, { method: 'POST' });
-  assert.equal(archivedResponse.status, 200);
-  const archived = await archivedResponse.json();
-  assert.equal(archived.archived, true);
-  assert.equal(archived.state.jobs.length, 0);
+  const post = (pathname, body) => fetch(`${baseUrl}${pathname}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
 
-  const missingResponse = await fetch(`${baseUrl}/api/jobs/aaaaaaaaaaaaaaaaaaaaaaaa/archive`, { method: 'POST' });
+  const unknownDecision = await post(`/api/jobs/${sighting.jobKey}/decision`, { decision: 'archive' });
+  assert.equal(unknownDecision.status, 400);
+  assert.equal((await (await fetch(`${baseUrl}/api/jobs`)).json()).jobs.length, 1, 'a rejected request must not archive');
+
+  const decidedResponse = await post(`/api/jobs/${sighting.jobKey}/decision`, { decision: 'too_senior' });
+  assert.equal(decidedResponse.status, 200);
+  assert.deepEqual(await decidedResponse.json(), { archived: true, decision: 'too_senior' });
+  assert.equal((await (await fetch(`${baseUrl}/api/jobs`)).json()).jobs.length, 0);
+
+  const stats = await (await fetch(`${baseUrl}/api/decision-stats`)).json();
+  assert.equal(stats.windows.all.byDecision.too_senior, 1);
+  assert.equal(stats.recent[0].company, 'Example');
+  assert.equal(stats.recent[0].applyUrl, null, 'declined jobs do not keep a link in the stats view');
+
+  const again = await post(`/api/jobs/${sighting.jobKey}/decision`, { decision: 'interested' });
+  assert.equal(again.status, 404);
+  const missingResponse = await post('/api/jobs/aaaaaaaaaaaaaaaaaaaaaaaa/decision', { decision: 'interested' });
   assert.equal(missingResponse.status, 404);
+  assert.equal((await fetch(`${baseUrl}/api/jobs/${sighting.jobKey}/archive`, { method: 'POST' })).status, 404,
+    'the plain archive route was replaced by recorded decisions');
 });
 
 test('dashboard reports a failure breakdown with retryable flags and can bulk-archive the unretryable ones', async (context) => {

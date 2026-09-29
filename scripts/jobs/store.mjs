@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-import { canonicalizeJobUrl, normalizeCompanyRole } from './core.mjs';
+import { canonicalizeJobUrl, normalizeCompanyRole, resumeGapInputHash } from './core.mjs';
 import {
   COMPANY_STATUSES,
   CompanyRegistryError,
@@ -16,6 +16,7 @@ import {
 } from './company-registry.mjs';
 import { describeFailure, observedRun, processState } from './diagnostics.mjs';
 import { normalizeWhatsAppAnchor } from './sources/whatsapp-history.mjs';
+import { linkedinQueryHash } from './linkedin-window.mjs';
 
 function stableJobKey(canonicalUrl) {
   return createHash('sha256').update(canonicalUrl).digest('hex').slice(0, 24);
@@ -27,6 +28,94 @@ function parseSources(value) {
   } catch {
     return [];
   }
+}
+
+const SOURCE_KINDS = new Set(['ats', 'whatsapp', 'linkedin']);
+
+// Calendar day in Israel for a UTC timestamp (YYYY-MM-DD).
+export function israelDay(timestamp) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(new Date(Number(timestamp)));
+}
+
+function normalizeSourceMix(mix) {
+  if (!mix || typeof mix !== 'object') return null;
+  const clean = Object.fromEntries(Object.entries(mix)
+    .filter(([source, count]) => (SOURCE_KINDS.has(source) || source === 'other') && Number.isInteger(count) && count > 0));
+  return Object.keys(clean).length ? JSON.stringify(clean) : null;
+}
+
+export function sourceKindOf(source) {
+  const value = String(source || '');
+  if (/^whatsapp:/i.test(value)) return 'whatsapp';
+  if (/^linkedin:/i.test(value)) return 'linkedin';
+  if (/^ats:/i.test(value)) return 'ats';
+  return 'other';
+}
+
+export function sourceMixOf(sources) {
+  const mix = {};
+  for (const source of sources) {
+    const kind = sourceKindOf(source);
+    mix[kind] = (mix[kind] || 0) + 1;
+  }
+  return mix;
+}
+
+function sourceKinds(sources) {
+  const kinds = new Set();
+  for (const source of sources) {
+    if (/^whatsapp:/i.test(source)) kinds.add('whatsapp');
+    else if (/^linkedin:/i.test(source)) kinds.add('linkedin');
+    else if (/^ats:/i.test(source)) kinds.add('ats');
+  }
+  return [...kinds];
+}
+
+const LINKEDIN_KEYWORDS_PATTERN = /^[\p{L}\p{N} "'()+#.&/,-]+$/u;
+
+function normalizeLinkedInSearch(input = {}) {
+  const text = (value, max) => String(value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, max);
+  const keywords = text(input.keywords, 200);
+  const label = text(input.label, 80) || keywords.slice(0, 80);
+  const location = text(input.location, 120) || null;
+  const geoId = text(input.geoId ?? input.geo_id, 20) || null;
+  const key = text(input.key ?? input.search_key, 64) || null;
+  if (!keywords || !LINKEDIN_KEYWORDS_PATTERN.test(keywords)) {
+    throw Object.assign(new Error('LinkedIn keywords are required and may contain only letters, digits, spaces, quotes and basic punctuation'), { statusCode: 400 });
+  }
+  if (location && !LINKEDIN_KEYWORDS_PATTERN.test(location)) {
+    throw Object.assign(new Error('LinkedIn location contains unsupported characters'), { statusCode: 400 });
+  }
+  if (geoId && !/^\d{1,20}$/.test(geoId)) throw Object.assign(new Error('LinkedIn geoId must be numeric'), { statusCode: 400 });
+  if (!location && !geoId) throw Object.assign(new Error('A LinkedIn search needs a location or geoId'), { statusCode: 400 });
+  if (key && !/^[a-z0-9_-]+$/i.test(key)) throw Object.assign(new Error('LinkedIn search key is invalid'), { statusCode: 400 });
+  return { key, label, keywords, location, geoId, enabled: input.enabled !== false && input.enabled !== 0 };
+}
+
+function linkedinJobIdFromCanonical(canonical) {
+  return canonical.match(/^https:\/\/www\.linkedin\.com\/jobs\/view\/(\d+)$/)?.[1] ?? null;
+}
+
+function mapLinkedInSearch(row) {
+  return {
+    id: row.id,
+    key: row.search_key,
+    label: row.label,
+    keywords: row.keywords,
+    location: row.location,
+    geoId: row.geo_id,
+    enabled: Boolean(row.enabled),
+    origin: row.origin,
+    queryHash: row.query_hash,
+    coveredUntil: row.covered_until ?? null,
+    lastSuccessAt: row.last_success_at ?? null,
+    lastAttemptAt: row.last_attempt_at ?? null,
+    lastStatus: row.last_status ?? null,
+    lastReason: row.last_reason ?? null,
+    lastSummary: parseJson(row.last_summary_json, null),
+    gaps: parseJson(row.gaps_json, []),
+  };
 }
 
 function parseJson(value, fallback = null) {
@@ -99,6 +188,49 @@ function mapCompany(row, sources = []) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     sources,
+  };
+}
+
+const PERSONAL_IMPROVEMENT_KINDS = new Set(['safe_addition', 'experience_gap', 'needs_confirmation']);
+const PERSONAL_IMPROVEMENT_IMPORTANCE = new Set(['required', 'preferred']);
+export const JOB_DECISIONS = new Set(['interested', 'company_candidate', 'company_not_interesting', 'too_senior', 'not_relevant']);
+const FIT_DIMENSION_KEYS = ['cvMatch', 'seniority', 'roleScope', 'location', 'sector'];
+
+function mapJobDecision(row) {
+  return {
+    jobKey: row.job_key,
+    decision: row.decision,
+    decidedAt: row.decided_at,
+    company: row.company,
+    title: row.title,
+    applyUrl: row.apply_url,
+    score: row.score,
+    fitLabel: row.fit_label,
+    fit: parseJson(row.fit_json, null),
+    sourceKinds: parseJson(row.source_kinds_json, []),
+    screenPass: row.screen_pass,
+    criteriaVersion: row.criteria_version,
+    firstSeenAt: row.first_seen_at,
+  };
+}
+
+function compactText(value, limit) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function mapPersonalImprovement(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    keyword: row.keyword,
+    kind: row.kind,
+    importance: row.importance,
+    explanation: row.explanation,
+    suggestion: row.suggestion,
+    sourceCompany: row.source_company,
+    sourceTitle: row.source_title,
+    sourceJobKey: row.source_job_key,
+    createdAt: row.created_at,
   };
 }
 
@@ -182,7 +314,13 @@ export function createJobStore(databasePath) {
       archived_at      INTEGER,
       last_error_code  TEXT,
       last_error_reason TEXT,
-      last_attempted_at INTEGER
+      last_attempted_at INTEGER,
+      resume_gap_json TEXT,
+      resume_gap_input_hash TEXT,
+      resume_gap_analyzed_at INTEGER,
+      resume_gap_error_code TEXT,
+      resume_gap_error_reason TEXT,
+      resume_gap_last_attempted_at INTEGER
     );
 
     CREATE INDEX IF NOT EXISTS jobs_company_role_idx ON jobs(company_role_key);
@@ -377,6 +515,81 @@ export function createJobStore(databasePath) {
 
     CREATE INDEX IF NOT EXISTS company_job_sources_company_idx
       ON company_job_sources(company_id, enabled);
+
+    CREATE TABLE IF NOT EXISTS personal_improvements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      keyword TEXT NOT NULL,
+      kind TEXT NOT NULL
+        CHECK(kind IN ('safe_addition', 'experience_gap', 'needs_confirmation')),
+      importance TEXT NOT NULL DEFAULT 'preferred'
+        CHECK(importance IN ('required', 'preferred')),
+      explanation TEXT NOT NULL,
+      suggestion TEXT NOT NULL,
+      source_company TEXT,
+      source_title TEXT,
+      source_job_key TEXT,
+      position INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      UNIQUE(keyword, source_job_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS personal_improvements_position_idx
+      ON personal_improvements(position);
+
+    -- What the user did with a job shown on the Decisions page. Written in
+    -- the same transaction that archives (and wipes) the job, so this is the
+    -- only durable record of the job's content — kept small and local, for
+    -- statistics and score calibration, never for re-scoring.
+    CREATE TABLE IF NOT EXISTS job_decisions (
+      job_key TEXT PRIMARY KEY,
+      decision TEXT NOT NULL
+        CHECK(decision IN ('interested', 'company_candidate', 'company_not_interesting', 'too_senior', 'not_relevant')),
+      decided_at INTEGER NOT NULL,
+      company TEXT,
+      title TEXT,
+      apply_url TEXT,
+      score REAL,
+      fit_label TEXT,
+      fit_json TEXT,
+      source_kinds_json TEXT NOT NULL DEFAULT '[]',
+      screen_pass TEXT,
+      criteria_version TEXT,
+      first_seen_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS job_decisions_decided_idx ON job_decisions(decided_at);
+
+    -- Source-value history. Unlike runs (pruned to the last few) and job
+    -- content (wiped on rejection/archive), these small rows are durable so
+    -- per-source yield can be measured over weeks. No job text is stored.
+    CREATE TABLE IF NOT EXISTS job_source_sightings (
+      job_key TEXT NOT NULL,
+      source_kind TEXT NOT NULL CHECK(source_kind IN ('ats', 'whatsapp', 'linkedin')),
+      company TEXT,
+      first_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (job_key, source_kind)
+    );
+
+    CREATE INDEX IF NOT EXISTS job_source_sightings_seen_idx ON job_source_sightings(first_seen_at);
+
+    CREATE TABLE IF NOT EXISTS source_scan_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER,
+      scanned_at INTEGER NOT NULL,
+      source_kind TEXT NOT NULL CHECK(source_kind IN ('ats', 'whatsapp', 'linkedin')),
+      seconds REAL,
+      found INTEGER NOT NULL DEFAULT 0,
+      filtered_title INTEGER NOT NULL DEFAULT 0,
+      filtered_location INTEGER NOT NULL DEFAULT 0,
+      filtered_recency INTEGER NOT NULL DEFAULT 0,
+      candidates INTEGER NOT NULL DEFAULT 0,
+      scored INTEGER NOT NULL DEFAULT 0,
+      suitable INTEGER NOT NULL DEFAULT 0,
+      failed INTEGER NOT NULL DEFAULT 0,
+      errors INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS source_scan_stats_scanned_idx ON source_scan_stats(scanned_at);
   `);
 
   let companySourceColumns = db.prepare('PRAGMA table_info(company_job_sources)').all();
@@ -446,13 +659,34 @@ export function createJobStore(databasePath) {
   if (!runColumns.some((column) => column.name === 'details_json')) {
     db.exec('ALTER TABLE runs ADD COLUMN details_json TEXT');
   }
-  for (const [name, type] of Object.entries({ owner_pid: 'INTEGER', heartbeat_at: 'INTEGER', stage: 'TEXT', action_id: 'INTEGER', diagnostic_json: 'TEXT' })) {
+  for (const [name, type] of Object.entries({ owner_pid: 'INTEGER', heartbeat_at: 'INTEGER', stage: 'TEXT', action_id: 'INTEGER', diagnostic_json: 'TEXT', window_status: 'TEXT' })) {
     if (!runColumns.some((column) => column.name === name)) db.exec(`ALTER TABLE runs ADD COLUMN ${name} ${type}`);
   }
 
   const jobColumns = db.prepare('PRAGMA table_info(jobs)').all();
   if (!jobColumns.some((column) => column.name === 'archived_at')) {
     db.exec('ALTER TABLE jobs ADD COLUMN archived_at INTEGER');
+  }
+  // Durable outcome timestamps for source-value metrics: never cleared by
+  // rejection or archiving (which wipe the job's content, not these facts).
+  if (!jobColumns.some((column) => column.name === 'first_scored_at')) {
+    db.exec('ALTER TABLE jobs ADD COLUMN first_scored_at INTEGER');
+    db.exec('ALTER TABLE jobs ADD COLUMN first_suitable_at INTEGER');
+    // Best-effort backfill from what survives today; exact from here on.
+    // Rejected rows keep no trace of how they were rejected, so only suitable
+    // ones are known to have been model-scored.
+    db.exec(`UPDATE jobs SET first_scored_at = evaluated_at WHERE evaluated_at IS NOT NULL AND suitable = 1`);
+    db.exec(`UPDATE jobs SET first_suitable_at = evaluated_at WHERE evaluated_at IS NOT NULL AND suitable = 1`);
+    db.exec(`
+      UPDATE jobs SET first_suitable_at = (SELECT decided_at FROM job_decisions d WHERE d.job_key = jobs.job_key)
+      WHERE first_suitable_at IS NULL AND job_key IN (SELECT job_key FROM job_decisions)
+    `);
+    const insertSighting = db.prepare(`
+      INSERT OR IGNORE INTO job_source_sightings (job_key, source_kind, company, first_seen_at) VALUES (?, ?, ?, ?)
+    `);
+    for (const row of db.prepare("SELECT job_key, company, sources_json, first_seen_at FROM jobs WHERE sources_json <> '[]'").all()) {
+      for (const kind of sourceKinds(parseSources(row.sources_json))) insertSighting.run(row.job_key, kind, row.company, row.first_seen_at);
+    }
   }
   if (!jobColumns.some((column) => column.name === 'fit_breakdown_json')) {
     db.exec('ALTER TABLE jobs ADD COLUMN fit_breakdown_json TEXT');
@@ -465,6 +699,25 @@ export function createJobStore(databasePath) {
   }
   if (!jobColumns.some((column) => column.name === 'last_attempted_at')) {
     db.exec('ALTER TABLE jobs ADD COLUMN last_attempted_at INTEGER');
+  }
+  for (const [name, type] of Object.entries({
+    resume_gap_json: 'TEXT',
+    resume_gap_input_hash: 'TEXT',
+    resume_gap_analyzed_at: 'INTEGER',
+    resume_gap_error_code: 'TEXT',
+    resume_gap_error_reason: 'TEXT',
+    resume_gap_last_attempted_at: 'INTEGER',
+    possible_duplicate_of: 'TEXT',
+  })) {
+    if (!jobColumns.some((column) => column.name === name)) {
+      try {
+        db.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${type}`);
+      } catch (error) {
+        if (!new RegExp(`duplicate column name:\\s*${name}`, 'i').test(String(error?.message || ''))) {
+          throw error;
+        }
+      }
+    }
   }
   db.exec('CREATE INDEX IF NOT EXISTS jobs_archived_idx ON jobs(archived_at)');
 
@@ -491,6 +744,123 @@ export function createJobStore(databasePath) {
     db.exec('ALTER TABLE whatsapp_history_groups ADD COLUMN requested_from INTEGER');
   }
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS linkedin_searches (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      search_key  TEXT NOT NULL UNIQUE,
+      label       TEXT NOT NULL,
+      keywords    TEXT NOT NULL,
+      location    TEXT,
+      geo_id      TEXT,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      origin      TEXT NOT NULL DEFAULT 'user' CHECK(origin IN ('config', 'user')),
+      query_hash  TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+
+    -- One row per (search, query version): a meaningful query edit gets a
+    -- fresh starting point instead of inheriting the old query's coverage.
+    CREATE TABLE IF NOT EXISTS linkedin_search_progress (
+      search_id         INTEGER NOT NULL REFERENCES linkedin_searches(id) ON DELETE CASCADE,
+      query_hash        TEXT NOT NULL,
+      covered_until     INTEGER,
+      last_success_at   INTEGER,
+      last_attempt_at   INTEGER,
+      last_status       TEXT,
+      last_reason       TEXT,
+      last_summary_json TEXT,
+      gaps_json         TEXT,
+      PRIMARY KEY (search_id, query_hash)
+    );
+
+    -- Technical identity only (no title/company): enough to recognize a
+    -- posting again and to link it to its company-site URL when LinkedIn
+    -- exposes one.
+    CREATE TABLE IF NOT EXISTS linkedin_postings (
+      linkedin_id            TEXT PRIMARY KEY,
+      job_key                TEXT NOT NULL,
+      external_canonical_url TEXT,
+      listed_at              TEXT,
+      first_seen_at          INTEGER NOT NULL,
+      last_seen_at           INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS linkedin_postings_job_idx ON linkedin_postings(job_key);
+
+    -- One row per Codex call: what it was for, which model, how many jobs,
+    -- and the tokens it used (from codex exec --json). Kept 90 days.
+    CREATE TABLE IF NOT EXISTS codex_calls (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id              INTEGER,
+      purpose             TEXT NOT NULL,
+      model               TEXT,
+      reasoning_effort    TEXT,
+      items               INTEGER,
+      input_tokens        INTEGER,
+      cached_input_tokens INTEGER,
+      output_tokens       INTEGER,
+      reasoning_tokens    INTEGER,
+      duration_ms         INTEGER,
+      ok                  INTEGER NOT NULL,
+      error_code          TEXT,
+      created_at          INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS codex_calls_created_idx ON codex_calls(created_at);
+    CREATE INDEX IF NOT EXISTS codex_calls_run_idx ON codex_calls(run_id);
+
+    -- Per Israel-calendar-day and source: how many jobs were scored and how
+    -- many came out suitable (counted when scored, so later archiving or
+    -- rejection cleanup cannot erase the attribution).
+    CREATE TABLE IF NOT EXISTS source_daily_outcomes (
+      day      TEXT NOT NULL,
+      source   TEXT NOT NULL,
+      scored   INTEGER NOT NULL DEFAULT 0,
+      suitable INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, source)
+    );
+
+    -- Single-row LLM quota state: when the account hit its usage limit and
+    -- when that resets, and the last call that succeeded.
+    CREATE TABLE IF NOT EXISTS llm_state (
+      id              INTEGER PRIMARY KEY CHECK (id = 1),
+      blocked_until   INTEGER,
+      blocked_reason  TEXT,
+      blocked_at      INTEGER,
+      last_success_at INTEGER,
+      last_skip_at    INTEGER,
+      updated_at      INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS source_settings (
+      source     TEXT PRIMARY KEY,
+      enabled    INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
+  if (!db.prepare('PRAGMA table_info(codex_calls)').all().some((column) => column.name === 'source_mix')) {
+    try { db.exec('ALTER TABLE codex_calls ADD COLUMN source_mix TEXT'); }
+    catch (error) { if (!/duplicate column name:\s*source_mix/i.test(String(error?.message || ''))) throw error; }
+  }
+
+  // LinkedIn URLs used to be keyed with their slug/subdomain/tracking params.
+  // Re-key them to the stable posting id when that cannot collide; job_key
+  // stays as-is and colliding rows are left untouched rather than deleted.
+  {
+    const legacyLinkedIn = db.prepare(`
+      SELECT job_key, canonical_url FROM jobs
+      WHERE canonical_url LIKE '%linkedin.com/%'
+    `).all();
+    const takenUrl = db.prepare('SELECT 1 FROM jobs WHERE canonical_url = ?');
+    const rekey = db.prepare('UPDATE jobs SET canonical_url = ? WHERE job_key = ?');
+    for (const row of legacyLinkedIn) {
+      const normalized = canonicalizeJobUrl(row.canonical_url);
+      if (normalized && normalized !== row.canonical_url && !takenUrl.get(normalized)) {
+        rekey.run(normalized, row.job_key);
+      }
+    }
+  }
+
   // Rejected jobs keep only identity/cache fields needed to avoid repeat work.
   db.exec(`
     UPDATE jobs SET
@@ -501,9 +871,20 @@ export function createJobStore(databasePath) {
       fit_label = NULL,
       decision_reason = NULL,
       fit_breakdown_json = NULL,
+      resume_gap_json = NULL,
+      resume_gap_input_hash = NULL,
+      resume_gap_analyzed_at = NULL,
+      resume_gap_error_code = NULL,
+      resume_gap_error_reason = NULL,
+      resume_gap_last_attempted_at = NULL,
       apply_url = canonical_url,
       sources_json = '[]'
     WHERE suitable = 0 AND evaluated_at IS NOT NULL
+  `);
+
+  db.exec(`
+    UPDATE linkedin_postings SET external_canonical_url = NULL
+    WHERE job_key IN (SELECT job_key FROM jobs WHERE suitable = 0 AND evaluated_at IS NOT NULL)
   `);
 
   // A rejected role retains only job identity and evaluation hashes for dedup.
@@ -525,6 +906,12 @@ export function createJobStore(databasePath) {
       fit_label = NULL,
       decision_reason = NULL,
       fit_breakdown_json = NULL,
+      resume_gap_json = NULL,
+      resume_gap_input_hash = NULL,
+      resume_gap_analyzed_at = NULL,
+      resume_gap_error_code = NULL,
+      resume_gap_error_reason = NULL,
+      resume_gap_last_attempted_at = NULL,
       suitable = 0,
       active_status = 'archived',
       apply_url = canonical_url,
@@ -537,6 +924,16 @@ export function createJobStore(databasePath) {
       opened_at = NULL
     WHERE archived_at IS NOT NULL
   `);
+
+  const insertSourceSighting = db.prepare(`
+    INSERT OR IGNORE INTO job_source_sightings (job_key, source_kind, company, first_seen_at) VALUES (?, ?, ?, ?)
+  `);
+  // First time each source kind saw a job — survives rejection and archiving,
+  // so a source's exclusive finds and lead time can be measured later.
+  const noteSourceSighting = (jobKey, source, company, seenAt) => {
+    const [kind] = sourceKinds(source ? [source] : []);
+    if (kind) insertSourceSighting.run(jobKey, kind, String(company || '').trim().slice(0, 200) || null, Number(seenAt));
+  };
 
   const findByIdentity = db.prepare(`
     SELECT * FROM jobs
@@ -701,7 +1098,8 @@ export function createJobStore(databasePath) {
         throw new CompanyRegistryError('job_not_suitable', 'Only an active suitable job can resolve a company');
       }
       const sources = parseSources(job.sources_json);
-      const discoverySource = sources.some((source) => /^whatsapp:/i.test(source)) ? 'whatsapp' : 'ats';
+      const discoverySource = sources.some((source) => /^whatsapp:/i.test(source)) ? 'whatsapp'
+        : sources.some((source) => /^linkedin:/i.test(source)) ? 'linkedin' : 'ats';
       return {
         jobKey: job.job_key,
         ...resolveCompanyCandidate({
@@ -1005,15 +1403,22 @@ export function createJobStore(databasePath) {
       return { updated };
     },
 
-    recordSighting({ url, company = '', title = '', source, seenAt = Date.now() }) {
+    // matchCompanyRole=false (LinkedIn) keys identity on the URL alone: two
+    // postings are never merged just because company and title agree. A
+    // company+role twin is only flagged via possible_duplicate_of.
+    recordSighting({ url, company = '', title = '', source, seenAt = Date.now(), matchCompanyRole = true }) {
       const canonicalUrl = canonicalizeJobUrl(url);
       if (!canonicalUrl) throw new Error(`Invalid job URL: ${url}`);
       const companyRoleKey = normalizeCompanyRole(company, title);
-      const existing = findByIdentity.get({ canonicalUrl, companyRoleKey });
+      const existing = findByIdentity.get({ canonicalUrl, companyRoleKey: matchCompanyRole ? companyRoleKey : '::' });
+      const twin = !existing && !matchCompanyRole && companyRoleKey !== '::'
+        ? db.prepare('SELECT job_key FROM jobs WHERE company_role_key = ? ORDER BY first_seen_at ASC LIMIT 1').get(companyRoleKey)
+        : null;
 
       if (existing) {
         if (existing.archived_at || (existing.evaluated_at && !existing.suitable)) {
           db.prepare('UPDATE jobs SET last_seen_at = ? WHERE job_key = ?').run(seenAt, existing.job_key);
+          noteSourceSighting(existing.job_key, source, company, seenAt);
           return { jobKey: existing.job_key, canonicalUrl: existing.canonical_url, isNew: false };
         }
         const sources = new Set(parseSources(existing.sources_json));
@@ -1025,6 +1430,7 @@ export function createJobStore(databasePath) {
               sources_json = @sources
           WHERE job_key = @jobKey
         `).run({ seenAt, canonicalUrl, url, sources: JSON.stringify([...sources]), jobKey: existing.job_key });
+        noteSourceSighting(existing.job_key, source, company, seenAt);
         return { jobKey: existing.job_key, canonicalUrl: existing.canonical_url, isNew: false };
       }
 
@@ -1032,22 +1438,177 @@ export function createJobStore(databasePath) {
       db.prepare(`
         INSERT INTO jobs (
           job_key, canonical_url, apply_url, company_role_key, company, title,
-          sources_json, first_seen_at, last_seen_at
+          sources_json, first_seen_at, last_seen_at, possible_duplicate_of
         ) VALUES (
           @jobKey, @canonicalUrl, @url, @companyRoleKey, @company, @title,
-          @sources, @seenAt, @seenAt
+          @sources, @seenAt, @seenAt, @possibleDuplicateOf
         )
       `).run({
         jobKey,
         canonicalUrl,
-        url,
+        url: canonicalUrl.startsWith('https://www.linkedin.com/jobs/view/') ? canonicalUrl : url,
+        possibleDuplicateOf: twin?.job_key ?? null,
         companyRoleKey,
         company,
         title,
         sources: JSON.stringify(source ? [source] : []),
         seenAt,
       });
+      noteSourceSighting(jobKey, source, company, seenAt);
       return { jobKey, canonicalUrl, isNew: true };
+    },
+
+    // ---- Codex usage and quota ------------------------------------------
+
+    recordCodexCall(entry = {}) {
+      const at = Number(entry.at) || Date.now();
+      const usage = entry.usage || {};
+      const int = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : null);
+      db.prepare(`
+        INSERT INTO codex_calls (run_id, purpose, model, reasoning_effort, items, input_tokens, cached_input_tokens,
+          output_tokens, reasoning_tokens, duration_ms, ok, error_code, created_at, source_mix)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        int(entry.runId), String(entry.purpose || 'other').slice(0, 32), entry.model ? String(entry.model).slice(0, 64) : null,
+        entry.reasoningEffort ? String(entry.reasoningEffort).slice(0, 16) : null, int(entry.items),
+        entry.usage ? int(usage.inputTokens) : null, entry.usage ? int(usage.cachedInputTokens) : null,
+        entry.usage ? int(usage.outputTokens) : null, entry.usage ? int(usage.reasoningTokens) : null,
+        int(entry.durationMs), entry.ok ? 1 : 0, entry.errorCode ? String(entry.errorCode).slice(0, 64) : null, at,
+        normalizeSourceMix(entry.sourceMix),
+      );
+      if (entry.ok) this.noteLlmSuccess(at);
+      else if (entry.errorCode === 'codex_usage_limit' && entry.limitUntil) {
+        this.setLlmBlocked({ until: entry.limitUntil, reason: 'usage_limit', at });
+      }
+      db.prepare('DELETE FROM codex_calls WHERE created_at < ?').run(at - 90 * 24 * 60 * 60 * 1000);
+    },
+
+    recordSourceOutcome({ source, suitable, at = Date.now() }) {
+      const kind = SOURCE_KINDS.has(source) ? source : 'other';
+      db.prepare(`
+        INSERT INTO source_daily_outcomes (day, source, scored, suitable) VALUES (?, ?, 1, ?)
+        ON CONFLICT(day, source) DO UPDATE SET scored = scored + 1, suitable = suitable + excluded.suitable
+      `).run(israelDay(at), kind, suitable ? 1 : 0);
+    },
+
+    // Daily Codex tokens per source. A call's tokens are split equally among
+    // the jobs in its batch (every job shares the batch's fixed prompt, and
+    // page text is capped at a similar length). Calls tied to no job (quota
+    // probe, company research) are "system"; calls recorded before source
+    // attribution existed are "unclassified".
+    dailyUsageBySource({ days = 14, now = Date.now() } = {}) {
+      const boundedDays = Math.max(1, Math.min(60, Number(days) || 14));
+      const dayKeys = Array.from({ length: boundedDays }, (_, index) => israelDay(now - index * 24 * 60 * 60 * 1000));
+      const sinceMs = now - (boundedDays + 1) * 24 * 60 * 60 * 1000;
+      const rows = new Map();
+      const rowFor = (day, source) => {
+        const key = `${day}|${source}`;
+        if (!rows.has(key)) rows.set(key, { day, source, tokens: 0, calls: 0, items: 0, scored: 0, suitable: 0, limited: 0 });
+        return rows.get(key);
+      };
+      const calls = db.prepare(`
+        SELECT purpose, items, input_tokens, output_tokens, ok, error_code, created_at, source_mix
+        FROM codex_calls WHERE created_at >= ?
+      `).all(sinceMs);
+      const wanted = new Set(dayKeys);
+      for (const call of calls) {
+        const day = israelDay(call.created_at);
+        if (!wanted.has(day)) continue;
+        const tokens = Number(call.input_tokens || 0) + Number(call.output_tokens || 0);
+        const mix = parseJson(call.source_mix, null);
+        const shares = mix && Object.values(mix).some((count) => count > 0)
+          ? Object.entries(mix).filter(([, count]) => count > 0)
+          : [[['probe', 'company_research'].includes(call.purpose) ? 'system' : 'unclassified', 1]];
+        const total = shares.reduce((sum, [, count]) => sum + Number(count), 0);
+        for (const [source, count] of shares) {
+          const row = rowFor(day, source);
+          row.tokens += tokens * (Number(count) / total);
+          row.calls += Number(count) / total;
+          if (call.error_code === 'codex_usage_limit') row.limited += Number(count) / total;
+        }
+      }
+      for (const outcome of db.prepare('SELECT * FROM source_daily_outcomes WHERE day IN (' + dayKeys.map(() => '?').join(',') + ')').all(...dayKeys)) {
+        const row = rowFor(outcome.day, outcome.source);
+        row.scored += Number(outcome.scored || 0);
+        row.suitable += Number(outcome.suitable || 0);
+      }
+      const list = [...rows.values()].map((row) => ({
+        ...row,
+        tokens: Math.round(row.tokens),
+        calls: Math.round(row.calls * 10) / 10,
+        limited: Math.round(row.limited * 10) / 10,
+        tokensPerSuitable: row.suitable ? Math.round(row.tokens / row.suitable) : null,
+      }));
+      return { days: dayKeys, rows: list.sort((a, b) => b.day.localeCompare(a.day) || a.source.localeCompare(b.source)) };
+    },
+
+    getLlmQuota() {
+      const row = db.prepare('SELECT * FROM llm_state WHERE id = 1').get();
+      return {
+        blockedUntil: row?.blocked_until ?? null,
+        blockedReason: row?.blocked_reason ?? null,
+        blockedAt: row?.blocked_at ?? null,
+        lastSuccessAt: row?.last_success_at ?? null,
+        lastSkipAt: row?.last_skip_at ?? null,
+      };
+    },
+
+    setLlmBlocked({ until, reason = 'usage_limit', at = Date.now() }) {
+      db.prepare(`
+        INSERT INTO llm_state (id, blocked_until, blocked_reason, blocked_at, updated_at) VALUES (1, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET blocked_until = MAX(COALESCE(blocked_until, 0), excluded.blocked_until),
+          blocked_reason = excluded.blocked_reason, blocked_at = excluded.blocked_at, updated_at = excluded.updated_at
+      `).run(Number(until), String(reason).slice(0, 64), Number(at), Number(at));
+    },
+
+    noteLlmSuccess(at = Date.now()) {
+      db.prepare(`
+        INSERT INTO llm_state (id, last_success_at, blocked_until, updated_at) VALUES (1, ?, NULL, ?)
+        ON CONFLICT(id) DO UPDATE SET last_success_at = excluded.last_success_at, blocked_until = NULL,
+          blocked_reason = NULL, updated_at = excluded.updated_at
+      `).run(Number(at), Number(at));
+    },
+
+    noteLlmSkip(at = Date.now()) {
+      db.prepare(`
+        INSERT INTO llm_state (id, last_skip_at, updated_at) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET last_skip_at = excluded.last_skip_at, updated_at = excluded.updated_at
+      `).run(Number(at), Number(at));
+    },
+
+    // Totals per purpose over a window, plus per-run rows for the latest runs.
+    summarizeCodexUsage({ sinceMs = 0, untilMs = Date.now(), recentRuns = 8 } = {}) {
+      const totals = db.prepare(`
+        SELECT purpose,
+          COUNT(*) AS calls, SUM(ok) AS ok_calls, SUM(CASE WHEN error_code = 'codex_usage_limit' THEN 1 ELSE 0 END) AS limited,
+          COALESCE(SUM(items), 0) AS items,
+          COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+          COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+          SUM(CASE WHEN input_tokens IS NOT NULL THEN 1 ELSE 0 END) AS measured_calls,
+          GROUP_CONCAT(DISTINCT model) AS models
+        FROM codex_calls WHERE created_at >= ? AND created_at <= ?
+        GROUP BY purpose ORDER BY purpose
+      `).all(Number(sinceMs), Number(untilMs)).map((row) => ({
+        purpose: row.purpose, calls: row.calls, okCalls: row.ok_calls, limited: row.limited, items: row.items,
+        inputTokens: row.input_tokens, cachedInputTokens: row.cached_input_tokens, outputTokens: row.output_tokens,
+        reasoningTokens: row.reasoning_tokens, measuredCalls: row.measured_calls,
+        models: row.models ? row.models.split(',') : [],
+      }));
+      const runs = db.prepare(`
+        SELECT c.run_id AS runId, MIN(c.created_at) AS startedAt, COUNT(*) AS calls, COALESCE(SUM(c.items), 0) AS items,
+          COALESCE(SUM(c.input_tokens), 0) + COALESCE(SUM(c.output_tokens), 0) AS totalTokens,
+          COALESCE(SUM(c.cached_input_tokens), 0) AS cachedInputTokens,
+          SUM(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END) AS failedCalls,
+          r.sources AS sources
+        FROM codex_calls c LEFT JOIN runs r ON r.id = c.run_id
+        WHERE c.run_id IS NOT NULL
+        GROUP BY c.run_id ORDER BY c.run_id DESC LIMIT ?
+      `).all(Math.max(1, Math.min(50, Number(recentRuns) || 8))).map((row) => ({ ...row, sources: parseSources(row.sources) }));
+      return { totals, runs, quota: this.getLlmQuota() };
+    },
+
+    isKnownJobUrl(canonicalUrl) {
+      return Boolean(db.prepare('SELECT 1 FROM jobs WHERE canonical_url = ?').get(String(canonicalUrl)));
     },
 
     getJob(jobKey) {
@@ -1104,7 +1665,7 @@ export function createJobStore(databasePath) {
       };
     },
 
-    listDashboardJobs() {
+    listDashboardJobs({ resumeGapContext = null } = {}) {
       return db.prepare(`
         SELECT
           job_key AS jobKey,
@@ -1118,18 +1679,122 @@ export function createJobStore(databasePath) {
           apply_url AS applyUrl,
           suitable,
           active_status AS activeStatus,
+          content_hash AS contentHash,
+          profile_hash AS profileHash,
+          resume_gap_json AS resumeGapJson,
+          resume_gap_input_hash AS resumeGapInputHash,
+          resume_gap_analyzed_at AS resumeGapAnalyzedAt,
+          resume_gap_error_code AS resumeGapErrorCode,
+          resume_gap_error_reason AS resumeGapErrorReason,
           last_seen_at AS lastSeenAt,
-          opened_at AS openedAt
+          opened_at AS openedAt,
+          sources_json AS sourcesJson,
+          possible_duplicate_of AS possibleDuplicateOf
         FROM jobs
         WHERE archived_at IS NULL
           AND evaluated_at IS NOT NULL AND suitable = 1 AND active_status = 'active'
         ORDER BY last_seen_at DESC, score DESC
         LIMIT 500
-      `).all().map((job) => ({
-        ...Object.fromEntries(Object.entries(job).filter(([key]) => key !== 'fitBreakdownJson')),
-        fitBreakdown: parseJson(job.fitBreakdownJson, null),
-        suitable: Boolean(job.suitable),
-      }));
+      `).all().map((job) => {
+        const expectedHash = resumeGapContext?.resumeAvailable
+          ? resumeGapInputHash({
+            contentHash: job.contentHash,
+            profileHash: job.profileHash,
+            resumeHash: resumeGapContext.resumeHash,
+            analysisVersion: resumeGapContext.analysisVersion,
+          })
+          : null;
+        const isCurrent = Boolean(expectedHash && job.resumeGapInputHash === expectedHash);
+        const analysis = isCurrent ? parseJson(job.resumeGapJson, null) : null;
+        const resumeGap = !resumeGapContext?.resumeAvailable
+          ? { status: 'unavailable', items: [] }
+          : analysis && Array.isArray(analysis.items)
+            ? {
+              status: 'ready',
+              items: analysis.items,
+              employerPriorities: Array.isArray(analysis.employerPriorities) ? analysis.employerPriorities : [],
+              screenPass: analysis.screenPass ?? null,
+              analyzedAt: job.resumeGapAnalyzedAt,
+            }
+            : isCurrent && job.resumeGapErrorCode
+              ? {
+                status: 'failed',
+                items: [],
+                code: job.resumeGapErrorCode,
+                reason: job.resumeGapErrorReason || 'ניתוח קורות החיים נכשל.',
+              }
+              : { status: 'pending', items: [] };
+        const hidden = new Set([
+          'fitBreakdownJson', 'contentHash', 'profileHash', 'resumeGapJson',
+          'resumeGapInputHash', 'resumeGapAnalyzedAt', 'resumeGapErrorCode', 'resumeGapErrorReason',
+          'sourcesJson',
+        ]);
+        return {
+          ...Object.fromEntries(Object.entries(job).filter(([key]) => !hidden.has(key))),
+          sourceKinds: sourceKinds(parseSources(job.sourcesJson)),
+          fitBreakdown: parseJson(job.fitBreakdownJson, null),
+          resumeGap,
+          suitable: Boolean(job.suitable),
+        };
+      });
+    },
+
+    listResumeGapCandidates({ limit = 500 } = {}) {
+      const boundedLimit = Math.max(1, Math.min(500, Number(limit) || 500));
+      return db.prepare(`
+        SELECT
+          j.job_key AS jobKey,
+          j.company,
+          j.title,
+          j.apply_url AS applyUrl,
+          j.content_hash AS contentHash,
+          j.profile_hash AS profileHash,
+          j.resume_gap_input_hash AS storedResumeGapInputHash,
+          j.resume_gap_error_code AS resumeGapErrorCode,
+          j.sources_json AS sourcesJson,
+          p.content
+        FROM jobs j
+        JOIN job_pages p ON p.canonical_url = j.canonical_url
+        WHERE j.archived_at IS NULL
+          AND j.evaluated_at IS NOT NULL
+          AND j.suitable = 1
+          AND j.active_status = 'active'
+        ORDER BY j.last_seen_at DESC, j.score DESC
+        LIMIT ?
+      `).all(boundedLimit);
+    },
+
+    saveResumeGap(jobKey, { inputHash, analysis, analyzedAt = Date.now() }) {
+      const result = db.prepare(`
+        UPDATE jobs SET
+          resume_gap_json = ?,
+          resume_gap_input_hash = ?,
+          resume_gap_analyzed_at = ?,
+          resume_gap_error_code = NULL,
+          resume_gap_error_reason = NULL,
+          resume_gap_last_attempted_at = ?
+        WHERE job_key = ? AND archived_at IS NULL AND suitable = 1
+      `).run(JSON.stringify(analysis), inputHash, analyzedAt, analyzedAt, jobKey);
+      if (result.changes !== 1) throw new Error(`Cannot save resume analysis for job: ${jobKey}`);
+    },
+
+    markResumeGapFailure(jobKey, { inputHash, code = 'resume_gap_failed', reason, attemptedAt = Date.now() }) {
+      const safeReason = String(reason || 'Resume analysis failed.')
+        .replace(/[\r\n\t\u0000-\u001f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 500);
+      const result = db.prepare(`
+        UPDATE jobs SET
+          resume_gap_json = NULL,
+          resume_gap_input_hash = ?,
+          resume_gap_analyzed_at = NULL,
+          resume_gap_error_code = ?,
+          resume_gap_error_reason = ?,
+          resume_gap_last_attempted_at = ?
+        WHERE job_key = ? AND archived_at IS NULL AND suitable = 1
+      `).run(inputHash, String(code).slice(0, 64), safeReason, attemptedAt, jobKey);
+      if (result.changes !== 1) throw new Error(`Cannot record resume analysis failure for job: ${jobKey}`);
     },
 
     getDashboardSnapshot() {
@@ -1189,6 +1854,8 @@ export function createJobStore(databasePath) {
           profile_hash = @profileHash,
           criteria_version = @criteriaVersion,
           evaluated_at = @evaluatedAt,
+          first_scored_at = CASE WHEN @scoredByModel = 1 THEN COALESCE(first_scored_at, @evaluatedAt) ELSE first_scored_at END,
+          first_suitable_at = CASE WHEN @suitable = 1 THEN COALESCE(first_suitable_at, @evaluatedAt) ELSE first_suitable_at END,
           sources_json = @sources,
           last_error_code = NULL,
           last_error_reason = NULL,
@@ -1207,12 +1874,26 @@ export function createJobStore(databasePath) {
           ? JSON.stringify(evaluation.fitBreakdown)
           : null,
         suitable: suitable ? 1 : 0,
+        // Only a real model call counts as scoring cost; local filters and
+        // dead-link verdicts also land here and must not inflate it.
+        scoredByModel: evaluation.scoredByModel === true ? 1 : 0,
         applyUrl: suitable ? evaluation.applyUrl : existing.canonical_url,
         sources: suitable ? existing.sources_json : '[]',
         jobKey,
       });
       if (!suitable) {
+        db.prepare(`
+          UPDATE jobs SET
+            resume_gap_json = NULL,
+            resume_gap_input_hash = NULL,
+            resume_gap_analyzed_at = NULL,
+            resume_gap_error_code = NULL,
+            resume_gap_error_reason = NULL,
+            resume_gap_last_attempted_at = NULL
+          WHERE job_key = ?
+        `).run(jobKey);
         db.prepare('DELETE FROM job_pages WHERE canonical_url = ?').run(existing.canonical_url);
+        db.prepare('UPDATE linkedin_postings SET external_canonical_url = NULL WHERE job_key = ?').run(jobKey);
       }
     },
 
@@ -1254,6 +1935,87 @@ export function createJobStore(databasePath) {
       db.transaction((keys) => keys.forEach((key) => update.run(at, key)))(jobKeys);
     },
 
+    // Records what the user did with a shown job, then archives it in the
+    // same transaction: the decision row keeps only the small snapshot the
+    // statistics need (never page text), and archiveJob wipes the rest.
+    decideJob(jobKey, decision, at = Date.now()) {
+      if (!JOB_DECISIONS.has(decision)) {
+        throw Object.assign(new Error(`Unknown decision: ${decision}`), { statusCode: 400 });
+      }
+      return db.transaction(() => {
+        const job = db.prepare(`
+          SELECT * FROM jobs WHERE job_key = ? AND archived_at IS NULL AND suitable = 1
+        `).get(jobKey);
+        if (!job) return false;
+        const breakdown = parseJson(job.fit_breakdown_json, null);
+        const fit = breakdown
+          ? Object.fromEntries(FIT_DIMENSION_KEYS.filter((key) => breakdown[key] != null).map((key) => [key, Number(breakdown[key])]))
+          : null;
+        const screenPass = parseJson(job.resume_gap_json, null)?.screenPass?.level ?? null;
+        db.prepare(`
+          INSERT OR REPLACE INTO job_decisions (
+            job_key, decision, decided_at, company, title, apply_url, score, fit_label,
+            fit_json, source_kinds_json, screen_pass, criteria_version, first_seen_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          jobKey, decision, at, job.company, job.title, job.apply_url, job.score, job.fit_label,
+          fit ? JSON.stringify(fit) : null,
+          JSON.stringify(sourceKinds(parseSources(job.sources_json))),
+          screenPass, job.criteria_version, job.first_seen_at,
+        );
+        if (!this.archiveJob(jobKey, at)) throw new Error(`Cannot archive decided job: ${jobKey}`);
+        return true;
+      })();
+    },
+
+    recordSourceScanStats(rows, { runId = null, at = Date.now() } = {}) {
+      const insert = db.prepare(`
+        INSERT INTO source_scan_stats (
+          run_id, scanned_at, source_kind, seconds, found, filtered_title, filtered_location,
+          filtered_recency, candidates, scored, suitable, failed, errors
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const count = (value) => Math.max(0, Math.trunc(Number(value) || 0));
+      db.transaction(() => {
+        for (const row of rows) {
+          if (!['ats', 'whatsapp', 'linkedin'].includes(row.source)) continue;
+          insert.run(
+            runId, Number(at), row.source, Number.isFinite(row.seconds) ? row.seconds : null,
+            count(row.found), count(row.filteredTitle), count(row.filteredLocation), count(row.filteredRecency),
+            count(row.candidates), count(row.scored), count(row.suitable), count(row.failed), count(row.errors),
+          );
+        }
+      })();
+    },
+
+    // Raw facts behind the source-value metrics (scripts/jobs/source-value.mjs).
+    listSourceValueFacts({ since = 0 } = {}) {
+      const from = Number(since) || 0;
+      return {
+        scans: db.prepare(`
+          SELECT scanned_at AS scannedAt, source_kind AS source, seconds, found,
+            filtered_title AS filteredTitle, filtered_location AS filteredLocation,
+            filtered_recency AS filteredRecency, candidates, scored, suitable, failed, errors
+          FROM source_scan_stats WHERE scanned_at >= ? ORDER BY scanned_at
+        `).all(from),
+        sightings: db.prepare(`
+          SELECT s.job_key AS jobKey, s.source_kind AS source, s.company, s.first_seen_at AS firstSeenAt,
+            j.first_scored_at AS firstScoredAt, j.first_suitable_at AS firstSuitableAt, d.decision
+          FROM job_source_sightings s
+          LEFT JOIN jobs j ON j.job_key = s.job_key
+          LEFT JOIN job_decisions d ON d.job_key = s.job_key
+          WHERE s.first_seen_at >= ? OR j.first_suitable_at >= ?
+        `).all(from, from),
+        watchedCompanies: db.prepare("SELECT name FROM companies WHERE status = 'watched' ORDER BY name COLLATE NOCASE")
+          .all().map((row) => row.name),
+      };
+    },
+
+    listJobDecisions({ since = 0 } = {}) {
+      return db.prepare('SELECT * FROM job_decisions WHERE decided_at >= ? ORDER BY decided_at DESC')
+        .all(Number(since) || 0).map(mapJobDecision);
+    },
+
     archiveJob(jobKey, at = Date.now()) {
       const result = db.prepare(`
         UPDATE jobs SET
@@ -1264,6 +2026,12 @@ export function createJobStore(databasePath) {
           fit_label = NULL,
           decision_reason = NULL,
           fit_breakdown_json = NULL,
+          resume_gap_json = NULL,
+          resume_gap_input_hash = NULL,
+          resume_gap_analyzed_at = NULL,
+          resume_gap_error_code = NULL,
+          resume_gap_error_reason = NULL,
+          resume_gap_last_attempted_at = NULL,
           suitable = 0,
           active_status = 'archived',
           apply_url = canonical_url,
@@ -1312,6 +2080,12 @@ export function createJobStore(databasePath) {
           fit_label = NULL,
           decision_reason = NULL,
           fit_breakdown_json = NULL,
+          resume_gap_json = NULL,
+          resume_gap_input_hash = NULL,
+          resume_gap_analyzed_at = NULL,
+          resume_gap_error_code = NULL,
+          resume_gap_error_reason = NULL,
+          resume_gap_last_attempted_at = NULL,
           suitable = 0,
           active_status = 'archived',
           apply_url = canonical_url,
@@ -1749,9 +2523,11 @@ export function createJobStore(databasePath) {
         .run(Date.now(), stage, details ? JSON.stringify(details) : null, runId);
     },
 
-    finishRun(runId, { status, error = null, details = null, failure = null, finishedAt = Date.now() }) {
-      db.prepare('UPDATE runs SET finished_at = ?, status = ?, error = ?, details_json = COALESCE(?, details_json), diagnostic_json = ? WHERE id = ?')
-        .run(finishedAt, status, error ?? null, details ? JSON.stringify(details) : null, serializeAuditDetails(failure), runId);
+    // windowStatus is the run's status judged without LinkedIn; it anchors
+    // the next ATS/WhatsApp window even when only LinkedIn fell short.
+    finishRun(runId, { status, error = null, details = null, failure = null, windowStatus = null, finishedAt = Date.now() }) {
+      db.prepare('UPDATE runs SET finished_at = ?, status = ?, error = ?, details_json = COALESCE(?, details_json), diagnostic_json = ?, window_status = ? WHERE id = ?')
+        .run(finishedAt, status, error ?? null, details ? JSON.stringify(details) : null, serializeAuditDetails(failure), windowStatus, runId);
     },
 
     recordRunEvent(runId, {
@@ -2015,7 +2791,7 @@ export function createJobStore(databasePath) {
           collectors: db.prepare('SELECT COUNT(*) AS count FROM collector_runs').get().count,
           collectorEvents: db.prepare('SELECT COUNT(*) AS count FROM collector_events').get().count,
         };
-        const runs = db.prepare('SELECT id, sources, status FROM runs ORDER BY id DESC').all();
+        const runs = db.prepare('SELECT id, sources, COALESCE(window_status, status) AS status FROM runs ORDER BY id DESC').all();
         const recentRunIds = new Set(runs.slice(0, limit).map((run) => run.id));
         const retainedRunIds = new Set(recentRunIds);
         const successfulSourceSets = new Set();
@@ -2072,12 +2848,196 @@ export function createJobStore(databasePath) {
 
     getLastSuccessfulRun(requiredSources = []) {
       const rows = db.prepare(`
-        SELECT * FROM runs WHERE status = 'success' ORDER BY finished_at DESC
+        SELECT * FROM runs WHERE COALESCE(window_status, status) = 'success' ORDER BY finished_at DESC
       `).all();
+      // LinkedIn keeps its own per-search progress; it never anchors (or
+      // holds back) the shared ATS/WhatsApp window.
+      const required = requiredSources.filter((source) => source !== 'linkedin');
       return rows.find((row) => {
         const completedSources = new Set(parseSources(row.sources));
-        return requiredSources.every((source) => completedSources.has(source));
+        return required.every((source) => completedSources.has(source));
       }) ?? null;
+    },
+
+    // ---- LinkedIn search source -------------------------------------------
+
+    isSourceEnabled(source) {
+      const row = db.prepare('SELECT enabled FROM source_settings WHERE source = ?').get(String(source));
+      return row ? Boolean(row.enabled) : true;
+    },
+
+    setSourceEnabled(source, enabled, at = Date.now()) {
+      db.prepare(`
+        INSERT INTO source_settings (source, enabled, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(source) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+      `).run(String(source), enabled ? 1 : 0, at);
+      return this.isSourceEnabled(source);
+    },
+
+    // config/jobs.yml is the only source of truth for LinkedIn searches.
+    // Each search is matched by its key; a changed query gets a new query
+    // hash (and so a fresh coverage history), and a search removed from the
+    // config is disabled rather than deleted, keeping its history.
+    syncLinkedInSearches(configured = [], at = Date.now()) {
+      const searches = configured.map(normalizeLinkedInSearch);
+      const keys = searches.map((search) => search.key);
+      if (keys.some((key) => !key)) throw new Error('Every LinkedIn search in config/jobs.yml needs a key');
+      if (new Set(keys).size !== keys.length) throw new Error('LinkedIn search keys in config/jobs.yml must be unique');
+      const upsert = db.prepare(`
+        INSERT INTO linkedin_searches (search_key, label, keywords, location, geo_id, enabled, origin, query_hash, created_at, updated_at)
+        VALUES (@key, @label, @keywords, @location, @geoId, @enabled, 'config', @queryHash, @at, @at)
+        ON CONFLICT(search_key) DO UPDATE SET
+          label = excluded.label, keywords = excluded.keywords, location = excluded.location, geo_id = excluded.geo_id,
+          enabled = excluded.enabled, origin = 'config', query_hash = excluded.query_hash,
+          updated_at = CASE WHEN linkedin_searches.query_hash = excluded.query_hash AND linkedin_searches.label = excluded.label
+            AND linkedin_searches.enabled = excluded.enabled THEN linkedin_searches.updated_at ELSE excluded.updated_at END
+      `);
+      const apply = db.transaction(() => {
+        for (const search of searches) {
+          upsert.run({ ...search, enabled: search.enabled ? 1 : 0, queryHash: linkedinQueryHash(search), at });
+        }
+        const placeholders = keys.map(() => '?').join(', ');
+        db.prepare(`UPDATE linkedin_searches SET enabled = 0, updated_at = ? WHERE enabled = 1${keys.length ? ` AND search_key NOT IN (${placeholders})` : ''}`)
+          .run(at, ...keys);
+      });
+      apply();
+      return this.listLinkedInSearches();
+    },
+
+    listLinkedInSearches() {
+      return db.prepare(`
+        SELECT s.*, p.covered_until, p.last_success_at, p.last_attempt_at, p.last_status, p.last_reason,
+               p.last_summary_json, p.gaps_json
+        FROM linkedin_searches s
+        LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.query_hash = s.query_hash
+        ORDER BY s.id
+      `).all().map(mapLinkedInSearch);
+    },
+
+    getLinkedInSearch(id) {
+      const row = db.prepare(`
+        SELECT s.*, p.covered_until, p.last_success_at, p.last_attempt_at, p.last_status, p.last_reason,
+               p.last_summary_json, p.gaps_json
+        FROM linkedin_searches s
+        LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.query_hash = s.query_hash
+        WHERE s.id = ?
+      `).get(Number(id));
+      return row ? mapLinkedInSearch(row) : null;
+    },
+
+    // Records one attempt. coveredUntil is only passed when the collection was
+    // complete and saved; otherwise the stored coverage is left as it was.
+    recordLinkedInSearchAttempt({ searchId, queryHash, status, reason = null, summary = null, coveredUntil = null, gap = null, attemptedAt = Date.now() }) {
+      const previous = db.prepare('SELECT covered_until, gaps_json FROM linkedin_search_progress WHERE search_id = ? AND query_hash = ?')
+        .get(Number(searchId), String(queryHash));
+      const gaps = parseJson(previous?.gaps_json, []);
+      if (gap) gaps.push(gap);
+      const succeeded = coveredUntil != null;
+      db.prepare(`
+        INSERT INTO linkedin_search_progress (
+          search_id, query_hash, covered_until, last_success_at, last_attempt_at, last_status, last_reason, last_summary_json, gaps_json
+        ) VALUES (@searchId, @queryHash, @coveredUntil, @successAt, @attemptedAt, @status, @reason, @summary, @gaps)
+        ON CONFLICT(search_id, query_hash) DO UPDATE SET
+          covered_until = COALESCE(excluded.covered_until, covered_until),
+          last_success_at = COALESCE(excluded.last_success_at, last_success_at),
+          last_attempt_at = excluded.last_attempt_at,
+          last_status = excluded.last_status,
+          last_reason = excluded.last_reason,
+          last_summary_json = excluded.last_summary_json,
+          gaps_json = excluded.gaps_json
+      `).run({
+        searchId: Number(searchId),
+        queryHash: String(queryHash),
+        coveredUntil: succeeded ? Number(coveredUntil) : null,
+        successAt: succeeded ? attemptedAt : null,
+        attemptedAt,
+        status: String(status).slice(0, 32),
+        reason: reason == null ? null : String(reason).slice(0, 64),
+        summary: summary ? serializeAuditDetails(summary) : null,
+        gaps: gaps.length ? JSON.stringify(gaps.slice(-5)) : null,
+      });
+    },
+
+    recordLinkedInPosting({ linkedinId, jobKey, listedAt = null, seenAt = Date.now() }) {
+      db.prepare(`
+        INSERT INTO linkedin_postings (linkedin_id, job_key, listed_at, first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(linkedin_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, job_key = excluded.job_key
+      `).run(String(linkedinId), String(jobKey), listedAt, seenAt, seenAt);
+    },
+
+    // An external apply URL is exact evidence: when it names a job already
+    // known from another source, that job is returned so callers can link.
+    recordLinkedInExternalUrl(linkedinId, externalUrl) {
+      const canonical = canonicalizeJobUrl(externalUrl);
+      if (!canonical || linkedinJobIdFromCanonical(canonical)) return null;
+      db.prepare('UPDATE linkedin_postings SET external_canonical_url = ? WHERE linkedin_id = ?').run(canonical, String(linkedinId));
+      return db.prepare('SELECT job_key FROM jobs WHERE canonical_url = ?').get(canonical)?.job_key ?? null;
+    },
+
+    flagPossibleDuplicate(canonicalUrl, otherJobKey) {
+      db.prepare(`
+        UPDATE jobs SET possible_duplicate_of = ?
+        WHERE canonical_url = ? AND job_key <> ? AND possible_duplicate_of IS NULL
+      `).run(String(otherJobKey), String(canonicalUrl), String(otherJobKey));
+    },
+
+    getLinkedInPosting(linkedinId) {
+      return db.prepare('SELECT * FROM linkedin_postings WHERE linkedin_id = ?').get(String(linkedinId)) ?? null;
+    },
+
+    listPersonalImprovements() {
+      return db.prepare('SELECT * FROM personal_improvements ORDER BY position ASC, id ASC')
+        .all().map(mapPersonalImprovement);
+    },
+
+    addPersonalImprovement(input, at = Date.now()) {
+      const keyword = compactText(input?.keyword, 100);
+      const explanation = compactText(input?.explanation, 280);
+      const suggestion = compactText(input?.suggestion, 280);
+      if (!keyword || !explanation || !suggestion) {
+        throw Object.assign(new Error('keyword, explanation and suggestion are required'), { statusCode: 400 });
+      }
+      const kind = PERSONAL_IMPROVEMENT_KINDS.has(input?.kind) ? input.kind : 'needs_confirmation';
+      const importance = PERSONAL_IMPROVEMENT_IMPORTANCE.has(input?.importance) ? input.importance : 'preferred';
+      const sourceCompany = compactText(input?.sourceCompany, 200) || null;
+      const sourceTitle = compactText(input?.sourceTitle, 200) || null;
+      const sourceJobKey = compactText(input?.sourceJobKey, 64) || null;
+
+      const existing = db.prepare(
+        'SELECT * FROM personal_improvements WHERE keyword = ? AND source_job_key IS ?',
+      ).get(keyword, sourceJobKey);
+      if (existing) return { created: false, item: mapPersonalImprovement(existing) };
+
+      const insert = db.transaction(() => {
+        const nextPosition = (db.prepare('SELECT MAX(position) AS maxPosition FROM personal_improvements').get()?.maxPosition ?? -1) + 1;
+        const result = db.prepare(`
+          INSERT INTO personal_improvements (
+            keyword, kind, importance, explanation, suggestion,
+            source_company, source_title, source_job_key, position, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(keyword, kind, importance, explanation, suggestion, sourceCompany, sourceTitle, sourceJobKey, nextPosition, at);
+        return db.prepare('SELECT * FROM personal_improvements WHERE id = ?').get(result.lastInsertRowid);
+      });
+      return { created: true, item: mapPersonalImprovement(insert()) };
+    },
+
+    removePersonalImprovement(id) {
+      const result = db.prepare('DELETE FROM personal_improvements WHERE id = ?').run(Number(id));
+      return result.changes > 0;
+    },
+
+    reorderPersonalImprovements(orderedIds) {
+      const ids = (Array.isArray(orderedIds) ? orderedIds : []).map(Number).filter(Number.isInteger);
+      const current = db.prepare('SELECT id FROM personal_improvements').all().map((row) => row.id);
+      if (ids.length !== current.length || !current.every((id) => ids.includes(id))) {
+        throw Object.assign(new Error('orderedIds must include every existing item exactly once'), { statusCode: 400 });
+      }
+      const update = db.prepare('UPDATE personal_improvements SET position = ? WHERE id = ?');
+      db.transaction(() => {
+        ids.forEach((id, index) => update.run(index, id));
+      })();
+      return this.listPersonalImprovements();
     },
 
     close() {

@@ -25,3 +25,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+The LinkedIn source (`scripts/jobs/sources/linkedin.mjs`) is an independent Node.js
+implementation. Its public endpoints, card markup, request headers, and pacing were learned from
+two MIT-licensed projects; no source code was copied:
+
+- [JobSpy](https://github.com/speedyapply/JobSpy), Copyright (c) 2023 Cullen Watson
+- [linkedin-job-scraper](https://github.com/hendrixfreire/linkedin-job-scraper), Copyright (c) 2026 hendrixfreire

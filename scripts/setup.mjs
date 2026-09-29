@@ -10,6 +10,7 @@ const COPIES = [
   ['config/jobs.example.yml', 'config/jobs.yml'],
   ['templates/candidate-profile.example.md', 'profile/01-candidate-profile.md'],
   ['templates/preferences.example.md', 'profile/02-preferences.md'],
+  ['templates/current-resume.example.md', 'profile/03-current-resume.md'],
 ];
 const DIRECTORIES = ['auth', 'data', 'documents', 'profile', 'reports'];
 
@@ -44,7 +45,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     console.log('jobOps setup הושלם.');
     if (result.created.length) console.log(`נוצרו: ${result.created.join(', ')}`);
     if (result.skipped.length) console.log(`לא נדרסו קבצים קיימים: ${result.skipped.join(', ')}`);
-    console.log('השלב הבא: מלא את קובצי הפרופיל וההעדפות, עדכן config/jobs.yml והריץ npm run doctor.');
+    console.log('השלב הבא: מלא את קובצי הפרופיל, ההעדפות וקורות החיים, עדכן config/jobs.yml והריץ npm run doctor.');
   } catch (error) {
     console.error(`setup נכשל: ${error.message}`);
     process.exitCode = 1;

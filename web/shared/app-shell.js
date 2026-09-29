@@ -3,27 +3,25 @@ import { startAdaptivePolling } from './polling.js';
 
 const page = document.body.dataset.page;
 const shell = document.querySelector('#app-shell');
-const pageLabels = { scan: 'סריקה ותוצאה', decisions: 'החלטות', companies: 'חברות במעקב' };
+const pageLabels = { scan: 'סריקה ותוצאה', decisions: 'החלטות', companies: 'חברות במעקב', 'personal-area': 'אזור אישי', 'decision-stats': 'סטטיסטיקה' };
 
 shell.innerHTML = `
   <header class="topbar">
-    <div>
-      <p class="eyebrow">JOB SEARCH COMMAND CENTER</p>
-      <h1>jobOps</h1>
-      <p class="subtitle">חיפוש, התאמה ופתיחת משרות — ממקום אחד.</p>
+    <div class="topbar-inner">
+      <a class="brand" href="/scan" aria-label="jobOps">job<span>Ops</span></a>
+      <nav class="app-nav" aria-label="ניווט ראשי">
+        ${Object.entries(pageLabels).map(([key, label]) => `
+          <a href="/${key}" ${key === page ? 'aria-current="page"' : ''}>
+            <span>${label}</span>
+            <b id="nav-${key}-count" aria-label="מספר פריטים"></b>
+          </a>`).join('')}
+      </nav>
+      <div id="system-status" class="system-status" data-state="idle">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-label">מוכן לעבודה</span>
+      </div>
     </div>
-    <div id="system-status" class="system-status" data-state="idle">
-      <span class="status-dot" aria-hidden="true"></span>
-      <span id="status-label">מוכן לעבודה</span>
-    </div>
-  </header>
-  <nav class="app-nav" aria-label="ניווט ראשי">
-    ${Object.entries(pageLabels).map(([key, label]) => `
-      <a href="/${key}" ${key === page ? 'aria-current="page"' : ''}>
-        <span>${label}</span>
-        <b id="nav-${key}-count" aria-label="מספר פריטים"></b>
-      </a>`).join('')}
-  </nav>`;
+  </header>`;
 
 let actionRunning = false;
 

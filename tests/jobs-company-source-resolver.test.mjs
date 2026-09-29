@@ -164,3 +164,20 @@ test('public HTML fetch rejects redirects to private or non-HTTPS targets', asyn
     /HTTPS|private|public/i,
   );
 });
+
+test('a trailing-slash redirect is followed as sent instead of looping until redirect_limit', async () => {
+  const requested = [];
+  const fetchImpl = async (url) => {
+    requested.push(url);
+    if (url === 'https://example.com/careers') {
+      return new Response(null, { status: 308, headers: { location: '/careers/' } });
+    }
+    return new Response('<html>jobs</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+  const page = await fetchPublicHtml('https://example.com/careers', {
+    fetchImpl, lookupHost: async () => [{ address: '93.184.216.34', family: 4 }],
+  });
+  assert.deepEqual(requested, ['https://example.com/careers', 'https://example.com/careers/']);
+  assert.equal(page.url, 'https://example.com/careers/');
+  assert.match(page.html, /jobs/);
+});

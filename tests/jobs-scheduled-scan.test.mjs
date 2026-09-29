@@ -42,3 +42,24 @@ test('scheduled agent XML-escapes an unusual node/project path', () => {
   assert.match(plist, /\/opt\/node &amp; tools\/node/);
   assert.match(plist, /\/tmp\/jobops &lt;local&gt;/);
 });
+
+test('LinkedIn runs three times a day off the WhatsApp slots and waits briefly for the scan lock', () => {
+  const linkedin = SCHEDULES.find((schedule) => schedule.key === 'linkedin');
+  assert.deepEqual(linkedin.args, ['--linkedin-only', '--wait-for-lock', '20']);
+  assert.deepEqual(linkedin.times, [{ hour: 8, minute: 0 }, { hour: 12, minute: 30 }, { hour: 20, minute: 30 }]);
+  const taken = new Set(SCHEDULES.filter((schedule) => schedule.key !== 'linkedin')
+    .flatMap((schedule) => (schedule.times || []).map(({ hour, minute }) => `${hour}:${minute}`)));
+  assert.equal(linkedin.times.some(({ hour, minute }) => taken.has(`${hour}:${minute}`)), false);
+  const plist = renderScheduledScanAgent(linkedin, { nodePath: '/usr/bin/node', rootDir: '/project' });
+  assert.match(plist, /<string>--linkedin-only<\/string><string>--wait-for-lock<\/string><string>20<\/string>/);
+  assert.doesNotMatch(plist, /--open|RunAtLoad|KeepAlive/);
+});
+
+test('the WhatsApp trigger runs every 30 minutes as its own token-free script', () => {
+  const trigger = SCHEDULES.find((schedule) => schedule.key === 'whatsapp-trigger');
+  assert.equal(trigger.intervalSeconds, 1800);
+  const plist = renderScheduledScanAgent(trigger, { nodePath: '/opt/node', rootDir: '/tmp/jobops' });
+  assert.match(plist, /<string>\/tmp\/jobops\/scripts\/jobs\/whatsapp-trigger\.mjs<\/string><\/array>/);
+  assert.match(plist, /<key>StartInterval<\/key><integer>1800<\/integer>/);
+  assert.doesNotMatch(plist, /StartCalendarInterval|RunAtLoad|KeepAlive/);
+});

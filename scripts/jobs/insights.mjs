@@ -40,7 +40,7 @@ export function aggregateGroupStats(runs) {
   return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name, 'he'));
 }
 
-// ATS vs WhatsApp: how many links each source actually sent to Codex for
+// ATS vs WhatsApp vs LinkedIn: how many links each source actually sent to Codex for
 // scoring ("processed"), and how many of those turned out suitable — the
 // simplest honest proxy for "cost per suitable job" per source. Items a
 // local filter screened out before ever reaching Codex are excluded from
@@ -49,6 +49,7 @@ export function aggregateSourcePerformance(runs) {
   const totals = {
     ats: { processed: 0, suitable: 0, notSuitable: 0, filtered: 0, failed: 0 },
     whatsapp: { processed: 0, suitable: 0, notSuitable: 0, filtered: 0, failed: 0 },
+    linkedin: { processed: 0, suitable: 0, notSuitable: 0, filtered: 0, failed: 0 },
   };
   for (const run of runs) {
     for (const scope of run.details?.processing?.scopes || []) {
@@ -65,5 +66,5 @@ export function aggregateSourcePerformance(runs) {
     ...bucket,
     costPerSuitable: bucket.suitable > 0 ? Number((bucket.processed / bucket.suitable).toFixed(1)) : null,
   });
-  return { ats: withCost(totals.ats), whatsapp: withCost(totals.whatsapp) };
+  return { ats: withCost(totals.ats), whatsapp: withCost(totals.whatsapp), linkedin: withCost(totals.linkedin) };
 }

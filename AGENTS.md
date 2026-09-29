@@ -18,7 +18,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 | `data/story-bank.md` | Accumulated STAR+R interview stories | user data |
 | `reports/` | Evaluation reports `{###}-{company-slug}-{YYYY-MM-DD}.md` | user data |
 | `templates/` | CV HTML template, canonical states, portals example | system |
-| `scripts/jobs.mjs` | Unified ATS + WhatsApp scan, scoring, reporting, and optional Chrome opening | system |
+| `scripts/jobs.mjs` | Unified ATS + WhatsApp + LinkedIn scan, scoring, reporting, and optional Chrome opening | system |
 | `scripts/jobs/` | Shared job collection, storage, evaluation, and output modules | system |
 | `scripts/web.mjs` | Local-only dashboard server and bounded action runner | system |
 | `web/` | Dependency-free Hebrew dashboard UI | system |
@@ -50,6 +50,9 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 npm run jobs        # unified ATS + WhatsApp scan and minimal report
 npm run jobs -- --days 2 --open  # explicit window and open new matches in Chrome
 npm run jobs:open   # open suitable URLs not opened before
+npm run jobs:linkedin # LinkedIn public search only (no login); --linkedin-hours N for a manual window
+npm run jobs:linkedin-probe # bounded read-only check that LinkedIn's guest search still behaves as expected
+npm run jobs:whatsapp-trigger # token-free check; processes the WhatsApp backlog only when enough new jobs wait
 npm run jobs:verify-groups # live-check configured WhatsApp groups
 npm run jobs:mark-read # mark only the configured WhatsApp group chats as read
 npm run jobs:migrate-whatsapp # one-time import of legacy WhatsApp message dedup

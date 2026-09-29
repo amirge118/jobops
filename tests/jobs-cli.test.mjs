@@ -5,9 +5,11 @@ import {
   completionStatusFor,
   filterPendingCandidatesForSources,
   parseArgs,
+  processingScope,
   scanWindow,
   summarizeProcessingResults,
   summarizeSourceResults,
+  windowStatusFor,
 } from '../scripts/jobs.mjs';
 
 test('source-only scans do not pull failed work from the other source', () => {
@@ -32,6 +34,9 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
     dryRun: false,
     retryOnly: false,
     whatsappBacklog: false,
+    linkedinOnly: false,
+    linkedinHours: null,
+    waitForLockMinutes: null,
   });
   assert.deepEqual(parseArgs(['--whatsapp-backlog', '--days', '7']), {
     days: 7,
@@ -41,8 +46,21 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
     dryRun: false,
     retryOnly: false,
     whatsappBacklog: true,
+    linkedinOnly: false,
+    linkedinHours: null,
+    waitForLockMinutes: null,
   });
-  assert.throws(() => parseArgs(['--ats-only', '--whatsapp-only']), /either/);
+  assert.throws(() => parseArgs(['--ats-only', '--whatsapp-only']), /only one source-only flag/);
+  assert.throws(() => parseArgs(['--linkedin-only', '--ats-only']), /only one source-only flag/);
+  assert.throws(() => parseArgs(['--retry-only', '--linkedin-only']), /retry-only/);
+  assert.throws(() => parseArgs(['--ats-only', '--linkedin-hours', '6']), /linkedin-hours/);
+  assert.throws(() => parseArgs(['--linkedin-hours', '0']), /positive/);
+  assert.throws(() => parseArgs(['--wait-for-lock', '500']), /up to 120/);
+  assert.deepEqual(
+    (({ linkedinOnly, linkedinHours, waitForLockMinutes }) => ({ linkedinOnly, linkedinHours, waitForLockMinutes }))(
+      parseArgs(['--linkedin-only', '--linkedin-hours', '6', '--wait-for-lock', '20'])),
+    { linkedinOnly: true, linkedinHours: 6, waitForLockMinutes: 20 },
+  );
   assert.throws(() => parseArgs(['--retry-only', '--whatsapp-only']), /retry-only/);
   assert.throws(() => parseArgs(['--whatsapp-backlog', '--ats-only']), /whatsapp-backlog/);
 });
@@ -164,4 +182,55 @@ test('link processing is summarized independently for ATS and each WhatsApp grou
     failureReasons: { page_uncertain: 1 },
   });
   assert.equal(completionStatusFor({ processing }), 'incomplete');
+});
+
+test('LinkedIn pending work is only read when LinkedIn is part of the run', () => {
+  const pending = [
+    { jobKey: 'ats', source: 'ATS: greenhouse-api' },
+    { jobKey: 'wa', source: 'WhatsApp: Group A' },
+    { jobKey: 'li', source: 'LinkedIn: Backend' },
+  ];
+  assert.deepEqual(filterPendingCandidatesForSources(pending, ['ats', 'whatsapp']).map((job) => job.jobKey), ['ats', 'wa']);
+  assert.deepEqual(filterPendingCandidatesForSources(pending, ['ats', 'whatsapp', 'linkedin']).map((job) => job.jobKey), ['ats', 'wa', 'li']);
+  assert.deepEqual(filterPendingCandidatesForSources(pending, ['linkedin']).map((job) => job.jobKey), ['li']);
+  assert.deepEqual(filterPendingCandidatesForSources(pending, ['retry'], { linkedinEnabled: false }).map((job) => job.jobKey), ['ats', 'wa']);
+  assert.deepEqual(filterPendingCandidatesForSources(pending, ['retry'], { linkedinEnabled: true }).map((job) => job.jobKey), ['ats', 'wa', 'li']);
+});
+
+test('LinkedIn sightings get their own processing scope per search, not ATS', () => {
+  assert.deepEqual(processingScope({ source: 'LinkedIn: Data Analyst' }), { source: 'linkedin', name: 'Data Analyst' });
+  assert.deepEqual(processingScope({ source: 'ATS: lever-api' }), { source: 'ats', name: 'ATS' });
+  const processing = summarizeProcessingResults(
+    [{ jobKey: 'a', source: 'LinkedIn: Backend' }, { jobKey: 'b', source: 'LinkedIn: Backend' }],
+    new Map([['a', { status: 'suitable' }], ['b', { status: 'failed', code: 'linkedin_deferred' }]]),
+  );
+  assert.deepEqual(processing.scopes.map(({ source, name, links, suitable, failed }) => ({ source, name, links, suitable, failed })), [
+    { source: 'linkedin', name: 'Backend', links: 2, suitable: 1, failed: 1 },
+  ]);
+});
+
+test('a LinkedIn shortfall marks the run incomplete without holding back the ATS/WhatsApp window', () => {
+  const summary = summarizeSourceResults([
+    { source: 'ats', candidates: [], stats: { companies: 1, totalFound: 0 }, errors: [] },
+    { source: 'linkedin', candidates: [], requests: 1, haltedBy: 'blocked', errors: [],
+      searches: [{ id: 1, label: 'Backend', status: 'failed', reason: 'blocked', found: 0, new: 0, known: 0, filtered: 0 }] },
+  ]);
+  summary.processing = {
+    totals: { failed: 2 },
+    scopes: [{ source: 'linkedin', name: 'Backend', failed: 2 }],
+  };
+  assert.equal(summary.linkedin.coverageStatus, 'incomplete');
+  assert.equal(completionStatusFor(summary), 'incomplete');
+  assert.equal(windowStatusFor(summary), 'success');
+
+  summary.processing.scopes.push({ source: 'ats', name: 'ATS', failed: 1 });
+  assert.equal(windowStatusFor(summary), 'incomplete');
+});
+
+test('a source-level LinkedIn crash is reported as a failure, never as zero jobs', () => {
+  const summary = summarizeSourceResults([
+    { source: 'linkedin', candidates: [], searches: [], errors: [], failure: { code: 'network_error', reason: 'x' } },
+  ]);
+  assert.equal(summary.linkedin.coverageStatus, 'incomplete');
+  assert.equal(completionStatusFor(summary), 'incomplete');
 });

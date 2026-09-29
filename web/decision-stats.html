@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><meta name="description" content="סטטיסטיקת החלטות ב-jobOps"><title>סטטיסטיקה — jobOps</title><link rel="stylesheet" href="/styles.css"></head>
+  <body data-page="decision-stats">
+    <div id="app-shell"></div>
+    <div class="shell">
+      <main class="page-main">
+        <section class="page-hero"><div><h1>סטטיסטיקה</h1><p>כל החלטה בעמוד ההחלטות נרשמת כאן לפני שהמשרה עוברת לארכיון, כדי לראות מה באמת מעניין אותך ואיפה הציון טועה.</p></div>
+          <div class="stats-window" role="group" aria-label="טווח זמן">
+            <button type="button" data-window="7d">7 ימים</button>
+            <button type="button" data-window="30d" aria-pressed="true">30 יום</button>
+            <button type="button" data-window="all">הכל</button>
+          </div>
+        </section>
+        <section class="summary-grid stats-summary" aria-label="סיכום החלטות">
+          <article class="summary-card-jobs"><span>החלטות בטווח</span><strong id="stat-total">0</strong></article>
+          <article class="summary-card-groups"><span>מעניין / חברה למעקב</span><strong id="stat-positive">0</strong></article>
+          <article class="summary-card-unopened"><span>ממתינות להחלטה עכשיו</span><strong id="stat-pending">0</strong></article>
+        </section>
+        <section class="page-section stats-section" aria-labelledby="source-value-title">
+          <div class="section-heading"><div><h2 id="source-value-title">מה כל מקור באמת מביא</h2><p id="source-value-note">30 הימים האחרונים. עוזר להחליט אם הסריקה משתלמת או שכדאי לשנות גישה.</p></div></div>
+          <div class="table-wrap"><table class="stats-table source-value-table"><thead><tr><th>מקור</th><th>סריקות</th><th>זמן סריקה</th><th>נמצאו</th><th>סוננו</th><th>נשלחו לציון</th><th>מתאימות</th><th>עניינו אותך</th><th>מתאימות לסריקה</th><th>ציונים למתאימה</th></tr></thead><tbody id="source-yield-body"></tbody></table></div>
+          <div id="source-companies" class="calibration-grid source-companies"></div>
+          <div class="table-wrap"><table class="stats-table source-value-table"><thead><tr><th>מקור</th><th>מתאימות שמצא</th><th>רק הוא מצא</th><th>נמצאו גם במקור אחר</th><th>הקדים את האחרים (חציון)</th></tr></thead><tbody id="source-exclusive-body"></tbody></table></div>
+        </section>
+        <section class="page-section stats-section" aria-labelledby="breakdown-title">
+          <div class="section-heading"><div><h2 id="breakdown-title">איך החלטת</h2></div></div>
+          <div id="decision-bars" class="decision-bars"></div>
+        </section>
+        <section class="page-section stats-section" aria-labelledby="calibration-title">
+          <div class="section-heading"><div><h2 id="calibration-title">איפה הציון לא הסכים איתך</h2><p>מספרים שמראים אם כדאי להדק עוגן בציון או לשנות את סף ההתאמה.</p></div></div>
+          <div id="calibration" class="calibration-grid"></div>
+        </section>
+        <section class="page-section stats-section" aria-labelledby="bands-title">
+          <div class="section-heading"><div><h2 id="bands-title">לפי ציון ולפי מקור</h2></div></div>
+          <div class="stats-tables">
+            <div class="table-wrap"><table class="stats-table"><thead><tr><th>טווח ציון</th><th>החלטות</th><th>עניינו אותך</th></tr></thead><tbody id="bands-body"></tbody></table></div>
+            <div class="table-wrap"><table class="stats-table"><thead><tr><th>מקור</th><th>החלטות</th><th>עניינו אותך</th></tr></thead><tbody id="sources-body"></tbody></table></div>
+          </div>
+          <div id="companies" class="rejected-companies"></div>
+        </section>
+        <section class="page-section stats-section" aria-labelledby="recent-title">
+          <div class="section-heading"><div><h2 id="recent-title">החלטות אחרונות</h2></div></div>
+          <div class="table-wrap"><table class="stats-table recent-table"><thead><tr><th>מתי</th><th>חברה ומשרה</th><th>ציון</th><th>החלטה</th></tr></thead><tbody id="recent-body"></tbody></table>
+            <div id="stats-empty" class="empty-state"><strong>עדיין לא נרשמו החלטות</strong><span>כל לחיצה על "מעניין אותי" או על סיבת דחייה בעמוד ההחלטות תופיע כאן.</span><a class="button button-secondary" href="/decisions">עבור להחלטות</a></div>
+          </div>
+        </section>
+        <section class="page-section stats-section" aria-labelledby="llm-daily-title">
+          <div class="section-heading"><div><h2 id="llm-daily-title">צריכת Codex לפי מקור</h2><p>טוקנים של ניקוד וניתוח קורות חיים, מחולקים לפי המקור שהביא כל משרה. <span id="llm-daily-model"></span></p></div>
+            <div class="stats-window" role="group" aria-label="טווח צריכה"><button type="button" data-llm-days="7" aria-pressed="true">7 ימים</button><button type="button" data-llm-days="14">14 יום</button><button type="button" data-llm-days="30">30 יום</button></div></div>
+          <div id="llm-daily-summary" class="calibration-grid llm-daily-summary"></div>
+          <div class="table-wrap"><table class="stats-table llm-daily-table"><thead><tr><th>יום</th><th>מקור</th><th>טוקנים</th><th>נוקדו</th><th>מתאימות</th><th>טוקנים למשרה מתאימה</th></tr></thead><tbody id="llm-daily-body"></tbody></table></div>
+        </section>
+      </main>
+      <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
+    </div>
+    <script type="module" src="/shared/app-shell.js"></script>
+    <script type="module" src="/pages/decision-stats-page.js"></script>
+    <script type="module" src="/pages/llm-usage-section.js"></script>
+  </body>
+</html>

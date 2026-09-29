@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["results"],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["jobKey", "items", "employerPriorities", "screenPass"],
+        "properties": {
+          "jobKey": { "type": "string", "minLength": 1 },
+          "employerPriorities": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["priority", "weight", "coverage", "note"],
+              "properties": {
+                "priority": { "type": "string", "minLength": 1, "maxLength": 100 },
+                "weight": { "type": "string", "enum": ["critical", "important", "nice"] },
+                "coverage": { "type": "string", "enum": ["strong", "partial", "missing"] },
+                "note": { "type": "string", "minLength": 1, "maxLength": 200 }
+              }
+            }
+          },
+          "screenPass": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["level", "reason"],
+            "properties": {
+              "level": { "type": "string", "enum": ["high", "medium", "low"] },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 280 }
+            }
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["keyword", "kind", "importance", "explanation", "suggestion", "evidence"],
+              "properties": {
+                "keyword": { "type": "string", "minLength": 1, "maxLength": 100 },
+                "kind": { "type": "string", "enum": ["safe_addition", "experience_gap", "needs_confirmation"] },
+                "importance": { "type": "string", "enum": ["required", "preferred"] },
+                "explanation": { "type": "string", "minLength": 1, "maxLength": 280 },
+                "suggestion": { "type": "string", "minLength": 1, "maxLength": 280 },
+                "evidence": { "type": ["string", "null"], "maxLength": 280 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

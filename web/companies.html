@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="he" dir="rtl">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="חברות במעקב ב-jobOps"><title>חברות במעקב — jobOps</title><link rel="stylesheet" href="/styles.css"></head>
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><meta name="description" content="חברות במעקב ב-jobOps"><title>חברות במעקב — jobOps</title><link rel="stylesheet" href="/styles.css"></head>
   <body data-page="companies">
+    <div id="app-shell"></div>
     <div class="shell">
-      <div id="app-shell"></div>
       <main class="page-main">
-        <section class="page-hero"><div><p class="step">03 / חברות במעקב</p><h2>הרחבת סריקת ה־ATS</h2><p>חברה חדשה נכנסת לסריקות הבאות רק אחרי אישור מפורש שלך.</p></div><a class="button button-secondary" href="/scan">הפעל סריקה</a></section>
+        <section class="page-hero"><div><h1>חברות במעקב</h1><p>חברה חדשה נכנסת לסריקות הבאות רק אחרי אישור מפורש שלך.</p></div><a class="button button-secondary" href="/scan">הפעל סריקה</a></section>
         <section class="companies-section page-section" aria-labelledby="companies-title">
-          <div class="section-heading companies-heading"><div><p class="step">רשימת המעקב</p><h2 id="companies-title">איפה מחפשים?</h2></div></div>
+          <div class="section-heading companies-heading"><div><h2 id="companies-title">איפה מחפשים?</h2></div></div>
           <div class="company-summary" aria-label="סיכום חברות"><span>במעקב <strong id="watched-companies-count">0</strong></span><span>ממתינות לאישור <strong id="candidate-companies-count">0</strong></span><span>מושהות <strong id="paused-companies-count">0</strong></span></div>
           <div class="company-research-card">
-            <div><p class="step">מחקר חברה</p><h3>מצא ובדוק לי את מקור המשרות</h3><p>מזינים רק שם. המערכת מאתרת כמה מקורות אפשריים, מזהה את ה־ATS שמאחורי האתר ובודקת משרות אמיתיות לפני הוספה למעקב.</p></div>
+            <div><h3>מצא ובדוק לי את מקור המשרות</h3><p>מזינים רק שם. המערכת מאתרת כמה מקורות אפשריים, מזהה את ה־ATS שמאחורי האתר ובודקת משרות אמיתיות לפני הוספה למעקב.</p></div>
             <form id="company-research-form" class="company-research-form"><label><span>שם חברה</span><input id="company-research-name" name="name" maxlength="120" required placeholder="לדוגמה: FINQ"></label><button class="button button-primary" type="submit">חקור חברה</button></form>
           </div>
           <details class="company-manual-add"><summary>כבר יש לי קישור למשרה או לעמוד קריירה</summary><form id="company-discovery-form" class="company-discovery-form"><label><span>שם חברה</span><input id="company-name" name="name" maxlength="120" required placeholder="לדוגמה: Example"></label><label><span>קישור למשרה או לעמוד קריירה</span><input id="company-url" name="url" type="url" maxlength="2048" required placeholder="https://jobs.lever.co/example"></label><button class="button button-secondary" type="submit">בדוק קישור</button></form></details>

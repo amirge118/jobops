@@ -10,10 +10,12 @@ export function parseListeningPids(output) {
     .filter((value) => Number.isInteger(value) && value > 1 && value <= 2_147_483_647))];
 }
 
+// restart-local.mjs runs the dashboard in-process, so a dashboard it started
+// must be recognizable too — otherwise it could never be restarted again.
 export function isJobOpsDashboardProcess(processInfo, rootDir) {
   if (!processInfo?.cwd || !processInfo?.command) return false;
   if (path.resolve(processInfo.cwd) !== path.resolve(rootDir)) return false;
-  return /(?:^|\s)["']?(?:\S*\/)?scripts\/(?:web|start-local)\.mjs(?:["']?)(?:\s|$)/
+  return /(?:^|\s)["']?(?:\S*\/)?scripts\/(?:web|start-local|restart-local)\.mjs(?:["']?)(?:\s|$)/
     .test(processInfo.command);
 }
 
