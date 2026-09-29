@@ -29,8 +29,8 @@ export const COMPANY_SOURCE_PROVIDERS = Object.freeze([
 const PROVIDERS_WITHOUT_BOARD_KEY = new Set(['official-html', 'embedded-json']);
 
 const PRIVATE_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.home', '.lan'];
-const SHARED_RECRUITING_HOSTS = new Set(['comeet.com', 'teamme.link', 'dueto.io']);
-const SHARED_RECRUITING_HOST_SUFFIXES = ['.teamme.link', '.dueto.io'];
+const SHARED_RECRUITING_HOSTS = new Set(['comeet.com', 'teamme.link', 'dueto.io', 'linkedin.com']);
+const SHARED_RECRUITING_HOST_SUFFIXES = ['.teamme.link', '.dueto.io', '.linkedin.com'];
 const GREENHOUSE_HOSTS = new Set([
   'boards.greenhouse.io',
   'job-boards.greenhouse.io',

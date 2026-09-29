@@ -126,3 +126,32 @@ test('official HTML renders with a browser instead of a plain fetch when opted i
     options: { timeoutMs: 25_000 },
   }]);
 });
+
+test('official HTML retries only the trailing-slash variant when the listing redirects', async () => {
+  const redirectError = () => Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
+  const calls = [];
+  const jobs = await officialHtml.fetch({
+    name: 'DealHub', careers_url: 'https://dealhub.io/careers',
+    provider: 'official-html', job_path_prefix: '/careers/', job_path_segments: 3,
+  }, {
+    async fetchLimitedText(url) {
+      calls.push(url);
+      if (!url.endsWith('/')) throw redirectError();
+      return '<a href="/careers/rd/backend-engineer/"><h3>Backend Engineer</h3></a>';
+    },
+  });
+  assert.deepEqual(calls, ['https://dealhub.io/careers', 'https://dealhub.io/careers/']);
+  assert.equal(jobs[0].title, 'Backend Engineer');
+
+  const otherCalls = [];
+  await assert.rejects(officialHtml.fetch({
+    name: 'Blocked', careers_url: 'https://example.com/careers',
+    provider: 'official-html', job_path_prefix: '/careers/', job_path_segments: 2,
+  }, {
+    async fetchLimitedText(url) {
+      otherCalls.push(url);
+      throw Object.assign(new Error('HTTP 403'), { status: 403 });
+    },
+  }), /HTTP 403/);
+  assert.deepEqual(otherCalls, ['https://example.com/careers'], 'non-redirect failures are not retried');
+});

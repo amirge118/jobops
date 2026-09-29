@@ -321,19 +321,73 @@ test('no headed browser is launched when the headless check is not a bot-challen
   await fetcher.close();
 });
 
-test('substantial LinkedIn job HTML is usable when no apply control is server-rendered', async () => {
+function linkedinPostingHtml({ description = 'Build distributed services. '.repeat(20), closed = false } = {}) {
+  return `<section><h2 class="top-card-layout__title topcard__title">Backend Engineer</h2>
+    <a class="topcard__org-name-link topcard__flavor--black-link" href="#">Example</a>
+    ${closed ? '<figcaption>No longer accepting applications</figcaption>' : ''}
+    <div class="show-more-less-html__markup show-more-less-html__markup--clamp-after-5">${description}</div>
+    <ul><li><h3 class="description__job-criteria-subheader">Seniority level</h3>
+    <span class="description__job-criteria-text description__job-criteria-text--criteria">Mid-Senior level</span></li></ul></section>`;
+}
+
+test('LinkedIn postings are read through the guest posting API, never the browser path', async () => {
   const store = memoryStore();
-  const content = `Backend Engineer at Example ${'Build distributed services. '.repeat(80)}`;
+  const requested = [];
+  const chromiumImpl = { launch: async () => { throw new Error('browser must not be used for LinkedIn'); } };
   const fetcher = createJobPageFetcher({
     store,
     cacheTtlMs: 0,
-    fetchImpl: async () => new Response(`<html><body>${content}</body></html>`, { status: 200 }),
+    chromiumImpl,
+    fetchImpl: async (url) => { requested.push(url); return new Response(linkedinPostingHtml(), { status: 200 }); },
   });
 
-  const page = await fetcher.fetch('https://www.linkedin.com/jobs/view/4458840528');
+  const page = await fetcher.fetch('https://il.linkedin.com/jobs/view/backend-engineer-at-example-4458840528?refId=a&trackingId=b');
 
+  assert.deepEqual(requested, ['https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/4458840528']);
   assert.equal(page.status, 'active');
-  assert.equal(page.code, 'linkedin_job_content');
-  assert.match(page.content, /Backend Engineer/);
+  assert.equal(page.code, 'linkedin_posting_api');
+  assert.equal(page.canonicalUrl, 'https://www.linkedin.com/jobs/view/4458840528');
+  assert.match(page.content, /Backend Engineer[\s\S]*Seniority level: Mid-Senior level[\s\S]*distributed services/);
   await fetcher.close();
+});
+
+test('a closed or missing LinkedIn posting is expired, not a reading failure', async () => {
+  const closed = createJobPageFetcher({ store: memoryStore(), cacheTtlMs: 0, sleep: async () => {},
+    fetchImpl: async () => new Response(linkedinPostingHtml({ closed: true }), { status: 200 }) });
+  assert.equal((await closed.fetch('https://www.linkedin.com/jobs/view/4458840528')).status, 'expired');
+  const missing = createJobPageFetcher({ store: memoryStore(), cacheTtlMs: 0, sleep: async () => {},
+    fetchImpl: async () => new Response('', { status: 404 }) });
+  assert.equal((await missing.fetch('https://www.linkedin.com/jobs/view/4458840529')).code, 'linkedin_not_found');
+});
+
+test('a LinkedIn block stops further LinkedIn reads in the run and leaves them retryable', async () => {
+  const requested = [];
+  const fetcher = createJobPageFetcher({
+    store: memoryStore(),
+    cacheTtlMs: 0,
+    sleep: async () => {},
+    fetchImpl: async (url) => { requested.push(url); return new Response('', { status: 429 }); },
+  });
+
+  const first = await fetcher.fetch('https://www.linkedin.com/jobs/view/1111111111');
+  const second = await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222');
+
+  assert.equal(first.status, 'uncertain');
+  assert.equal(first.code, 'linkedin_rate_limited');
+  assert.equal(second.status, 'uncertain');
+  assert.equal(second.code, 'linkedin_deferred');
+  assert.equal(requested.length, 1);
+});
+
+test('LinkedIn reads stop at the per-run cap and a changed page is not called active', async () => {
+  const fetcher = createJobPageFetcher({
+    store: memoryStore(),
+    cacheTtlMs: 0,
+    sleep: async () => {},
+    linkedinLimits: { maxDetailFetchesPerRun: 1 },
+    fetchImpl: async () => new Response('<html><body><div>redesigned page</div></body></html>', { status: 200 }),
+  });
+
+  assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/1111111111')).code, 'linkedin_structure_changed');
+  assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222')).code, 'linkedin_deferred');
 });

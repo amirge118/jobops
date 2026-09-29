@@ -27,6 +27,26 @@ export const SCHEDULES = [
     args: ['--whatsapp-only'],
     times: [{ hour: 10, minute: 0 }, { hour: 15, minute: 0 }, { hour: 20, minute: 0 }],
   },
+  // Off the WhatsApp slots on purpose. Normal windows are ~11.5h / 4.5h /
+  // 8h, covering the full day; each search resumes from its own last
+  // success, so a missed slot is caught up rather than lost. Waiting up to
+  // 20 minutes for the scan lock turns a rare collision into a short delay.
+  {
+    key: 'linkedin',
+    label: 'com.amirgefen.jobops.scan-linkedin',
+    args: ['--linkedin-only', '--wait-for-lock', '20'],
+    times: [{ hour: 8, minute: 0 }, { hour: 12, minute: 30 }, { hour: 20, minute: 30 }],
+  },
+  // A token-free check every 30 minutes: it processes the locally collected
+  // WhatsApp backlog only once enough new jobs are waiting, or once the
+  // oldest has waited long enough (see scripts/jobs/whatsapp-trigger.mjs).
+  {
+    key: 'whatsapp-trigger',
+    label: 'com.amirgefen.jobops.whatsapp-trigger',
+    script: ['scripts', 'jobs', 'whatsapp-trigger.mjs'],
+    args: [],
+    intervalSeconds: 1800,
+  },
 ];
 
 function xml(value) {
@@ -36,10 +56,13 @@ function xml(value) {
 }
 
 export function renderScheduledScanAgent(schedule, { nodePath = process.execPath, rootDir = ROOT_DIR } = {}) {
-  const jobsPath = path.join(rootDir, 'scripts', 'jobs.mjs');
-  const intervals = schedule.times
+  const jobsPath = path.join(rootDir, ...(schedule.script || ['scripts', 'jobs.mjs']));
+  const trigger = schedule.intervalSeconds
+    ? `<key>StartInterval</key><integer>${Number(schedule.intervalSeconds)}</integer>`
+    : `<key>StartCalendarInterval</key>
+  <array>${schedule.times
     .map(({ hour, minute }) => `<dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`)
-    .join('');
+    .join('')}</array>`;
   const argsXml = schedule.args.map((arg) => `<string>${xml(arg)}</string>`).join('');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -49,8 +72,7 @@ export function renderScheduledScanAgent(schedule, { nodePath = process.execPath
   <key>ProgramArguments</key>
   <array><string>${xml(nodePath)}</string><string>${xml(jobsPath)}</string>${argsXml}</array>
   <key>WorkingDirectory</key><string>${xml(rootDir)}</string>
-  <key>StartCalendarInterval</key>
-  <array>${intervals}</array>
+  ${trigger}
 </dict>
 </plist>
 `;
@@ -71,7 +93,8 @@ function launchctl(args, { allowFailure = false } = {}) {
   return result;
 }
 
-function formatTimes(times) {
+function formatTimes(times, intervalSeconds) {
+  if (intervalSeconds) return `every ${Math.round(intervalSeconds / 60)} minutes`;
   return times.map(({ hour, minute }) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`).join(', ');
 }
 
@@ -85,7 +108,7 @@ export function manageScheduledScans(command = process.argv[2]) {
       fs.chmodSync(target, 0o644);
       launchctl(['bootout', domain, target], { allowFailure: true });
       launchctl(['bootstrap', domain, target]);
-      console.log(`Installed ${schedule.label} (${formatTimes(schedule.times)}).`);
+      console.log(`Installed ${schedule.label} (${formatTimes(schedule.times, schedule.intervalSeconds)}).`);
     }
     return;
   }

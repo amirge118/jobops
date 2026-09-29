@@ -15,6 +15,12 @@ sources:
     authPath: "auth"
     # Opt in only if processed group messages should be marked as read.
     markRead: false
+    # Token-free check every 30 minutes (npm run jobs:schedule:install). It
+    # processes the collected backlog only when enough NEW jobs (unique links
+    # not already known) are waiting, or when the oldest has waited too long.
+    trigger:
+      minNewJobs: 8
+      maxWaitMinutes: 120
     collector:
       heartbeatMs: 5000
       staleAfterMs: 20000
@@ -24,6 +30,52 @@ sources:
     groups:
       - name: "Example jobs group"
         jid: "000000000000000000@g.us"
+  # LinkedIn public job search (guest, no login, no stored session).
+  # `searches` is the only place searches are defined (the dashboard shows them read-only).
+  # Changing keywords/location restarts that search's coverage; renaming does not.
+  linkedin:
+    enabled: true
+    # Automatic window = from the last successful run of each search (minus the
+    # overlap) until now, e.g. 08:00 -> 12:30 searches ~4.5h. Never longer than
+    # maxBackfillHours; anything older is reported as an uncovered gap.
+    overlapMinutes: 30        # re-scan this much before the last covered moment
+    initialLookbackHours: 12  # first run of a (new or changed) search
+    maxBackfillHours: 16      # hard cap on any window, automatic or manual
+    # LinkedIn's "Israel" results include the Center District; cards are kept
+    # only in these districts (a bare "Israel" location is kept too).
+    acceptedAreas:
+      - "Tel Aviv District"
+      - "Center District"
+    limits:
+      maxPagesPerSearch: 10   # 10 cards per page -> up to 100 postings per search per run
+      maxRequestsPerRun: 50   # shared by all searches in one run
+      maxDetailFetchesPerRun: 40
+      delayMs: [3000, 7000]
+      detailDelayMs: [2000, 4000]
+      runTimeoutMs: 300000
+    # A card is kept only when its title contains at least one `titleIncludes`
+    # term as a whole word (LinkedIn also matches descriptions, which floods
+    # results with unrelated roles). Editing titleIncludes does not reset
+    # coverage; editing keywords or location does.
+    searches:
+      - key: backend
+        label: "Backend"
+        keywords: 'backend OR "back end" OR "server side"'
+        location: "Israel"
+        titleIncludes: ["backend", "back end", "server", "server side", "java", "node", "node.js", "nodejs",
+          "typescript", "python", "golang", "kotlin", "צד שרת", "בקאנד", "בק אנד"]
+      - key: data-engineering
+        label: "Data Engineering"
+        keywords: '"data engineer" OR "data platform" OR "analytics engineer"'
+        location: "Israel"
+        titleIncludes: ["data engineer", "data engineering", "data platform", "analytics engineer", "data infrastructure",
+          "big data", "etl", "data pipeline", "data pipelines", "מהנדס נתונים", "מהנדס דאטה"]
+      - key: data-analyst
+        label: "Data Analyst"
+        keywords: '"data analyst"'
+        location: "Israel"
+        titleIncludes: ["data analyst", "product analyst", "bi analyst", "business intelligence", "analytics analyst",
+          "מנתח נתונים", "אנליסט נתונים", "אנליסט דאטה"]
 
 filters:
   domains:
@@ -39,15 +91,22 @@ filters:
     - ai/ml
 
 decision:
-  minimumScore: 4.0
+  minimumScore: 3.6
   exactMatchScore: 4.5
-  criteriaVersion: "simple-v3-explainable"
+  criteriaVersion: "anchored-v4-evidence"
 
 scoring:
   provider: "codex"
-  batchSize: 8
-  # Optional: omit model to use the model selected in your signed-in Codex CLI.
-  # model: "gpt-5.6-luna"
+  batchSize: 5
+  # Per codex call (~13s per job measured); a batch that exceeds it fails as a whole and is retried next scan.
+  timeoutSeconds: 240
+  # Model for every Codex call (scoring, resume analysis, company research).
+  # jobOps runs codex exec with --ignore-user-config, so without this line
+  # Codex's own default (priciest) model is used, not your personal CLI model.
+  # Watch its effect in the dashboard's "צריכת Codex" panel and statistics page.
+  model: "gpt-reserve"
+  # Optional: reasoningEffort: "low"; resumeGap.model for a stronger model on
+  # the few suitable jobs only.
 
 browser:
   application: "Google Chrome"

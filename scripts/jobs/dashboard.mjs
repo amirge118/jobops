@@ -1,6 +1,7 @@
 import path from 'node:path';
 
-const SOURCES = new Set(['all', 'ats', 'whatsapp']);
+const SOURCES = new Set(['all', 'ats', 'whatsapp', 'linkedin']);
+const MAX_LINKEDIN_HOURS = 24 * 14;
 
 export function parseDashboardOptions(input = {}, maxLookbackDays = 14) {
   const days = Number(input.days);
@@ -9,9 +10,20 @@ export function parseDashboardOptions(input = {}, maxLookbackDays = 14) {
   }
 
   const source = String(input.source || 'all');
-  if (!SOURCES.has(source)) throw new Error('source must be all, ats, or whatsapp');
+  if (!SOURCES.has(source)) throw new Error('source must be all, ats, whatsapp, or linkedin');
 
-  return { days, source, open: input.open === true };
+  // Optional manual LinkedIn window; without it LinkedIn resumes
+  // automatically from each search's last successful coverage.
+  let linkedinHours = null;
+  if (input.linkedinHours != null && input.linkedinHours !== '') {
+    linkedinHours = Number(input.linkedinHours);
+    if (!['all', 'linkedin'].includes(source)) throw new Error('linkedinHours applies only to scans that include LinkedIn');
+    if (!Number.isInteger(linkedinHours) || linkedinHours < 1 || linkedinHours > MAX_LINKEDIN_HOURS) {
+      throw new Error(`linkedinHours must be an integer between 1 and ${MAX_LINKEDIN_HOURS}`);
+    }
+  }
+
+  return { days, source, open: input.open === true, linkedinHours };
 }
 
 export function parseBacklogOptions(input = {}) {
@@ -28,6 +40,8 @@ export function buildActionCommand(action, options, rootDir) {
     const args = [path.join(rootDir, 'scripts', 'jobs.mjs'), '--days', String(options.days)];
     if (options.source === 'ats') args.push('--ats-only');
     if (options.source === 'whatsapp') args.push('--whatsapp-only');
+    if (options.source === 'linkedin') args.push('--linkedin-only');
+    if (options.linkedinHours != null) args.push('--linkedin-hours', String(options.linkedinHours));
     if (options.open) args.push('--open');
     return { command: process.execPath, args };
   }

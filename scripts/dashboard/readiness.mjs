@@ -6,6 +6,14 @@ import { promisify } from 'node:util';
 
 import { chromium } from 'playwright';
 import { resolveCodexBinary } from '../jobs/score-job.mjs';
+import { createJobStore } from '../jobs/store.mjs';
+
+function defaultQuotaState(config) {
+  if (!config?.jobsDbPath) return null;
+  const store = createJobStore(config.jobsDbPath);
+  try { return store.getLlmQuota(); }
+  finally { store.close(); }
+}
 
 const SANDBOX_REASON = 'האתר הופעל מתוך סביבת Codex מוגבלת, ולכן תהליכי Chromium ומנגנון הציון אינם יכולים לפעול.';
 const SANDBOX_STEP = 'סגור את השרת הנוכחי והפעל את start-jobops.command מ-Finder או את npm run start:local מתוך Terminal רגיל.';
@@ -46,6 +54,7 @@ export async function inspectRuntimeReadiness({
   env = process.env,
   probeBrowser = defaultBrowserProbe,
   probeCodexState = defaultCodexProbe,
+  readQuota = defaultQuotaState,
   now = Date.now(),
 } = {}) {
   if (config?.demo) {
@@ -67,7 +76,16 @@ export async function inspectRuntimeReadiness({
   } else {
     try {
       await probeCodexState(config);
-      scorer = ready('מנגנון התאמה');
+      let quota = null;
+      try { quota = readQuota(config); } catch { quota = null; }
+      scorer = quota?.blockedUntil && quota.blockedUntil > now
+        ? blocked(
+          'llm_quota_exhausted',
+          'מנגנון התאמה',
+          `מכסת Codex נגמרה ותתחדש בערך ב-${new Date(quota.blockedUntil).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' })}. סריקות מדולגות עד אז.`,
+          'אין צורך בפעולה: הסריקות המתוזמנות ימשיכו לבד כשהמכסה תתחדש.',
+        )
+        : ready('מנגנון התאמה');
     } catch (error) {
       scorer = error?.readinessCode === 'scorer_not_logged_in'
         ? blocked(
@@ -112,13 +130,16 @@ export async function inspectRuntimeReadiness({
     browser,
     scorer,
     collector: collectorState,
-    readyFor: { ats: runtimeReady, whatsapp: runtimeReady && collectorReady },
+    // LinkedIn postings are read over plain HTTP, so only scoring is required.
+    readyFor: { ats: runtimeReady, whatsapp: runtimeReady && collectorReady, linkedin: scorer.status === 'ready' },
   };
 }
 
 export function blockersForAction(readiness, action, options = {}) {
   if (!['scan', 'retry-failed', 'process-backlog'].includes(action)) return [];
-  const components = [readiness?.browser, readiness?.scorer];
+  const components = action === 'scan' && options.source === 'linkedin'
+    ? [readiness?.scorer]
+    : [readiness?.browser, readiness?.scorer];
   if (action === 'scan' && ['all', 'whatsapp'].includes(options.source)) components.push(readiness?.collector);
   const unique = new Map();
   for (const component of components) {

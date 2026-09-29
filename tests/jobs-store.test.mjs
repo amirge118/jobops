@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import Database from 'better-sqlite3';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 
 function newStore() {
@@ -588,7 +589,7 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     unopened: 0,
   });
   assert.deepEqual(snapshot.jobs.map((job) => Object.keys(job)), [
-    ['jobKey', 'company', 'title', 'summary', 'score', 'fitLabel', 'decisionReason', 'applyUrl', 'suitable', 'activeStatus', 'lastSeenAt', 'openedAt', 'fitBreakdown'],
+    ['jobKey', 'company', 'title', 'summary', 'score', 'fitLabel', 'decisionReason', 'applyUrl', 'suitable', 'activeStatus', 'lastSeenAt', 'openedAt', 'possibleDuplicateOf', 'sourceKinds', 'fitBreakdown', 'resumeGap'],
   ]);
   assert.equal(snapshot.jobs[0].fitLabel, 'בול מתאים');
   assert.deepEqual(snapshot.jobs[0].fitBreakdown, {
@@ -672,5 +673,130 @@ test('archived jobs disappear from active queues while retaining only dedup iden
   const repeatedRow = store.getJob(repeated.jobKey);
   assert.equal(repeatedRow.sources_json, '[]');
   assert.equal(repeatedRow.apply_url, sighting.canonicalUrl);
+  store.close();
+});
+
+test('LinkedIn identity is the posting id across subdomains, slugs and tracking params', () => {
+  const store = newStore();
+  const first = store.recordSighting({ url: 'https://il.linkedin.com/jobs/view/backend-engineer-at-acme-4425439971?refId=a&trackingId=b',
+    company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Backend', matchCompanyRole: false });
+  const second = store.recordSighting({ url: 'https://www.linkedin.com/jobs/search/?currentJobId=4425439971&geoId=101620260',
+    company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Data', matchCompanyRole: false });
+  const shared = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4425439971/', source: 'WhatsApp: Group A' });
+
+  assert.equal(first.isNew, true);
+  assert.equal(second.jobKey, first.jobKey);
+  assert.equal(shared.jobKey, first.jobKey);
+  const job = store.getJob(first.jobKey);
+  assert.equal(job.canonical_url, 'https://www.linkedin.com/jobs/view/4425439971');
+  assert.deepEqual(JSON.parse(job.sources_json), ['LinkedIn: Backend', 'LinkedIn: Data', 'WhatsApp: Group A']);
+  store.close();
+});
+
+test('LinkedIn never merges on company and role alone; the twin is only flagged', () => {
+  const store = newStore();
+  const ats = store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme', title: 'Data Analyst', source: 'ATS: greenhouse-api' });
+  const linkedin = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000001', company: 'Acme', title: 'Data Analyst',
+    source: 'LinkedIn: Analyst', matchCompanyRole: false });
+  assert.notEqual(linkedin.jobKey, ats.jobKey);
+  assert.equal(linkedin.isNew, true);
+  assert.equal(store.getJob(linkedin.jobKey).possible_duplicate_of, ats.jobKey);
+  // ATS and WhatsApp keep their existing company+role dedup.
+  const atsTwin = store.recordSighting({ url: 'https://jobs.lever.co/acme/2', company: 'Acme', title: 'Data Analyst', source: 'ATS: lever-api' });
+  assert.equal(atsTwin.jobKey, ats.jobKey);
+  store.close();
+});
+
+test('an archived or rejected LinkedIn posting is not revived by a new sighting', () => {
+  const store = newStore();
+  const url = 'https://www.linkedin.com/jobs/view/4000000002';
+  const archived = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend', matchCompanyRole: false });
+  store.archiveJob(archived.jobKey);
+  const again = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend', matchCompanyRole: false });
+  assert.equal(again.isNew, false);
+  assert.ok(store.getJob(archived.jobKey).archived_at);
+  assert.equal(store.listPendingEvaluation().length, 0);
+  store.close();
+});
+
+test('rejected LinkedIn postings keep only technical dedup identity', () => {
+  const store = newStore();
+  const sighting = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000003', company: 'Acme', title: 'Backend',
+    source: 'LinkedIn: Backend', matchCompanyRole: false });
+  store.recordLinkedInPosting({ linkedinId: '4000000003', jobKey: sighting.jobKey, listedAt: '2026-09-28' });
+  store.recordLinkedInExternalUrl('4000000003', 'https://boards.greenhouse.io/acme/jobs/9');
+  store.saveEvaluation(sighting.jobKey, {
+    company: 'Acme', title: 'Backend', summary: 's', score: 2, fitLabel: 'לא מתאים', decisionReason: 'r', suitable: false,
+    applyUrl: 'https://www.linkedin.com/jobs/view/4000000003', activeStatus: 'active', contentHash: 'c', profileHash: 'p',
+    criteriaVersion: 'v', evaluatedAt: 1,
+  });
+  const job = store.getJob(sighting.jobKey);
+  assert.equal(job.company, null);
+  assert.equal(job.sources_json, '[]');
+  assert.equal(store.getLinkedInPosting('4000000003').external_canonical_url, null);
+  assert.equal(store.getLinkedInPosting('4000000003').linkedin_id, '4000000003');
+  store.close();
+});
+
+test('opening the store re-keys legacy LinkedIn URLs to the posting id without deleting collisions', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-store-'));
+  const dbPath = path.join(dir, 'jobs.db');
+  const store = createJobStore(dbPath);
+  store.close();
+  const raw = new Database(dbPath);
+  const insert = raw.prepare(`INSERT INTO jobs (job_key, canonical_url, apply_url, company_role_key, sources_json, first_seen_at, last_seen_at)
+    VALUES (?, ?, ?, '::', '[]', 1, 1)`);
+  insert.run('legacy1', 'https://il.linkedin.com/jobs/view/backend-at-acme-4100000001?refId=x', 'https://il.linkedin.com/jobs/view/backend-at-acme-4100000001');
+  insert.run('legacy2', 'https://www.linkedin.com/jobs/view/4100000002', 'x');
+  insert.run('legacy3', 'https://il.linkedin.com/jobs/view/4100000002?trackingId=y', 'y');
+  raw.close();
+
+  const reopened = createJobStore(dbPath);
+  assert.equal(reopened.getJob('legacy1').canonical_url, 'https://www.linkedin.com/jobs/view/4100000001');
+  assert.equal(reopened.getJob('legacy2').canonical_url, 'https://www.linkedin.com/jobs/view/4100000002');
+  assert.equal(reopened.getJob('legacy3').canonical_url, 'https://il.linkedin.com/jobs/view/4100000002?trackingId=y');
+  assert.equal(reopened.countJobs(), 3);
+  reopened.close();
+});
+
+test('config/jobs.yml is the only source of LinkedIn searches and query changes restart coverage', () => {
+  const store = newStore();
+  store.syncLinkedInSearches([{ key: 'analyst', label: 'Analyst', keywords: '"data analyst"', location: 'Israel' }]);
+  const [seeded] = store.listLinkedInSearches();
+  store.recordLinkedInSearchAttempt({ searchId: seeded.id, queryHash: seeded.queryHash, status: 'complete', coveredUntil: 500 });
+
+  const [relabeled] = store.syncLinkedInSearches([{ key: 'analyst', label: 'Analytics', keywords: '"Data  Analyst"', location: 'israel' }]);
+  assert.equal(relabeled.label, 'Analytics');
+  assert.equal(relabeled.coveredUntil, 500, 'a cosmetic config edit keeps coverage');
+  const [changed] = store.syncLinkedInSearches([{ key: 'analyst', label: 'Analytics', keywords: '"data analyst" OR "bi analyst"', location: 'Israel' }]);
+  assert.equal(changed.id, seeded.id);
+  assert.equal(changed.coveredUntil, null, 'a changed query starts fresh');
+
+  const afterRemoval = store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: 'backend', location: 'Israel' }]);
+  assert.deepEqual(afterRemoval.map(({ key, enabled }) => ({ key, enabled })), [
+    { key: 'analyst', enabled: false },
+    { key: 'backend', enabled: true },
+  ], 'a search removed from config is disabled, not deleted');
+
+  assert.throws(() => store.syncLinkedInSearches([{ key: 'x', keywords: 'x; DROP TABLE jobs', location: 'Israel' }]), /keywords/);
+  assert.throws(() => store.syncLinkedInSearches([{ key: 'x', keywords: 'backend' }]), /location or geoId/);
+  assert.throws(() => store.syncLinkedInSearches([{ keywords: 'backend', location: 'Israel' }]), /needs a key/);
+  assert.throws(() => store.syncLinkedInSearches([
+    { key: 'x', keywords: 'backend', location: 'Israel' }, { key: 'x', keywords: 'data', location: 'Israel' },
+  ]), /unique/);
+  assert.equal(store.isSourceEnabled('linkedin'), true);
+  assert.equal(store.setSourceEnabled('linkedin', false), false);
+  store.close();
+});
+
+test('a run that only fell short on LinkedIn still anchors the ATS/WhatsApp window', () => {
+  const store = newStore();
+  const runId = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
+  store.finishRun(runId, { status: 'incomplete', windowStatus: 'success', finishedAt: 10 });
+  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp'])?.id, runId);
+  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp', 'linkedin'])?.id, runId);
+  const failed = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
+  store.finishRun(failed, { status: 'incomplete', windowStatus: 'incomplete', finishedAt: 20 });
+  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp'])?.id, runId);
   store.close();
 });

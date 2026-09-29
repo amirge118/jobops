@@ -46,6 +46,8 @@ ${JSON.stringify({ companyName })}`;
         schemaPath: SCHEMA_PATH,
         cwd: config.rootDir,
         model: config.scoring?.model || null,
+        purpose: 'company_research',
+        items: 1,
         binary: resolveCodexBinary(config),
         timeoutMs: 90_000,
         liveSearch: true,

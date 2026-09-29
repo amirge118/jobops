@@ -1,6 +1,12 @@
 import { createJobStore } from '../jobs/store.mjs';
+import { readCandidateContext } from '../jobs/config.mjs';
 import { aggregateGroupStats, aggregateSourcePerformance, STATS_WINDOWS } from '../jobs/insights.mjs';
+import { RESUME_GAP_VERSION } from '../jobs/resume-gap.mjs';
+import { buildDecisionStats } from '../jobs/decision-stats.mjs';
+import { buildSourceValue, SOURCE_VALUE_WINDOW_DAYS } from '../jobs/source-value.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from '../liveness-browser.mjs';
+import { linkedinWindowSettings } from '../jobs/linkedin-window.mjs';
+import { DEFAULT_LINKEDIN_LIMITS } from '../jobs/sources/linkedin.mjs';
 
 export function dashboardSettings(config) {
   return {
@@ -18,6 +24,21 @@ export function createDashboardQueries(config, action) {
     const store = createJobStore(config.jobsDbPath);
     try { return callback(store); }
     finally { store.close(); }
+  };
+
+  const resumeGapContext = () => {
+    try {
+      const candidate = readCandidateContext(config);
+      return {
+        profileHash: candidate.profileHash, resumeHash: candidate.resumeHash,
+        resumeAvailable: candidate.resumeAvailable, analysisVersion: RESUME_GAP_VERSION,
+      };
+    } catch {
+      return {
+        profileHash: '', resumeHash: '', resumeAvailable: false,
+        analysisVersion: RESUME_GAP_VERSION,
+      };
+    }
   };
 
   const whatsappHistory = (store) => {
@@ -108,6 +129,35 @@ export function createDashboardQueries(config, action) {
 
   // What's currently stuck and why — independent of any one run, so it
   // reflects the real outstanding backlog rather than just the last scan.
+  // Searches are defined only in config/jobs.yml; syncing on read lets the
+  // dashboard show them before the first LinkedIn scan has ever run.
+  const llmUsage = (store) => {
+    const now = Date.now();
+    const day = store.summarizeCodexUsage({ sinceMs: now - 24 * 60 * 60 * 1000, untilMs: now });
+    const week = store.summarizeCodexUsage({ sinceMs: now - 7 * 24 * 60 * 60 * 1000, untilMs: now });
+    return {
+      model: config.scoring?.model || 'default',
+      reasoningEffort: config.scoring?.reasoningEffort || null,
+      quota: day.quota,
+      day: day.totals,
+      week: week.totals,
+      runs: week.runs,
+    };
+  };
+
+  const linkedin = (store) => {
+    const configured = config.sources.linkedin || null;
+    if (configured) store.syncLinkedInSearches(configured.searches || []);
+    return {
+      configured: Boolean(configured),
+      configEnabled: Boolean(configured?.enabled),
+      enabled: Boolean(configured?.enabled) && store.isSourceEnabled('linkedin'),
+      window: linkedinWindowSettings(config),
+      limits: { ...DEFAULT_LINKEDIN_LIMITS, ...(configured?.limits || {}) },
+      searches: store.listLinkedInSearches(),
+    };
+  };
+
   const failures = (store) => {
     const breakdown = store.getFailureBreakdown().map((row) => ({
       ...row,
@@ -151,13 +201,43 @@ export function createDashboardQueries(config, action) {
         whatsappHistory: whatsappHistory(store),
         insights: insights(store),
         failures: failures(store),
+        linkedin: linkedin(store),
+        llmUsage: llmUsage(store),
       }));
+    },
+
+    linkedin() {
+      return withStore((store) => linkedin(store));
+    },
+
+    dailyLlmUsage(days = 14) {
+      return withStore((store) => ({
+        model: config.scoring?.model || 'default',
+        ...store.dailyUsageBySource({ days: Math.max(1, Math.min(60, Number(days) || 14)) }),
+      }));
+    },
+
+    setLinkedInEnabled(enabled) {
+      return withStore((store) => { store.setSourceEnabled('linkedin', enabled); return linkedin(store); });
     },
 
     jobs() {
       return withStore((store) => ({
         stats: store.getDashboardStats(),
-        jobs: store.listDashboardJobs(),
+        jobs: store.listDashboardJobs({ resumeGapContext: resumeGapContext() }),
+      }));
+    },
+
+    decisionStats() {
+      return withStore((store) => ({
+        ...buildDecisionStats(store.listJobDecisions(), {
+          pending: store.getDashboardStats().suitable,
+          minimumScore: Number(config.decision?.minimumScore ?? 4),
+          exactMatchScore: Number(config.decision?.exactMatchScore ?? 4.5),
+        }),
+        sourceValue: buildSourceValue(store.listSourceValueFacts({
+          since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
+        })),
       }));
     },
 

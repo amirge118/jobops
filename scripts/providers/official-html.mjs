@@ -189,9 +189,23 @@ export default {
       if (typeof ctx.fetchLimitedText !== 'function') {
         throw new Error('official-html: bounded HTML transport is unavailable');
       }
-      html = await ctx.fetchLimitedText(rule.listingUrl.href, {
+      const fetchListing = (url) => ctx.fetchLimitedText(url, {
         redirect: 'error', timeoutMs: 15_000, maxBytes: MAX_HTML_BYTES,
       });
+      try {
+        html = await fetchListing(rule.listingUrl.href);
+      } catch (error) {
+        // Stored careers URLs are normalized without a trailing slash, but
+        // many sites (WordPress, Next.js) redirect `/careers` → `/careers/`.
+        // Redirects stay refused in general; only that exact same-origin
+        // slash variant is retried.
+        const slashUrl = new URL(rule.listingUrl.href);
+        if (!/unexpected redirect/i.test(String(error?.cause?.message || error?.message)) || slashUrl.pathname.endsWith('/')) {
+          throw error;
+        }
+        slashUrl.pathname += '/';
+        html = await fetchListing(slashUrl.href);
+      }
     }
     const jobs = extractOfficialHtmlJobs(html, entry);
     if (jobs.length === 0 && entry.allow_empty !== true) {

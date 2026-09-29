@@ -113,7 +113,13 @@ export async function fetchPublicHtml(rawUrl, {
         if (hop === MAX_REDIRECTS) throw new CompanyRegistryError('redirect_limit', 'Careers page redirected too many times');
         const location = response.headers.get('location');
         if (!location) throw new CompanyRegistryError('invalid_redirect', 'Careers page returned a redirect without a location');
-        current = normalizeCompanyUrl(new URL(location, current).href, { keepQuery: true });
+        // Validate the target, but request it exactly as the server sent it:
+        // normalizing strips a trailing slash, so a common `/careers` →
+        // `/careers/` redirect would loop back to itself until redirect_limit.
+        const next = new URL(location, current);
+        normalizeCompanyUrl(next.href, { keepQuery: true });
+        next.hash = '';
+        current = next.href;
         continue;
       }
       if (!response.ok) {

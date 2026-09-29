@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 const TRACKING_KEYS = new Set([
   'coref',
   'gh_src',
@@ -14,6 +16,27 @@ function isTrackingKey(key) {
   return normalized.startsWith('utm_') || TRACKING_KEYS.has(normalized);
 }
 
+const LINKEDIN_HOST = /(?:^|\.)linkedin\.com$/i;
+
+// LinkedIn exposes one posting under many URLs: country subdomains
+// (il.linkedin.com), slugged paths (/jobs/view/backend-engineer-at-x-123),
+// search-page deep links (?currentJobId=123) and per-impression tracking
+// params. The numeric posting id is the only stable identity.
+export function linkedinJobId(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (!LINKEDIN_HOST.test(parsed.hostname)) return null;
+  const fromPath = parsed.pathname.match(/^\/jobs\/view\/(?:[^/]*-)?(\d{6,})\/?$/)?.[1] ||
+    parsed.pathname.match(/^\/jobs-guest\/jobs\/api\/jobPosting\/(\d{6,})\/?$/)?.[1];
+  if (fromPath) return fromPath;
+  const current = parsed.searchParams.get('currentJobId');
+  return /^\d{6,}$/.test(current || '') && /^\/jobs(?:\/|$)/.test(parsed.pathname) ? current : null;
+}
+
 export function canonicalizeJobUrl(value) {
   if (!value) return '';
 
@@ -25,6 +48,8 @@ export function canonicalizeJobUrl(value) {
   }
 
   if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+  const linkedinId = linkedinJobId(value);
+  if (linkedinId) return `https://www.linkedin.com/jobs/view/${linkedinId}`;
 
   parsed.protocol = 'https:';
   parsed.hostname = parsed.hostname.toLowerCase();
@@ -103,4 +128,18 @@ export function decideFit({
     return { suitable: true, label: 'בול מתאים' };
   }
   return { suitable: true, label: 'מתאים' };
+}
+
+export function resumeGapInputHash({
+  contentHash,
+  profileHash,
+  resumeHash,
+  analysisVersion,
+}) {
+  return createHash('sha256').update(JSON.stringify({
+    contentHash: String(contentHash || ''),
+    profileHash: String(profileHash || ''),
+    resumeHash: String(resumeHash || ''),
+    analysisVersion: String(analysisVersion || ''),
+  })).digest('hex');
 }

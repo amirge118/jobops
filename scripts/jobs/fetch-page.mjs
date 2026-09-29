@@ -5,7 +5,10 @@ import { classifyLiveness } from '../liveness-core.mjs';
 import {
   checkUrlLiveness, createHeadedPageProvider, isChallengeResult, newLivenessPage,
 } from '../liveness-browser.mjs';
-import { canonicalizeJobUrl } from './core.mjs';
+import { canonicalizeJobUrl, linkedinJobId } from './core.mjs';
+import {
+  DEFAULT_LINKEDIN_LIMITS, LINKEDIN_POSTING_ENDPOINT, classifySearchResponse, fetchWithTimeout, parsePostingPage,
+} from './sources/linkedin.mjs';
 
 const FETCH_TIMEOUT_MS = 15_000;
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36';
@@ -114,17 +117,6 @@ export function knownNonJobReason(url) {
   }
 }
 
-function linkedinJobHasContent(url, content) {
-  try {
-    const parsed = new URL(url);
-    return ['linkedin.com', 'www.linkedin.com'].includes(parsed.hostname.toLowerCase()) &&
-      /^\/jobs\/view\/\d+/.test(parsed.pathname) &&
-      content.length >= 1_000;
-  } catch {
-    return false;
-  }
-}
-
 function safeHttpUrl(value, fallback) {
   try {
     const parsed = new URL(String(value || ''));
@@ -207,7 +199,24 @@ function hostnameOf(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }
 
-export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis.fetch, chromiumImpl = chromium }) {
+function linkedinContent(posting) {
+  const criteria = Object.entries(posting.criteria).map(([name, value]) => `${name}: ${value}`).join('\n');
+  return [posting.title, posting.company, posting.location, criteria, posting.description]
+    .filter(Boolean).join('\n\n');
+}
+
+export function createJobPageFetcher({
+  store,
+  cacheTtlMs,
+  fetchImpl = globalThis.fetch,
+  chromiumImpl = chromium,
+  linkedinLimits = {},
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}) {
+  // LinkedIn postings are read through the guest posting API only — never
+  // the browser path — within a per-run cap, paced, and with a breaker:
+  // after one block or rate limit, the rest wait for a later retry.
+  const linkedin = { ...DEFAULT_LINKEDIN_LIMITS, ...linkedinLimits, fetched: 0, haltedBy: null };
   let browser = null;
   let page = null;
   let headed = null;
@@ -436,6 +445,63 @@ export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis
         return { canonicalUrl, ...result, contentHash, fromCache: false };
       }
 
+      const linkedinId = linkedinJobId(canonicalUrl);
+      if (linkedinId) {
+        if (linkedin.haltedBy || linkedin.fetched >= linkedin.maxDetailFetchesPerRun) {
+          return {
+            canonicalUrl, finalUrl: canonicalUrl, content: '', contentHash: hashContent(''), fromCache: false,
+            status: 'uncertain',
+            code: 'linkedin_deferred',
+            reason: linkedin.haltedBy
+              ? `LinkedIn ${linkedin.haltedBy} earlier in this run; reading was postponed to the next retry.`
+              : 'The per-run LinkedIn reading limit was reached; reading was postponed to the next retry.',
+          };
+        }
+        if (linkedin.fetched > 0) {
+          const [min, max] = linkedin.detailDelayMs || [2_000, 4_000];
+          await sleep(Math.round(min + Math.random() * Math.max(0, max - min)));
+        }
+        linkedin.fetched += 1;
+        let result;
+        try {
+          const response = await fetchWithTimeout(fetchImpl, `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`, { timeoutMs: FETCH_TIMEOUT_MS });
+          const posting = response.status === 200 ? parsePostingPage(response.html) : null;
+          if (response.status === 404 || response.status === 410) {
+            result = { status: 'expired', code: 'linkedin_not_found', reason: 'LinkedIn reports that the posting no longer exists.', content: '' };
+          } else if (posting?.closed) {
+            result = { status: 'expired', code: 'linkedin_closed', reason: 'LinkedIn marks the posting as no longer accepting applications.', content: '' };
+          } else if (posting && posting.description.length >= 200) {
+            if (posting.applyUrl) {
+              const twin = store.recordLinkedInExternalUrl?.(linkedinId, posting.applyUrl);
+              if (twin) store.flagPossibleDuplicate?.(canonicalUrl, twin);
+            }
+            result = { status: 'active', code: 'linkedin_posting_api', reason: 'Loaded from the LinkedIn public posting page.', content: linkedinContent(posting) };
+          } else {
+            const classification = classifySearchResponse({ ...response, cards: [] });
+            const blocked = ['blocked', 'rate_limited'].includes(classification.status);
+            if (blocked) linkedin.haltedBy = classification.status;
+            result = {
+              status: 'uncertain',
+              code: blocked ? `linkedin_${classification.status}` : 'linkedin_structure_changed',
+              reason: blocked ? classification.reason : 'LinkedIn returned a page without a readable job description.',
+              content: '',
+            };
+          }
+        } catch (error) {
+          const timedOut = error?.name === 'AbortError';
+          result = {
+            status: 'uncertain',
+            code: timedOut ? 'timeout' : 'network_error',
+            reason: timedOut ? `LinkedIn did not answer within ${FETCH_TIMEOUT_MS}ms.` : 'LinkedIn could not be reached.',
+            content: '',
+          };
+        }
+        result.finalUrl = canonicalUrl;
+        const contentHash = hashContent(result.content);
+        store.savePage({ canonicalUrl, ...result, contentHash });
+        return { canonicalUrl, ...result, contentHash, fromCache: false };
+      }
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
       let finalUrl = url;
@@ -456,13 +522,6 @@ export function createJobPageFetcher({ store, cacheTtlMs, fetchImpl = globalThis
           bodyText: content,
           applyControls: visibleApplyLabels(html),
         });
-        if (liveness.result === 'uncertain' && linkedinJobHasContent(finalUrl, content)) {
-          liveness = {
-            result: 'active',
-            code: 'linkedin_job_content',
-            reason: 'Substantial LinkedIn job content was present and no closed-job marker matched.',
-          };
-        }
       } catch (error) {
         liveness = { result: 'uncertain', code: 'fetch_error', reason: error.message };
       } finally {

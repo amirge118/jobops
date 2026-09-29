@@ -2,23 +2,36 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { loadJobsConfig } from './jobs/config.mjs';
+import { loadJobsConfig, readCandidateContext } from './jobs/config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
-import { deduplicateJobs } from './jobs/core.mjs';
+import { deduplicateJobs, resumeGapInputHash } from './jobs/core.mjs';
 import { createJobPageFetcher } from './jobs/fetch-page.mjs';
 import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
-import { createJobScorer } from './jobs/score-job.mjs';
-import { createJobStore } from './jobs/store.mjs';
+import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
+import { createJobScorer, resolveCodexBinary, runCodexExec } from './jobs/score-job.mjs';
+import { checkCodexQuota, setCodexUsageRecorder } from './jobs/llm-usage.mjs';
+import { createJobStore, sourceKindOf } from './jobs/store.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
-import { createRunLifecycle, describeFailure, safeTargetUrl } from './jobs/diagnostics.mjs';
+import { scanLinkedIn } from './jobs/sources/linkedin.mjs';
+import { createRunLifecycle, describeFailure, hasFailureReason, safeTargetUrl } from './jobs/diagnostics.mjs';
 import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
 import { buildNegativeTitleFilter, loadTitleFilterNegative } from './scan.mjs';
+
+function numericFlag(argv, name, { max = Infinity } = {}) {
+  const index = argv.indexOf(name);
+  if (index < 0) return null;
+  const value = Number(argv[index + 1]);
+  if (!Number.isFinite(value) || value <= 0 || value > max) {
+    throw new Error(`${name} requires a positive number${Number.isFinite(max) ? ` up to ${max}` : ''}`);
+  }
+  return value;
+}
 
 export function parseArgs(argv) {
   const daysIndex = argv.indexOf('--days');
@@ -26,19 +39,27 @@ export function parseArgs(argv) {
   if (daysIndex >= 0 && (!Number.isFinite(days) || days <= 0)) {
     throw new Error('--days requires a positive number');
   }
-  if (argv.includes('--ats-only') && argv.includes('--whatsapp-only')) {
-    throw new Error('Use either --ats-only or --whatsapp-only, not both');
+  const onlyFlags = ['--ats-only', '--whatsapp-only', '--linkedin-only'].filter((flag) => argv.includes(flag));
+  if (onlyFlags.length > 1) {
+    throw new Error(`Use only one source-only flag, not ${onlyFlags.join(' and ')}`);
   }
-  if (argv.includes('--retry-only') && (argv.includes('--ats-only') || argv.includes('--whatsapp-only'))) {
+  if (argv.includes('--retry-only') && onlyFlags.length) {
     throw new Error('--retry-only cannot be combined with source-only flags');
   }
-  if (argv.includes('--whatsapp-backlog') && (argv.includes('--ats-only') || argv.includes('--whatsapp-only') || argv.includes('--retry-only'))) {
+  if (argv.includes('--whatsapp-backlog') && (onlyFlags.length || argv.includes('--retry-only'))) {
     throw new Error('--whatsapp-backlog cannot be combined with source-only or retry flags');
+  }
+  const linkedinHours = numericFlag(argv, '--linkedin-hours', { max: 24 * 14 });
+  if (linkedinHours != null && ['--retry-only', '--whatsapp-backlog', '--ats-only', '--whatsapp-only'].some((flag) => argv.includes(flag))) {
+    throw new Error('--linkedin-hours applies only to runs that include LinkedIn');
   }
   return {
     days,
     atsOnly: argv.includes('--ats-only'),
     whatsappOnly: argv.includes('--whatsapp-only'),
+    linkedinOnly: argv.includes('--linkedin-only'),
+    linkedinHours,
+    waitForLockMinutes: numericFlag(argv, '--wait-for-lock', { max: 120 }),
     open: argv.includes('--open'),
     dryRun: argv.includes('--dry-run'),
     retryOnly: argv.includes('--retry-only'),
@@ -64,23 +85,32 @@ function uniqueCandidates(candidates) {
   return [...new Map(candidates.map((candidate) => [candidate.jobKey, candidate])).values()];
 }
 
-export function filterPendingCandidatesForSources(candidates, sources) {
-  if (sources.includes('retry') || (sources.includes('ats') && sources.includes('whatsapp'))) {
-    return candidates;
+const isLinkedInCandidate = (candidate) => String(candidate.source || '').startsWith('LinkedIn:');
+
+// Pending LinkedIn postings are only read when LinkedIn is part of the run
+// (or a retry while the source is enabled): a disabled source must not keep
+// making requests to LinkedIn through the retry queue.
+export function filterPendingCandidatesForSources(candidates, sources, { linkedinEnabled = sources.includes('linkedin') } = {}) {
+  if (sources.includes('retry')) {
+    return linkedinEnabled ? candidates : candidates.filter((candidate) => !isLinkedInCandidate(candidate));
   }
-  if (sources.includes('ats')) {
-    return candidates.filter((candidate) => String(candidate.source || '').startsWith('ATS:'));
-  }
-  if (sources.includes('whatsapp') || sources.includes('whatsapp-backlog')) {
-    return candidates.filter((candidate) => String(candidate.source || '').startsWith('WhatsApp:'));
-  }
-  return [];
+  const includeAll = sources.includes('ats') && sources.includes('whatsapp');
+  return candidates.filter((candidate) => {
+    const source = String(candidate.source || '');
+    if (isLinkedInCandidate(candidate)) return sources.includes('linkedin');
+    return includeAll ||
+      (sources.includes('ats') && source.startsWith('ATS:')) ||
+      ((sources.includes('whatsapp') || sources.includes('whatsapp-backlog')) && source.startsWith('WhatsApp:'));
+  });
 }
 
-function processingScope(candidate) {
+export function processingScope(candidate) {
   const source = String(candidate.source || '');
   if (source.startsWith('WhatsApp: ')) {
     return { source: 'whatsapp', name: source.slice('WhatsApp: '.length).trim() || 'WhatsApp' };
+  }
+  if (source.startsWith('LinkedIn: ')) {
+    return { source: 'linkedin', name: source.slice('LinkedIn: '.length).trim() || 'LinkedIn' };
   }
   return { source: 'ats', name: 'ATS' };
 }
@@ -144,8 +174,78 @@ export function summarizeProcessingResults(candidates, outcomes) {
   return { totals, scopes: rows };
 }
 
+function summarizeLinkedIn(linkedin) {
+  if (!linkedin) return null;
+  const searches = (linkedin.searches || []).map((search) => ({
+    id: search.id,
+    label: search.label,
+    status: search.status,
+    reason: search.reason || null,
+    endedBy: search.endedBy || null,
+    capped: Boolean(search.capped),
+    pages: Number(search.pages || 0),
+    window: search.window || null,
+    warning: search.warning || null,
+    gap: search.gap || null,
+    advanced: Boolean(search.advanced),
+    found: Number(search.found || 0),
+    new: Number(search.new || 0),
+    known: Number(search.known || 0),
+    filtered: Number(search.filtered || 0),
+    stale: Number(search.stale || 0),
+  }));
+  return {
+    candidates: linkedin.candidates?.length || 0,
+    discovery: linkedin.discovery || null,
+    requests: Number(linkedin.requests || 0),
+    haltedBy: linkedin.haltedBy || null,
+    failure: linkedin.failure || null,
+    searches,
+    coverageStatus: !linkedin.failure && searches.every((search) => search.status === 'complete') ? 'complete' : 'incomplete',
+  };
+}
+
+// One durable row per collected source per run (store.recordSourceScanStats):
+// the funnel from what a source found to what it cost to score and what fit.
+export function sourceScanStatRows(details, secondsBySource = {}) {
+  const processed = new Map();
+  for (const scope of details.processing?.scopes || []) {
+    const row = processed.get(scope.source) || { scored: 0, suitable: 0, failed: 0 };
+    row.scored += Number(scope.processed || 0);
+    row.suitable += Number(scope.suitable || 0);
+    row.failed += Number(scope.failed || 0);
+    processed.set(scope.source, row);
+  }
+  const rows = [];
+  const push = (source, fields) => rows.push({
+    source, seconds: secondsBySource[source], ...fields,
+    ...(processed.get(source) || { scored: 0, suitable: 0, failed: 0 }),
+  });
+  if (details.ats) {
+    push('ats', {
+      found: details.ats.found, candidates: details.ats.candidates, errors: details.ats.errors,
+      filteredTitle: details.ats.filtered?.title, filteredLocation: details.ats.filtered?.location,
+      filteredRecency: details.ats.filtered?.recency,
+    });
+  }
+  if (details.whatsapp) {
+    push('whatsapp', { found: details.whatsapp.candidates, candidates: details.whatsapp.candidates, errors: 0 });
+  }
+  if (details.linkedin) {
+    const searches = details.linkedin.searches || [];
+    push('linkedin', {
+      found: details.linkedin.discovery?.found ?? details.linkedin.candidates,
+      candidates: details.linkedin.candidates,
+      filteredTitle: searches.reduce((total, search) => total + Number(search.filtered || 0), 0),
+      errors: searches.filter((search) => search.status === 'failed').length,
+    });
+  }
+  return rows;
+}
+
 export function summarizeSourceResults(sourceResults) {
   const ats = sourceResults.find((result) => result.source === 'ats');
+  const linkedin = sourceResults.find((result) => result.source === 'linkedin');
   const whatsapp = sourceResults.find((result) => result.source === 'whatsapp');
   const groups = (whatsapp?.groups || []).map((group) => {
     const messages = Number(group.messages || 0);
@@ -230,11 +330,26 @@ export function summarizeSourceResults(sourceResults) {
         ? 'WhatsApp history לא סיפק כיסוי מוכח לכל הקבוצות; אין להסיק ממספר ההודעות שכל החלון נסרק.'
         : null,
     } : null,
+    linkedin: summarizeLinkedIn(linkedin),
   };
 }
 
+// The run's status judged without LinkedIn. It anchors the shared
+// ATS/WhatsApp scan window, which LinkedIn (with its own per-search
+// progress) must never hold back.
+export function windowStatusFor(summary) {
+  const scopes = (summary?.processing?.scopes || []).filter((scope) => scope.source !== 'linkedin');
+  const failed = scopes.reduce((total, scope) => total + Number(scope.failed || 0), 0);
+  return completionStatusFor({
+    ...summary,
+    linkedin: null,
+    processing: summary?.processing ? { ...summary.processing, totals: { ...summary.processing.totals, failed } } : summary?.processing,
+  });
+}
+
 export function completionStatusFor(summary) {
-  return (summary?.whatsapp && summary.whatsapp.coverageStatus !== 'complete') ||
+  return (summary?.linkedin && summary.linkedin.coverageStatus !== 'complete') ||
+    (summary?.whatsapp && summary.whatsapp.coverageStatus !== 'complete') ||
     Number(summary?.ats?.errors || 0) > 0 ||
     summary?.whatsapp?.groups?.some((group) => group.read && group.read.status !== 'skipped' && !group.read.marked) ||
     summary?.whatsapp?.groups?.some((group) => group.failedMessages > 0) ||
@@ -293,10 +408,33 @@ function recordRunAudit(store, runId, summary) {
       });
     }
   }
+  if (summary.linkedin) {
+    store.recordRunEvent(runId, {
+      source: 'linkedin',
+      scope: 'source',
+      scopeKey: 'LinkedIn',
+      stage: 'collection',
+      status: summary.linkedin.coverageStatus,
+      count: summary.linkedin.candidates,
+      details: { requests: summary.linkedin.requests, haltedBy: summary.linkedin.haltedBy,
+        discovery: summary.linkedin.discovery, failure: summary.linkedin.failure },
+    });
+    for (const search of summary.linkedin.searches) {
+      store.recordRunEvent(runId, {
+        source: 'linkedin',
+        scope: 'search',
+        scopeKey: search.label.slice(0, 200),
+        stage: 'collection',
+        status: search.status,
+        count: search.found,
+        details: search,
+      });
+    }
+  }
   for (const processing of summary.processing?.scopes || []) {
     store.recordRunEvent(runId, {
       source: processing.source,
-      scope: processing.source === 'whatsapp' ? 'group' : 'source',
+      scope: processing.source === 'whatsapp' ? 'group' : processing.source === 'linkedin' ? 'search' : 'source',
       scopeKey: processing.name,
       stage: 'link-processing',
       status: processing.failed > 0 ? 'partial' : 'complete',
@@ -332,6 +470,39 @@ function printSourceSummary(summary) {
     const diagnostics = summary.whatsapp.diagnostics;
     console.log(`  סנכרון: ${diagnostics.deliveredMessages} הודעות נמסרו מהשירות (${diagnostics.historyNotifications} חבילות history הוכרזו, ${diagnostics.historyEvents} הושלמו, ${diagnostics.upsertEvents} אירועי live; המתנה ${diagnostics.waitOutcome || 'לא ידוע'}).`);
     if (summary.whatsapp.warning) console.warn(`⚠️ ${summary.whatsapp.warning}`);
+  }
+}
+
+const LINKEDIN_STATUS_LABELS = { complete: 'הושלם', partial: 'חלקי', failed: 'נכשל' };
+
+export const LINKEDIN_REASON_LABELS = {
+  blocked: 'LinkedIn דרש התחברות או חסם את הבקשה',
+  rate_limited: 'LinkedIn הגביל את קצב הבקשות',
+  structure_changed: 'מבנה התשובה של LinkedIn השתנה',
+  network_error: 'כשל רשת',
+  timeout: 'תם הזמן',
+  http_error: 'תשובת HTTP לא צפויה',
+  empty_unverified: 'תשובה ריקה שלא ניתן לאמת (ייתכן חסימה שקטה)',
+  request_limit: 'הגיע למגבלת הבקשות לריצה',
+  time_limit: 'הגיע למגבלת הזמן לריצה',
+  capped: 'הגיע למגבלת העמודים; החלון לא כוסה במלואו',
+};
+
+function printLinkedInSummary(linkedin) {
+  if (!linkedin) return;
+  console.log('LinkedIn:');
+  if (linkedin.failure) console.log(`  ✗ המקור נכשל: ${linkedin.failure.reason}`);
+  for (const search of linkedin.searches) {
+    const marker = search.status === 'complete' ? '✓' : search.status === 'partial' ? '⚠' : '✗';
+    const from = search.window ? new Date(search.window.from).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '?';
+    const reason = search.reason ? ` — ${LINKEDIN_REASON_LABELS[search.reason] || search.reason}` : '';
+    console.log(`  ${marker} ${search.label}: ${LINKEDIN_STATUS_LABELS[search.status] || search.status}${reason}; חלון מ-${from}, ${search.pages} עמודים, ${search.found} נמצאו, ${search.new} חדשות, ${search.known} מוכרות, ${search.filtered} סוננו${search.stale ? `, ${search.stale} ישנות מהחלון` : ''}.`);
+    if (search.endedBy === 'no_matches_fallback') console.log('    LinkedIn לא מצא התאמות אמיתיות והחזיר משרות כלליות; הן לא נשמרו.');
+    if (search.gap) console.log(`    ⚠ פער שלא כוסה (המחשב היה כבוי זמן רב): ${new Date(search.gap.from).toISOString()} – ${new Date(search.gap.to).toISOString()}`);
+    if (search.warning === 'clock_skew') console.log('    ⚠ שעון המחשב חזר אחורה; החלון חושב מחדש מנקודת התחלה.');
+  }
+  if (linkedin.haltedBy) {
+    console.warn(`⚠️ LinkedIn נעצר (${LINKEDIN_REASON_LABELS[linkedin.haltedBy] || linkedin.haltedBy}); אין לנסות שוב מיד — ATS ו-WhatsApp אינם מושפעים.`);
   }
 }
 
@@ -374,7 +545,11 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     : () => true;
   const recordFailure = (candidate, code, reason) => {
     const fallback = /scor/.test(code) ? 'scoring_failed' : /browser/.test(code) ? 'browser_error' : 'page_uncertain';
-    const diagnostic = describeFailure({ code, message: reason }, fallback);
+    // Source-specific codes with their own explanation (linkedin_*) keep it,
+    // rather than being re-derived from the free-text reason.
+    const diagnostic = hasFailureReason(code) && /^linkedin_/.test(code)
+      ? describeFailure(null, code)
+      : describeFailure({ code, message: reason }, fallback);
     const outcome = {
       status: 'failed',
       // Scoring failures start out generically labeled ('scoring_failed') by
@@ -493,8 +668,10 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   const persistResult = (result) => {
     const item = pendingScores.find(({ candidate }) => candidate.jobKey === result.jobKey);
     if (!item) throw new Error(`Scorer returned an unexpected job: ${result.jobKey}`);
+    store.recordSourceOutcome?.({ source: sourceKindOf(item.candidate.source), suitable: result.suitable });
     store.saveEvaluation(result.jobKey, {
       ...result,
+      scoredByModel: true,
       contentHash: item.page.contentHash,
       profileHash: scorer.profileHash,
       criteriaVersion: config.decision.criteriaVersion,
@@ -518,6 +695,84 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   return outcomes;
 }
 
+export async function analyzeSuitableResumeGaps({
+  config,
+  store,
+  analyzer,
+  candidateContext,
+  onStage = () => {},
+  limit = 50,
+}) {
+  if (!candidateContext.resumeAvailable) {
+    console.log('ניתוח שיפורי קורות החיים דולג: חסר profile/03-current-resume.md.');
+    return { status: 'skipped', reason: 'resume_unavailable', analyzed: 0, failed: 0 };
+  }
+
+  const candidates = store.listResumeGapCandidates({ limit: 500 })
+    .filter((job) => job.profileHash === candidateContext.profileHash)
+    .map((job) => ({
+      ...job,
+      resumeGapInputHash: resumeGapInputHash({
+        contentHash: job.contentHash,
+        profileHash: candidateContext.profileHash,
+        resumeHash: candidateContext.resumeHash,
+        analysisVersion: analyzer.version,
+      }),
+    }))
+    .filter((job) => job.resumeGapInputHash !== job.storedResumeGapInputHash || job.resumeGapErrorCode)
+    .slice(0, Math.max(1, Math.min(100, Number(limit) || 50)));
+
+  if (candidates.length === 0) {
+    return { status: 'complete', analyzed: 0, failed: 0 };
+  }
+
+  onStage('resume-gap-analysis');
+  let analyzed = 0;
+  const settled = await analyzer.analyzeBatchSettled(candidates, {
+    profile: candidateContext.profile,
+    currentResume: candidateContext.currentResume,
+    onProgress: ({ completed, total, failed, results, failures }) => {
+      for (const result of results) {
+        const job = candidates.find((item) => item.jobKey === result.jobKey);
+        if (!job) continue;
+        store.saveResumeGap(result.jobKey, {
+          inputHash: job.resumeGapInputHash,
+          analysis: {
+            items: result.items,
+            employerPriorities: result.employerPriorities,
+            screenPass: result.screenPass,
+          },
+          analyzedAt: Date.now(),
+        });
+        analyzed += 1;
+      }
+      for (const failure of failures) {
+        const job = candidates.find((item) => item.jobKey === failure.jobKey);
+        if (!job) continue;
+        store.markResumeGapFailure(failure.jobKey, {
+          inputHash: job.resumeGapInputHash,
+          code: failure.code,
+          reason: failure.reason,
+          attemptedAt: Date.now(),
+        });
+      }
+      console.log(`ניתוח קורות חיים: ${completed}/${total}; ${failed} נכשלו עד כה.`);
+    },
+  });
+
+  return {
+    status: settled.failures.length ? 'partial' : 'complete',
+    analyzed,
+    failed: settled.failures.length,
+  };
+}
+
+const LOCK_POLL_MS = 15_000;
+
+export function linkedinEnabledFor(config, store) {
+  return Boolean(config.sources.linkedin?.enabled) && store.isSourceEnabled('linkedin');
+}
+
 export async function runJobs(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = loadJobsConfig();
@@ -530,15 +785,24 @@ export async function runJobs(argv = process.argv.slice(2)) {
   // once. A dry run never touches the real database and is exempt.
   let scanLock = null;
   if (!options.dryRun) {
-    try {
-      scanLock = acquireSingleInstance(path.join(path.dirname(config.jobsDbPath), '.scan.lock'), {
-        name: 'jobOps scan',
-        errorCode: 'JOBOPS_SCAN_ALREADY_RUNNING',
-      });
-    } catch (error) {
-      if (error.code !== 'JOBOPS_SCAN_ALREADY_RUNNING') throw error;
-      console.log('סריקה אחרת כבר פועלת על אותו מסד נתונים; מדלג על הריצה הזו.');
-      return;
+    // A scheduled run may wait a bounded time for a neighbouring scan instead
+    // of skipping; a skip is still safe because windows resume from the last
+    // successful coverage.
+    const deadline = Date.now() + Number(options.waitForLockMinutes || 0) * 60_000;
+    while (!scanLock) {
+      try {
+        scanLock = acquireSingleInstance(path.join(path.dirname(config.jobsDbPath), '.scan.lock'), {
+          name: 'jobOps scan',
+          errorCode: 'JOBOPS_SCAN_ALREADY_RUNNING',
+        });
+      } catch (error) {
+        if (error.code !== 'JOBOPS_SCAN_ALREADY_RUNNING') throw error;
+        if (Date.now() + LOCK_POLL_MS > deadline) {
+          console.log('סריקה אחרת כבר פועלת על אותו מסד נתונים; מדלג על הריצה הזו.');
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+      }
     }
   }
   try {
@@ -548,14 +812,88 @@ export async function runJobs(argv = process.argv.slice(2)) {
   }
 }
 
+const PROBE_SCHEMA_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'jobs', 'probe.schema.json');
+
+// A tiny call that tells whether the ChatGPT/Codex account has quota left.
+// A call rejected for the usage limit costs nothing.
+export function probeCodex(config) {
+  return runCodexExec({
+    prompt: 'Return {"ok": true}.',
+    schemaPath: PROBE_SCHEMA_PATH,
+    cwd: config.rootDir,
+    model: config.scoring?.model || null,
+    reasoningEffort: 'low',
+    purpose: 'probe',
+    items: 0,
+    binary: resolveCodexBinary(config),
+    timeoutMs: 60_000,
+  });
+}
+
+function formatTokens(value) {
+  return Number(value || 0).toLocaleString('en-US');
+}
+
+export function summarizeRunUsage(totals) {
+  const sum = (field) => totals.reduce((total, row) => total + Number(row[field] || 0), 0);
+  const scoring = totals.find((row) => row.purpose === 'scoring');
+  const input = sum('inputTokens');
+  const output = sum('outputTokens');
+  return {
+    calls: sum('calls'),
+    failedCalls: sum('calls') - sum('okCalls'),
+    limitedCalls: sum('limited'),
+    measuredCalls: sum('measuredCalls'),
+    inputTokens: input,
+    cachedInputTokens: sum('cachedInputTokens'),
+    outputTokens: output,
+    reasoningTokens: sum('reasoningTokens'),
+    totalTokens: input + output,
+    scoredJobs: Number(scoring?.items || 0),
+    tokensPerScoredJob: scoring?.items ? Math.round((Number(scoring.inputTokens) + Number(scoring.outputTokens)) / scoring.items) : null,
+    byPurpose: totals.map(({ purpose, calls, items, inputTokens, outputTokens, models }) => ({ purpose, calls, items, tokens: Number(inputTokens) + Number(outputTokens), models })),
+  };
+}
+
+function printUsageSummary(usage) {
+  if (!usage || usage.calls === 0) { console.log('Codex: לא בוצעו קריאות בריצה הזו.'); return; }
+  console.log(`Codex: ${usage.calls} קריאות, ${formatTokens(usage.totalTokens)} טוקנים ` +
+    `(קלט ${formatTokens(usage.inputTokens)}, מתוכם ${formatTokens(usage.cachedInputTokens)} מהמטמון; פלט ${formatTokens(usage.outputTokens)}` +
+    `${usage.reasoningTokens ? `, מתוכו חשיבה ${formatTokens(usage.reasoningTokens)}` : ''})` +
+    `${usage.tokensPerScoredJob ? `; ${formatTokens(usage.tokensPerScoredJob)} לכל משרה שנוקדה` : ''}.`);
+  if (usage.measuredCalls < usage.calls - usage.failedCalls) console.log('  ⚠ חלק מהקריאות לא דיווחו טוקנים (גרסת Codex ישנה?).');
+  if (usage.limitedCalls) console.warn('  ⚠ מכסת Codex נגמרה במהלך הריצה; המשרות שלא נוקדו יטופלו אוטומטית כשהמכסה תתחדש.');
+}
+
 async function runJobsLocked(options, config) {
   const store = createJobStore(options.dryRun ? ':memory:' : config.jobsDbPath);
+  const runStartedAt = Date.now();
+  let usageRunId = null;
+  setCodexUsageRecorder((entry) => store.recordCodexCall({ ...entry, runId: usageRunId }));
+  // No quota means nothing can be scored; collecting now would only move
+  // coverage forward for jobs that then wait. Skip the whole run instead:
+  // every source resumes from its last success once quota is back.
+  if (!options.dryRun) {
+    const quota = await checkCodexQuota({ store, probe: () => probeCodex(config) });
+    if (!quota.available) {
+      store.noteLlmSkip();
+      const until = new Date(quota.until).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+      console.log(`מכסת Codex נגמרה (תתחדש בערך ב-${until}); הריצה דולגה ולא נאסף דבר. כל מקור ימשיך מההצלחה האחרונה שלו.`);
+      setCodexUsageRecorder(null);
+      store.close();
+      return;
+    }
+  }
   // portals.yml bootstraps the registry without overwriting decisions already
   // made in the dashboard (watch, pause, or ignore).
   syncConfiguredCompanyEntries(store, config.rootDir);
+  // Same model for LinkedIn: config seeds searches, the dashboard owns edits.
+  store.syncLinkedInSearches(config.sources.linkedin?.searches || []);
+  const linkedinEnabled = linkedinEnabledFor(config, store);
   const fetcher = createJobPageFetcher({
     store,
     cacheTtlMs: Number(config.scan.pageCacheHours) * 60 * 60 * 1000,
+    linkedinLimits: config.sources.linkedin?.limits || {},
   });
   let runId = null;
   let runDetails = null;
@@ -564,8 +902,11 @@ async function runJobsLocked(options, config) {
 
   try {
     const sources = [];
-    if (!options.whatsappBacklog && !options.retryOnly && !options.whatsappOnly && config.sources.ats?.enabled) sources.push('ats');
-    if (!options.whatsappBacklog && !options.retryOnly && !options.atsOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    const fullScan = !options.whatsappBacklog && !options.retryOnly;
+    if (fullScan && !options.whatsappOnly && !options.linkedinOnly && config.sources.ats?.enabled) sources.push('ats');
+    if (fullScan && !options.atsOnly && !options.linkedinOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    if (fullScan && !options.atsOnly && !options.whatsappOnly && linkedinEnabled) sources.push('linkedin');
+    if (options.linkedinOnly && !linkedinEnabled) console.log('LinkedIn כבוי (config/jobs.yml או לוח הבקרה); אין מה לסרוק.');
     if (options.whatsappBacklog && config.sources.whatsapp?.enabled) sources.push('whatsapp-backlog');
     if (options.retryOnly) sources.push('retry');
     if (sources.length === 0) throw new Error('No job sources are enabled for this run');
@@ -575,6 +916,7 @@ async function runJobsLocked(options, config) {
     if (!options.dryRun) {
       const actionId = /^[1-9]\d{0,8}$/.test(process.env.JOBOPS_ACTION_ID || '') ? Number(process.env.JOBOPS_ACTION_ID) : null;
       runId = store.startRun({ fromTs: window.from, toTs: window.to, sources, ownerPid: process.pid, actionId });
+      usageRunId = runId;
       lifecycle = createRunLifecycle(store, runId, { registerProcessHandlers: true });
       store.recordRunEvent(runId, {
         source: 'system',
@@ -587,7 +929,10 @@ async function runJobsLocked(options, config) {
     }
 
     const sourceResults = [];
+    const sourceSeconds = {};
+    let sourceStartedAt = Date.now();
     const saveSource = (result) => {
+      sourceSeconds[result.source] = (Date.now() - sourceStartedAt) / 1_000;
       sourceResults.push(result);
       runDetails = summarizeSourceResults(sourceResults);
       if (!runId) return;
@@ -595,7 +940,7 @@ async function runJobsLocked(options, config) {
       // during WhatsApp cannot erase an already completed ATS collection.
       store.touchRun(runId, { details: runDetails });
       recordRunAudit(store, runId, summarizeSourceResults([result]));
-      for (const error of result.errors || []) {
+      for (const error of result.source === 'ats' ? result.errors || [] : []) {
         store.recordRunEvent(runId, { source: result.source, scope: 'company', scopeKey: String(error.company || 'ATS').slice(0, 200),
           stage: 'collection', status: 'failed', details: describeFailure(error.error, 'collection_failed') });
       }
@@ -611,6 +956,7 @@ async function runJobsLocked(options, config) {
     };
     if (sources.includes('ats')) {
       lifecycle?.stage('collection', 'ats');
+      sourceStartedAt = Date.now();
       saveSource(await scanAts({
         store,
         lookbackHours: Math.ceil((window.to - window.from) / (60 * 60 * 1000)),
@@ -618,6 +964,7 @@ async function runJobsLocked(options, config) {
     }
     if (sources.includes('whatsapp')) {
       lifecycle?.stage('collection', 'whatsapp');
+      sourceStartedAt = Date.now();
       saveSource(await scanWhatsApp({
         config,
         store,
@@ -626,6 +973,24 @@ async function runJobsLocked(options, config) {
         onStage: (stage) => lifecycle?.stage(stage, 'whatsapp'),
         onDiagnostic: (event) => { if (runId) store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
       }));
+    }
+    if (sources.includes('linkedin')) {
+      lifecycle?.stage('collection', 'linkedin');
+      sourceStartedAt = Date.now();
+      const passesTitle = buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')));
+      try {
+        saveSource(await scanLinkedIn({
+          config,
+          store,
+          mode: options.linkedinHours != null ? 'manual' : 'auto',
+          manualHours: options.linkedinHours,
+          passesTitle,
+        }));
+      } catch (error) {
+        // LinkedIn is an optional, unofficial source: its failure is reported
+        // and never aborts ATS/WhatsApp collection or processing.
+        saveSource({ source: 'linkedin', candidates: [], searches: [], errors: [], failure: describeFailure(error, 'collection_failed') });
+      }
     }
     if (sources.includes('whatsapp-backlog')) {
       lifecycle?.stage('collection', 'whatsapp-backlog');
@@ -646,10 +1011,12 @@ async function runJobsLocked(options, config) {
     runDetails = summarizeSourceResults(sourceResults);
     if (options.retryOnly) console.log('ניסיון חוזר: מעבד רק קישורים שנכשלו או טרם קיבלו החלטה; המקורות לא נסרקים מחדש.');
     printSourceSummary(runDetails);
+    printLinkedInSummary(runDetails.linkedin);
     const candidateSightings = sourceResults.flatMap((result) => result.candidates);
     const retryCandidates = filterPendingCandidatesForSources(
       store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }),
       sources,
+      { linkedinEnabled },
     );
     const currentJobKeys = new Set(candidateSightings.map((candidate) => candidate.jobKey));
     const processingCandidates = [
@@ -657,8 +1024,9 @@ async function runJobsLocked(options, config) {
       ...retryCandidates.filter((candidate) => !currentJobKeys.has(candidate.jobKey)),
     ];
     const candidates = uniqueCandidates([...candidateSightings, ...retryCandidates]);
+    const candidateContext = readCandidateContext(config);
     lifecycle?.stage('scorer-setup');
-    const scorer = createJobScorer(config);
+    const scorer = createJobScorer(config, { candidateContext });
     let failureSamples = 0;
     const outcomes = await evaluateCandidates({ candidates, config, store, fetcher, scorer,
       onStage: (stage) => lifecycle?.stage(stage),
@@ -676,7 +1044,18 @@ async function runJobsLocked(options, config) {
     });
     runDetails.processing = summarizeProcessingResults(processingCandidates, outcomes);
     printProcessingSummary(runDetails.processing);
+    const resumeGapAnalyzer = createResumeGapAnalyzer({ config });
+    runDetails.resumeGap = await analyzeSuitableResumeGaps({
+      config, store, analyzer: resumeGapAnalyzer, candidateContext,
+      onStage: (stage) => lifecycle?.stage(stage),
+    });
+    if (runDetails.resumeGap.failed > 0) {
+      console.warn('ניתוח שיפורי קורות החיים נכשל חלקית; המשרות עצמן נשמרו ומוצגות כרגיל.');
+    }
+    runDetails.llmUsage = summarizeRunUsage(store.summarizeCodexUsage({ sinceMs: runStartedAt }).totals);
+    printUsageSummary(runDetails.llmUsage);
     if (runId) {
+      store.recordSourceScanStats(sourceScanStatRows(runDetails, sourceSeconds), { runId });
       runDetails.failureSampleLimit = 200;
       store.touchRun(runId, { details: runDetails });
       recordRunAudit(store, runId, { processing: runDetails.processing });
@@ -712,7 +1091,7 @@ async function runJobsLocked(options, config) {
     await fetcher.close();
     fetcherClosed = true;
     const completionStatus = completionStatusFor(runDetails);
-    lifecycle?.finish(completionStatus, { details: runDetails });
+    lifecycle?.finish(completionStatus, { details: runDetails, windowStatus: windowStatusFor(runDetails) });
     if (completionStatus === 'incomplete') {
       console.warn('⚠️ הריצה הסתיימה עם כיסוי חלקי; יש לעיין במשפך הקבוצות לפני הסקת מסקנות.');
     }
@@ -726,6 +1105,7 @@ async function runJobsLocked(options, config) {
     finally {
       try { store.pruneDiagnostics(); }
       catch { console.error('JobOps diagnostic retention unavailable; existing records were preserved.'); }
+      setCodexUsageRecorder(null);
       store.close();
     }
   }

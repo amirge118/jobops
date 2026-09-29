@@ -5,6 +5,8 @@ const PAGE_ROUTES = new Map([
   ['/scan', 'scan.html'],
   ['/decisions', 'decisions.html'],
   ['/companies', 'companies.html'],
+  ['/personal-area', 'personal-area.html'],
+  ['/decision-stats', 'decision-stats.html'],
 ]);
 
 const CONTENT_TYPES = {

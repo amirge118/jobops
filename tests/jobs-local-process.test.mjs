@@ -23,6 +23,14 @@ test('stop command recognizes only a jobOps dashboard from the same project', ()
     command: '/usr/local/bin/node scripts/start-local.mjs',
   }, rootDir), true);
   assert.equal(isJobOpsDashboardProcess({
+    cwd: rootDir,
+    command: 'node scripts/restart-local.mjs',
+  }, rootDir), true);
+  assert.equal(isJobOpsDashboardProcess({
+    cwd: rootDir,
+    command: 'node scripts/prerestart-local.mjs',
+  }, rootDir), false);
+  assert.equal(isJobOpsDashboardProcess({
     cwd: '/projects/another-app',
     command: '/usr/local/bin/node scripts/web.mjs',
   }, rootDir), false);

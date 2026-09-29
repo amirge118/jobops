@@ -3,78 +3,63 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
     <meta name="description" content="סריקה ותוצאות ב-jobOps">
     <title>סריקה ותוצאה — jobOps</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body data-page="scan">
+    <div id="app-shell"></div>
     <div class="shell">
-      <div id="app-shell"></div>
       <aside id="demo-banner" class="demo-banner" hidden><strong>מצב הדגמה</strong><span>כל המידע במסך הזה סינתטי.</span></aside>
 
       <main class="page-main">
         <section class="control-panel" aria-labelledby="scan-title">
-          <div class="section-heading"><div><p class="step">01 / סריקה</p><h2 id="scan-title">מה לחפש היום?</h2></div><p>הסריקה משתמשת בפרופיל ובכללי ההתאמה הקיימים.</p></div>
+          <div class="page-header"><div><h1 id="scan-title">סריקה</h1><p>הסריקה משתמשת בפרופיל ובכללי ההתאמה הקיימים.</p></div></div>
           <form id="scan-form" class="scan-form">
             <label><span>טווח זמן</span><select id="days" name="days"><option value="1">יום אחרון</option><option value="2" selected>יומיים אחרונים</option><option value="7">שבוע אחרון</option><option value="14">שבועיים אחרונים</option></select></label>
-            <label><span>מקור</span><select id="source" name="source"><option value="all">ATS + WhatsApp</option><option value="ats">ATS בלבד</option><option value="whatsapp">WhatsApp בלבד</option></select></label>
-            <label class="toggle-row"><input id="open-after" name="open" type="checkbox"><span>פתח התאמות ב-Chrome בסיום</span></label>
+            <label><span>מקור</span><select id="source" name="source"><option value="all">כל המקורות הפעילים</option><option value="ats">ATS בלבד</option><option value="whatsapp">WhatsApp בלבד</option><option value="linkedin">LinkedIn בלבד</option></select></label>
+            <label id="linkedin-hours-field"><span>חלון LinkedIn</span><select id="linkedin-hours" name="linkedinHours"><option value="" selected>אוטומטי — מאז ההצלחה האחרונה</option><option value="4">4 שעות אחרונות</option><option value="8">8 שעות אחרונות</option><option value="12">12 שעות אחרונות</option><option value="16">16 שעות אחרונות</option></select></label>
+            <label class="toggle-row"><input id="open-after" name="open" type="checkbox"><span>פתח התאמות ב-Chrome</span></label>
             <button class="button button-primary" type="submit">הפעל סריקה</button>
           </form>
           <div class="secondary-actions">
             <button id="verify-groups" class="button button-secondary" type="button">אמת קבוצות WhatsApp</button>
             <button id="mark-read" class="button button-secondary" type="button">סמן קבוצות כנקראו</button>
             <button id="open-jobs" class="button button-secondary" type="button">פתח התאמות חדשות ב-Chrome</button>
-          </div>
-          <div class="secondary-information">
-            <details><summary>איך מתקבלת החלטה?</summary><p>משרה פעילה בתחום ובמיקום המתאימים מקבלת ״מתאים״ מציון <strong id="minimum-score">4.0</strong>. מציון <strong id="exact-score">4.5</strong> היא ״בול מתאים״. שפה או framework שלא מופיעים בפרופיל אינם blocker אוטומטי.</p></details>
-            <details><summary>אילו קבוצות WhatsApp מוגדרות?</summary><ul id="groups-list"></ul></details>
+            <div class="secondary-information">
+              <details><summary>איך מתקבלת החלטה?</summary><p>משרה פעילה בתחום ובמיקום המתאימים מקבלת ״מתאים״ מציון <strong id="minimum-score">4.0</strong>. מציון <strong id="exact-score">4.5</strong> היא ״בול מתאים״. שפה או framework שלא מופיעים בפרופיל אינם blocker אוטומטי.</p></details>
+              <details><summary>אילו קבוצות WhatsApp מוגדרות?</summary><ul id="groups-list"></ul></details>
+            </div>
           </div>
         </section>
 
-        <section class="summary-grid" aria-label="סיכום סריקה">
-          <article class="summary-card summary-card-jobs" data-empty="true"><span>משרות מתאימות</span><strong id="suitable-count">0</strong></article>
-          <article class="summary-card summary-card-unopened" data-empty="true"><span>ממתינות לפתיחה</span><strong id="unopened-count">0</strong></article>
-          <article class="summary-card summary-card-groups" data-empty="false"><span>קבוצות מוגדרות</span><strong id="groups-count">0</strong></article>
-        </section>
+        <section id="activity-card" class="activity-card" hidden aria-live="polite"><div><span id="activity-kicker" class="activity-kicker">פעילות אחרונה</span><strong id="activity-title"></strong></div><span id="activity-time"></span></section>
 
-        <section class="whatsapp-history-panel" aria-labelledby="whatsapp-history-title">
-          <div class="history-heading">
-            <div><p class="step">סנכרון WhatsApp</p><h2 id="whatsapp-history-title">מה נאסף מכל קבוצה?</h2></div>
-            <div class="history-total"><strong id="backlog-total">0</strong><span>הודעות חדשות לעיבוד</span></div>
-          </div>
-          <p id="backlog-summary" class="history-summary">טוען את מצב ההיסטוריה…</p>
-          <div class="history-actions">
-            <button id="process-recent-backlog" class="button button-primary" type="button">עבד הודעות שנאספו</button>
-            <button id="request-history" class="button button-secondary" type="button">השלם פערים מהיסטוריית WhatsApp</button>
-          </div>
-          <div id="history-request-status" class="history-request-status" hidden></div>
-          <div class="history-groups-wrap"><table class="history-groups"><thead><tr><th>קבוצה</th><th>קורא עכשיו?</th><th>ממתין לעיבוד</th><th>עובד לאחרונה</th><th></th></tr></thead><tbody id="history-groups-body"></tbody></table></div>
-        </section>
+        <div class="overview-row">
+          <section class="summary-grid" aria-label="סיכום סריקה">
+            <article class="summary-card summary-card-jobs" data-empty="true"><span>משרות מתאימות</span><strong id="suitable-count">0</strong></article>
+            <article class="summary-card summary-card-unopened" data-empty="true"><span>ממתינות לפתיחה</span><strong id="unopened-count">0</strong></article>
+            <article class="summary-card summary-card-groups" data-empty="false"><span>קבוצות מוגדרות</span><strong id="groups-count">0</strong></article>
+          </section>
 
-        <section id="source-performance-panel" class="source-performance-panel" aria-labelledby="source-performance-title">
-          <div class="section-heading"><div><p class="step">עלות מול תפוקה</p><h2 id="source-performance-title">ATS מול WhatsApp — עלות לכל משרה מתאימה</h2></div></div>
-          <p class="history-summary">משווה כמה משרות כל מקור שלח לניקוד מול כמה יצאו מתאימות, לאורך זמן — לא רק בריצה האחרונה. משרות שסוננו מקומית לפני ניקוד לא נכללות (הן לא עולות טוקנים).</p>
-          <div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>מקור</th><th>עובדו (36 שעות)</th><th>מתאימות (36 שעות)</th><th>עלות לכל התאמה (36 שעות)</th><th>עובדו (שבוע)</th><th>מתאימות (שבוע)</th><th>עלות לכל התאמה (שבוע)</th></tr></thead><tbody id="source-performance-body"></tbody></table></div>
-        </section>
-
-        <section id="readiness-panel" class="readiness-panel" aria-labelledby="readiness-title">
-          <div class="health-heading"><div><p class="step">לפני שמתחילים</p><h2 id="readiness-title">האם המערכת מוכנה לסריקה?</h2></div><button id="refresh-readiness" class="button button-secondary" type="button">בדוק שוב</button></div>
-          <p id="readiness-summary" class="readiness-summary">בודק את סביבת ההפעלה…</p>
-          <div class="readiness-grid">
-            <article id="browser-readiness"><span class="health-dot"></span><div><strong>דפדפן אוטומטי</strong><span>בודק…</span></div></article>
-            <article id="scorer-readiness"><span class="health-dot"></span><div><strong>מנגנון התאמה</strong><span>בודק…</span></div></article>
-            <article id="collector-readiness"><span class="health-dot"></span><div><strong>WhatsApp Collector</strong><span>בודק…</span></div></article>
-          </div>
-        </section>
+          <section id="readiness-panel" class="readiness-panel" aria-labelledby="readiness-title">
+            <div class="health-heading"><h2 id="readiness-title">מוכנות</h2><p id="readiness-summary" class="readiness-summary">בודק את סביבת ההפעלה…</p><button id="refresh-readiness" class="button button-secondary button-small" type="button">בדוק שוב</button></div>
+            <div class="readiness-grid">
+              <article id="browser-readiness"><span class="health-dot"></span><div><strong>דפדפן אוטומטי</strong><span>בודק…</span></div></article>
+              <article id="scorer-readiness"><span class="health-dot"></span><div><strong>מנגנון התאמה</strong><span>בודק…</span></div></article>
+              <article id="collector-readiness"><span class="health-dot"></span><div><strong>WhatsApp Collector</strong><span>בודק…</span></div></article>
+            </div>
+          </section>
+        </div>
 
         <section id="scan-result-panel" class="scan-result-panel" data-state="empty" aria-labelledby="result-title">
-          <div class="result-heading"><div><p class="step">סריקה אחרונה</p><h2 id="result-title">עדיין לא בוצעה סריקה</h2></div><span id="result-time"></span></div>
+          <div class="result-heading"><div><span class="panel-kicker">סריקה אחרונה</span><h2 id="result-title">עדיין לא בוצעה סריקה</h2></div><span id="result-time"></span></div>
           <p id="result-summary" class="result-summary">לאחר סריקה תוצג כאן תשובה קצרה וברורה.</p>
           <div id="failure-overview" class="failure-overview" hidden>
             <div class="failure-overview-actions">
-              <button id="retry-failed" class="button button-secondary" type="button">נסה שוב כשלים ניתנים לתיקון</button>
-              <button id="archive-failed" class="button button-secondary" type="button">רוקן כשלים שלא ניתן לתקן</button>
+              <button id="retry-failed" class="button button-secondary button-small" type="button">נסה שוב כשלים ניתנים לתיקון</button>
+              <button id="archive-failed" class="button button-secondary button-small" type="button">רוקן כשלים שלא ניתן לתקן</button>
             </div>
             <div class="audit-table-wrap"><table class="failure-table"><thead><tr><th>סוג כשל</th><th>כמות</th><th>ניתן לתיקון?</th></tr></thead><tbody id="failure-breakdown-body"></tbody></table></div>
           </div>
@@ -85,7 +70,46 @@
           </details>
         </section>
 
-        <section id="activity-card" class="activity-card" hidden aria-live="polite"><div><span id="activity-kicker" class="step">פעילות אחרונה</span><strong id="activity-title"></strong></div><span id="activity-time"></span></section>
+        <div class="source-panels">
+          <section id="linkedin-panel" class="linkedin-panel" aria-labelledby="linkedin-title">
+            <div class="history-heading">
+              <h2 id="linkedin-title">LinkedIn</h2>
+              <label class="toggle-row linkedin-source-toggle"><input id="linkedin-enabled" type="checkbox"><span>המקור פעיל</span></label>
+            </div>
+            <p id="linkedin-summary" class="history-summary">טוען את חיפושי LinkedIn…</p>
+            <div class="history-groups-wrap"><table class="history-groups linkedin-searches"><thead><tr><th>חיפוש</th><th>חלון אחרון</th><th>הצלחה אחרונה</th><th>מצב</th><th>תוצאות</th></tr></thead><tbody id="linkedin-searches-body"></tbody></table></div>
+            <p class="history-summary linkedin-config-note">החיפושים ותזמונם מוגדרים ב-<code>config/jobs.yml</code> (sources.linkedin).</p>
+          </section>
+
+          <section class="whatsapp-history-panel" aria-labelledby="whatsapp-history-title">
+            <div class="history-heading">
+              <h2 id="whatsapp-history-title">WhatsApp</h2>
+              <div class="history-total"><strong id="backlog-total">0</strong><span>הודעות חדשות לעיבוד</span></div>
+            </div>
+            <p id="backlog-summary" class="history-summary">טוען את מצב ההיסטוריה…</p>
+            <div class="history-actions">
+              <button id="process-recent-backlog" class="button button-primary button-small" type="button">עבד הודעות שנאספו</button>
+              <button id="request-history" class="button button-secondary button-small" type="button">השלם פערים מהיסטוריית WhatsApp</button>
+            </div>
+            <div id="history-request-status" class="history-request-status" hidden></div>
+            <div class="history-groups-wrap"><table class="history-groups"><thead><tr><th>קבוצה</th><th>קורא עכשיו?</th><th>ממתין לעיבוד</th><th>עובד לאחרונה</th><th></th></tr></thead><tbody id="history-groups-body"></tbody></table></div>
+          </section>
+        </div>
+
+        <section id="llm-usage-panel" class="source-performance-panel llm-usage-panel" aria-labelledby="llm-usage-title">
+          <div class="history-heading"><h2 id="llm-usage-title">צריכת Codex</h2><span id="llm-model" class="source-badge"></span></div>
+          <p id="llm-quota" class="history-summary">טוען…</p>
+          <div class="audit-table-wrap"><table class="audit-table llm-usage-table"><thead><tr><th>שימוש</th><th>קריאות (24 שעות)</th><th>טוקנים (24 שעות)</th><th>קריאות (שבוע)</th><th>טוקנים (שבוע)</th><th>טוקנים לפריט (שבוע)</th></tr></thead><tbody id="llm-usage-body"></tbody></table></div>
+          <details class="source-details llm-runs"><summary>לפי ריצה</summary>
+            <div class="audit-table-wrap"><table class="audit-table llm-usage-table"><thead><tr><th>ריצה</th><th>מקורות</th><th>קריאות</th><th>פריטים</th><th>טוקנים</th><th>לפריט</th></tr></thead><tbody id="llm-runs-body"></tbody></table></div>
+          </details>
+        </section>
+
+        <section id="source-performance-panel" class="source-performance-panel" aria-labelledby="source-performance-title">
+          <div class="history-heading"><h2 id="source-performance-title">עלות לכל משרה מתאימה, לפי מקור</h2></div>
+          <p class="history-summary">כמה משרות כל מקור שלח לניקוד מול כמה יצאו מתאימות. משרות שסוננו מקומית לפני ניקוד לא נכללות.</p>
+          <div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>מקור</th><th>עובדו (36 שעות)</th><th>מתאימות (36 שעות)</th><th>עלות לכל התאמה (36 שעות)</th><th>עובדו (שבוע)</th><th>מתאימות (שבוע)</th><th>עלות לכל התאמה (שבוע)</th></tr></thead><tbody id="source-performance-body"></tbody></table></div>
+        </section>
       </main>
       <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
     </div>

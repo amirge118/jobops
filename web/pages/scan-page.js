@@ -28,6 +28,11 @@ const elements = {
   backlogGroups: document.querySelector('#history-groups-body'), processRecentBacklog: document.querySelector('#process-recent-backlog'),
   requestHistory: document.querySelector('#request-history'), historyRequestStatus: document.querySelector('#history-request-status'),
   sourcePerformanceBody: document.querySelector('#source-performance-body'),
+  llmModel: document.querySelector('#llm-model'), llmQuota: document.querySelector('#llm-quota'),
+  llmUsageBody: document.querySelector('#llm-usage-body'), llmRunsBody: document.querySelector('#llm-runs-body'),
+  linkedinHours: document.querySelector('#linkedin-hours'), linkedinHoursField: document.querySelector('#linkedin-hours-field'),
+  linkedinPanel: document.querySelector('#linkedin-panel'), linkedinEnabled: document.querySelector('#linkedin-enabled'),
+  linkedinSummary: document.querySelector('#linkedin-summary'), linkedinSearches: document.querySelector('#linkedin-searches-body'),
   updated: document.querySelector('#last-updated'), demoBanner: document.querySelector('#demo-banner'),
 };
 
@@ -36,6 +41,7 @@ let historyRequestRunning = false;
 let readiness = null;
 let backlogState = { total: 0, recentTotal: 0 };
 let failuresState = { breakdown: [], retryableTotal: 0, nonRetryableTotal: 0 };
+let linkedinState = { enabled: false, searches: [] };
 // renderWhatsAppHistory rebuilds the whole table on every poll tick (adaptive
 // polling calls loadScan every few seconds while a scan or history request is
 // running), so per-row "hidden" state can't live on the DOM element itself —
@@ -53,6 +59,24 @@ const failureLabels = {
   unknown_failure: 'לא ידוע', no_apply_control: 'לא נמצא כפתור הגשה (היסטורי)',
   navigation_error: 'שגיאת ניווט בדפדפן', bot_challenge: 'חסימת אתר (הגנת אנטי-בוט)',
   access_blocked: 'האתר חוסם גישה',
+  linkedin_blocked: 'LinkedIn חסם / דרש התחברות', linkedin_rate_limited: 'LinkedIn הגביל קצב',
+  linkedin_deferred: 'קריאת LinkedIn נדחתה', linkedin_structure_changed: 'מבנה LinkedIn השתנה',
+  linkedin_not_found: 'המשרה הוסרה מ-LinkedIn', linkedin_closed: 'המשרה נסגרה ב-LinkedIn',
+};
+
+const linkedinStatusLabels = { complete: 'הושלם', partial: 'חלקי', failed: 'נכשל' };
+// Each failure names what happened and what to do next; none reads as "no jobs".
+const linkedinReasonLabels = {
+  blocked: ['LinkedIn דרש התחברות או חסם את הבקשה.', 'המתן כמה שעות; אין להתחבר או לעקוף.'],
+  rate_limited: ['LinkedIn הגביל את קצב הבקשות.', 'המתן לפחות שעה; הריצה הבאה תשלים את החלון.'],
+  structure_changed: ['LinkedIn החזיר תוכן שלא ניתן לקרוא ממנו משרות.', 'הרץ npm run jobs:linkedin-probe לבדיקה.'],
+  empty_unverified: ['תשובה ריקה שלא ניתן לאמת.', 'ייתכן חסימה שקטה; נסה שוב מאוחר יותר.'],
+  capped: ['הגיע למגבלת העמודים לפני כיסוי מלא.', 'צמצם את השאילתה או הרץ שוב עם חלון קצר יותר.'],
+  request_limit: ['הגיע למגבלת הבקשות לריצה.', 'שאר החיפושים ייסרקו בריצה הבאה.'],
+  time_limit: ['הגיע למגבלת הזמן לריצה.', 'שאר החיפושים ייסרקו בריצה הבאה.'],
+  network_error: ['כשל רשת מול LinkedIn.', 'בדוק חיבור ונסה שוב.'],
+  timeout: ['LinkedIn לא ענה בזמן.', 'נסה שוב מאוחר יותר.'],
+  http_error: ['LinkedIn החזיר קוד HTTP לא צפוי.', 'נסה שוב מאוחר יותר.'],
 };
 
 function setReadinessCard(card, component) {
@@ -67,7 +91,10 @@ function setReadinessCard(card, component) {
 
 function selectedSourceReady() {
   if (!readiness) return false;
-  return elements.source.value === 'ats' ? readiness.readyFor.ats : readiness.readyFor.whatsapp;
+  const source = elements.source.value;
+  if (source === 'ats') return readiness.readyFor.ats;
+  if (source === 'linkedin') return Boolean(readiness.readyFor.linkedin) && linkedinState.enabled;
+  return readiness.readyFor.whatsapp;
 }
 
 function syncControls() {
@@ -243,7 +270,7 @@ function renderWhatsAppHistory(history, insights) {
     ${groupResults ? `<small>${escapeHtml(groupResults)}</small>` : ''}`;
 }
 
-const sourceRowLabels = { ats: 'ATS', whatsapp: 'WhatsApp' };
+const sourceRowLabels = { ats: 'ATS', whatsapp: 'WhatsApp', linkedin: 'LinkedIn' };
 
 function costLabel(value) {
   return value == null ? '—' : value.toFixed(1);
@@ -253,7 +280,7 @@ function renderSourcePerformance(insights) {
   const short = insights?.windows?.['36h']?.sourcePerformance;
   const week = insights?.windows?.['7d']?.sourcePerformance;
   if (!short || !week) { elements.sourcePerformanceBody.innerHTML = ''; return; }
-  elements.sourcePerformanceBody.innerHTML = Object.keys(sourceRowLabels).map((source) => `<tr>
+  elements.sourcePerformanceBody.innerHTML = Object.keys(sourceRowLabels).filter((source) => short[source] && week[source]).map((source) => `<tr>
     <td><strong>${escapeHtml(sourceRowLabels[source])}</strong></td>
     <td>${Number(short[source].processed)}</td>
     <td>${Number(short[source].suitable)}</td>
@@ -264,13 +291,95 @@ function renderSourcePerformance(insights) {
   </tr>`).join('');
 }
 
+const llmPurposeLabels = { scoring: 'ניקוד משרות', resume_gap: 'ניתוח קורות חיים', company_research: 'מחקר חברה', probe: 'בדיקת מכסה', other: 'אחר' };
+const tokens = (value) => Number(value || 0).toLocaleString('en-US');
+
+function tokenTotal(row) {
+  return Number(row?.inputTokens || 0) + Number(row?.outputTokens || 0);
+}
+
+function renderLlmUsage(usage) {
+  if (!usage) return;
+  elements.llmModel.textContent = `מודל: ${usage.model}${usage.reasoningEffort ? ` · ${usage.reasoningEffort}` : ''}`;
+  const quota = usage.quota || {};
+  const blocked = quota.blockedUntil && quota.blockedUntil > Date.now();
+  elements.llmQuota.dataset.state = blocked ? 'blocked' : 'ok';
+  elements.llmQuota.textContent = blocked
+    ? `המכסה נגמרה ותתחדש בערך ב-${formatTime(quota.blockedUntil)}. סריקות מדולגות עד אז; אין צורך בפעולה.`
+    : `יש מכסה${quota.lastSuccessAt ? ` · קריאה מוצלחת אחרונה ${formatTime(quota.lastSuccessAt)}` : ''}${quota.lastSkipAt ? ` · ריצה אחרונה שדולגה בגלל מכסה ${formatTime(quota.lastSkipAt)}` : ''}.`;
+  const purposes = [...new Set([...(usage.day || []), ...(usage.week || [])].map((row) => row.purpose))];
+  const find = (rows, purpose) => (rows || []).find((row) => row.purpose === purpose);
+  elements.llmUsageBody.innerHTML = purposes.map((purpose) => {
+    const day = find(usage.day, purpose);
+    const week = find(usage.week, purpose);
+    const perItem = week?.items ? Math.round(tokenTotal(week) / week.items) : null;
+    return `<tr>
+      <td><strong>${escapeHtml(llmPurposeLabels[purpose] || purpose)}</strong>${week?.limited ? `<small>${Number(week.limited)} קריאות נחסמו במכסה</small>` : ''}</td>
+      <td>${Number(day?.calls || 0)}</td><td>${tokens(tokenTotal(day))}</td>
+      <td>${Number(week?.calls || 0)}</td><td>${tokens(tokenTotal(week))}</td>
+      <td>${perItem == null ? '—' : tokens(perItem)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6">עדיין לא נמדדו קריאות. המדידה מתחילה מהריצה הבאה.</td></tr>';
+  elements.llmRunsBody.innerHTML = (usage.runs || []).map((run) => `<tr>
+    <td>#${Number(run.runId)}<small>${escapeHtml(formatTime(run.startedAt))}</small></td>
+    <td>${escapeHtml((run.sources || []).join(', ') || '—')}</td>
+    <td>${Number(run.calls)}${run.failedCalls ? `<small>${Number(run.failedCalls)} נכשלו</small>` : ''}</td>
+    <td>${Number(run.items)}</td><td>${tokens(run.totalTokens)}</td>
+    <td>${run.items ? tokens(Math.round(run.totalTokens / run.items)) : '—'}</td>
+  </tr>`).join('') || '<tr><td colspan="6">אין עדיין ריצות מדודות.</td></tr>';
+}
+
 function atsCountLabel(ats) {
   if (ats.discovery) return `${ats.discovery.found} נמצאו · ${ats.discovery.new} חדשות · ${ats.discovery.known} מוכרות`;
   return `${Number(ats.candidates || 0)} מועמדויות`;
 }
 
+function formatWindow(window) {
+  if (!window) return '—';
+  return `${formatTime(window.from)} – ${formatTime(window.to)}`;
+}
+
+function linkedinReason(reason) {
+  return linkedinReasonLabels[reason] || null;
+}
+
+function linkedinResultsLabel(summary) {
+  if (!summary) return '—';
+  if (summary.endedBy === 'no_matches_fallback') return 'אין התאמות אמיתיות (LinkedIn הציע משרות כלליות שלא נשמרו)';
+  return `${Number(summary.found || 0)} נמצאו · ${Number(summary.new || 0)} חדשות · ${Number(summary.known || 0)} מוכרות · ${Number(summary.filtered || 0)} סוננו${summary.stale ? ` · ${Number(summary.stale)} ישנות מהחלון` : ''}${summary.capped ? ' · הגיע למגבלה' : ''}`;
+}
+
+function renderLinkedIn(linkedin) {
+  linkedinState = linkedin || { enabled: false, searches: [] };
+  const { enabled, configEnabled, configured, searches = [], window: settings } = linkedinState;
+  elements.linkedinPanel.dataset.enabled = String(Boolean(enabled));
+  elements.linkedinEnabled.checked = Boolean(enabled);
+  elements.linkedinEnabled.disabled = actionRunning || !configEnabled;
+  const active = searches.filter((search) => search.enabled).length;
+  elements.linkedinSummary.textContent = !configured
+    ? 'LinkedIn לא מוגדר ב-config/jobs.yml.'
+    : !configEnabled
+      ? 'LinkedIn כבוי ב-config/jobs.yml (sources.linkedin.enabled). ATS ו-WhatsApp פועלים כרגיל.'
+      : !enabled
+        ? 'LinkedIn כבוי מלוח הבקרה. ATS ו-WhatsApp פועלים כרגיל.'
+        : `${active} חיפושים פעילים. חיפוש ציבורי ללא התחברות; כל חיפוש מחפש מההצלחה האחרונה שלו ועד עכשיו (עם חפיפה של ${Number(settings?.overlapMinutes || 0)} דקות), לכל היותר ${Number(settings?.maxBackfillHours || 0)} שעות אחורה.`;
+  elements.linkedinSearches.innerHTML = searches.filter((search) => search.enabled).map((search) => {
+    const summary = search.lastSummary;
+    const reason = linkedinReason(search.lastReason);
+    const state = search.lastStatus === 'complete' ? 'complete' : search.lastStatus === 'partial' ? 'partial' : search.lastStatus ? 'failed' : 'unknown';
+    const gaps = (search.gaps || []).map((gap) => `${formatTime(gap.from)} – ${formatTime(gap.to)}`).join(', ');
+    return `<tr data-enabled="${search.enabled}">
+      <td><strong>${escapeHtml(search.label)}</strong><small dir="ltr"><code>${escapeHtml(search.keywords)}</code> · ${escapeHtml(search.location || `geoId ${search.geoId}`)}</small></td>
+      <td>${escapeHtml(formatWindow(summary?.window))}${summary?.window?.mode === 'manual' ? '<small>חלון ידני</small>' : ''}</td>
+      <td>${escapeHtml(search.lastSuccessAt ? formatTime(search.lastSuccessAt) : 'עדיין לא')}${gaps ? `<small>פער שלא כוסה: ${escapeHtml(gaps)}</small>` : ''}</td>
+      <td><span class="coverage-pill" data-state="${state}">${escapeHtml(search.lastStatus ? linkedinStatusLabels[search.lastStatus] || search.lastStatus : 'לא נסרק')}</span>${reason ? `<small>${escapeHtml(reason[0])} ${escapeHtml(reason[1])}</small>` : ''}</td>
+      <td>${escapeHtml(linkedinResultsLabel(summary))}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5">אין חיפושים ב-config/jobs.yml.</td></tr>';
+}
+
 function renderRunAudit(lastRun) {
-  const { ats, whatsapp } = lastRun?.details || {};
+  const { ats, whatsapp, linkedin } = lastRun?.details || {};
   const scopes = lastRun?.details?.processing?.scopes || [];
   const processingFor = (source, name) => scopes.find((scope) => scope.source === source && scope.name === name);
   const rows = [];
@@ -287,6 +396,17 @@ function renderRunAudit(lastRun) {
     rows.push({ name: group.name, coverage, received: Number(group.coverage?.delivered ?? group.messages ?? 0),
       read: group.read, links: Number(processing?.links ?? group.candidates ?? 0), processing,
       state: group.error ? 'לא נסרקה' : processing?.failed > 0 ? 'חלק מהעיבוד נכשל' : coverage === 'complete' ? 'הושלם' : 'כיסוי לא מוכח' });
+  }
+  if (linkedin?.failure) {
+    rows.push({ name: 'LinkedIn', note: linkedin.failure.reason, coverage: 'failed', received: 0, links: 0, processing: null, state: 'המקור נכשל' });
+  }
+  for (const search of linkedin?.searches || []) {
+    const processing = processingFor('linkedin', search.label);
+    const coverage = search.status === 'complete' ? 'complete' : search.status === 'partial' ? 'partial' : 'failed';
+    const reason = linkedinReason(search.reason);
+    rows.push({ name: `LinkedIn · ${search.label}`, note: `${formatWindow(search.window)} · ${linkedinResultsLabel(search)}`,
+      coverage, received: Number(search.found || 0), links: Number(processing?.links ?? 0), processing,
+      state: reason ? reason[0] : processing?.failed > 0 ? 'חלק מהקריאות נכשלו' : coverage === 'complete' ? 'הושלם' : 'איסוף חלקי' });
   }
   elements.sourceDetails.hidden = rows.length === 0;
   elements.runAuditEmpty.hidden = rows.length > 0;
@@ -359,6 +479,8 @@ async function loadScan({ refreshReadiness = false } = {}) {
     renderRunAudit(state.lastRun);
     renderWhatsAppHistory(state.whatsappHistory, state.insights);
     renderSourcePerformance(state.insights);
+    renderLinkedIn(state.linkedin);
+    renderLlmUsage(state.llmUsage);
     elements.updated.textContent = `עודכן ${formatTime(Date.now())}`;
     window.dispatchEvent(new Event('jobops:refresh-summary'));
   } catch (error) {
@@ -389,11 +511,31 @@ async function archiveFailedJobs() {
   }
 }
 
+function syncLinkedInHours() {
+  elements.linkedinHoursField.hidden = !['all', 'linkedin'].includes(elements.source.value);
+}
+
 elements.form.addEventListener('submit', (event) => {
   event.preventDefault();
-  runAction('scan', { days: Number(elements.days.value), source: elements.source.value, open: elements.openAfter.checked });
+  const payload = { days: Number(elements.days.value), source: elements.source.value, open: elements.openAfter.checked };
+  if (!elements.linkedinHoursField.hidden && elements.linkedinHours.value) payload.linkedinHours = Number(elements.linkedinHours.value);
+  runAction('scan', payload);
 });
-elements.source.addEventListener('change', syncControls);
+elements.source.addEventListener('change', () => { syncLinkedInHours(); syncControls(); });
+syncLinkedInHours();
+
+async function updateLinkedIn(path, body) {
+  try {
+    renderLinkedIn(await postJson(path, body));
+    syncControls();
+    return true;
+  } catch (error) {
+    setSystemStatus('error', error.message);
+    return false;
+  }
+}
+
+elements.linkedinEnabled.addEventListener('change', () => updateLinkedIn('/api/linkedin/enabled', { enabled: elements.linkedinEnabled.checked }));
 elements.refreshReadiness.addEventListener('click', () => loadScan({ refreshReadiness: true }));
 elements.verify.addEventListener('click', () => runAction('verify-groups'));
 elements.retryFailed.addEventListener('click', () => runAction('retry-failed'));

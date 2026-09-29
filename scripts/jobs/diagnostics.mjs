@@ -37,9 +37,19 @@ const reasons = {
   process_missing: ['התהליך שתועד אינו פועל, ולא נשמר אירוע סיום. סיבת העצירה אינה ידועה.', 'בדוק אם הטרמינל נסגר או המחשב הופעל מחדש; נסה שוב מהשלב שנכשל.'],
   legacy_unknown: ['בריצה הישנה לא תועד תהליך או אירוע סיום, ולכן אי אפשר לקבוע מה קרה.', 'אין אפשרות לשחזר את הסיבה בדיעבד. הריצות החדשות כוללות תיעוד של שלבים וכשלים.'],
   heartbeat_stale: ['לא התקבל עדכון חיים במשך יותר מדקה; אין הוכחה שהתהליך נעצר.', 'בדוק אם התהליך ממתין או תקוע לפני הפעלת סריקה נוספת.'],
+  linkedin_blocked: ['LinkedIn דרש התחברות או חסם את הבקשה. הסריקה נעצרה ולא ניסתה לעקוף את החסימה.', 'המתן כמה שעות לפני ניסיון נוסף; אין להתחבר או לעקוף. ATS ו-WhatsApp ממשיכים כרגיל.'],
+  linkedin_rate_limited: ['LinkedIn הגביל את קצב הבקשות (HTTP 429). הסריקה נעצרה.', 'המתן לפחות שעה; הריצה האוטומטית הבאה תשלים את החלון מנקודת ההצלחה האחרונה.'],
+  linkedin_structure_changed: ['LinkedIn החזיר תוכן, אך לא ניתן היה לקרוא ממנו משרות. ייתכן שמבנה העמוד השתנה.', 'אין להסיק שאין משרות. הרץ npm run jobs:linkedin-probe ובדוק אם נדרש עדכון לקורא.'],
+  linkedin_empty_unverified: ['LinkedIn החזיר תשובה ריקה בלי שאף חיפוש אחר אישר שהשירות עונה.', 'ייתכן חסימה שקטה; ההתקדמות לא קודמה. נסה שוב מאוחר יותר.'],
+  linkedin_capped: ['הסריקה הגיעה למגבלת העמודים או הבקשות לפני שכיסתה את כל החלון.', 'ההתקדמות לא קודמה; צמצם את השאילתה או הגדל בזהירות את maxPagesPerSearch.'],
+  linkedin_deferred: ['קריאת המשרה ב-LinkedIn נדחתה בריצה הזו (מגבלת קריאות או חסימה מוקדמת).', 'המשרה תיקרא בניסיון החוזר הבא, בלי לחפש מחדש.'],
   command_failed: ['הפקודה הסתיימה בכשל ללא סיבה מפורטת מזוהה.', 'בדוק את השלב האחרון ואת קוד היציאה; אם הכשל חוזר, שתף את פרטי האבחון.'],
   unknown_failure: ['התרחש כשל שלא סווג. הסיבה המדויקת אינה ידועה.', 'שתף את מזהה הריצה, השלב ומיקום הקוד אם מוצג; אין צורך לשתף פרטי חיבור.'],
 };
+
+export function hasFailureReason(code) {
+  return Object.hasOwn(reasons, String(code || ''));
+}
 
 export function describeFailure(error, fallback = 'unknown_failure') {
   const message = `${error?.code || ''} ${error?.message ?? error ?? ''}`.slice(0, 16_384);
@@ -123,10 +133,10 @@ export function createRunLifecycle(store, runId, { registerProcessHandlers = fal
       store.touchRun(runId, { stage });
       store.recordRunEvent(runId, { source, scope: 'run', stage, status: 'started' });
     },
-    finish(status, { failure = null, details = null } = {}) {
+    finish(status, { failure = null, details = null, windowStatus = null } = {}) {
       if (ended) return;
       store.recordRunEvent(runId, { source, scope: 'run', stage, status, details: failure });
-      store.finishRun(runId, { status, error: failure?.reason, details, failure });
+      store.finishRun(runId, { status, error: failure?.reason, details, failure, windowStatus });
       ended = true;
     },
     dispose() {

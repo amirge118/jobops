@@ -45,11 +45,14 @@ candidate reviews and submits them manually.
 ```mermaid
 flowchart LR
     A["ATS boards"] --> C["Collect and normalize"]
+    L["LinkedIn public search"] --> C
     B["WhatsApp groups"] --> W["Persistent Collector"]
     W --> Q["Local SQLite inbox"]
     Q --> C
     C --> D["Deduplicate in SQLite"]
     D --> E["Verify page and score with signed-in Codex"]
+    E --> X["Analyze resume gaps for suitable jobs"]
+    X --> J["Decisions page"]
     E --> F["Minimal Markdown report"]
     F --> G["Optional: open new URLs in Chrome"]
     E --> H["Review company candidate"]
@@ -72,6 +75,12 @@ The report stays intentionally minimal and contains only:
 - one decision reason
 - application URL
 
+The Decisions page is intentionally different from the archival Markdown report. It shows four
+columns only: company/role, combined score and fit label (per-dimension scores and evidence stay
+collapsed under "למה הציון?"), what the employer prioritizes plus the recruiter-screen estimate and
+up to three resume improvements, and uniform decision actions. It does not repeat strengths. Each
+improvement is labeled as a verified safe addition, a real experience gap, or something the
+candidate must confirm.
 ## Quick start
 
 Requirements: Node.js 22+, npm, Google Chrome, and Codex CLI signed in with ChatGPT. No model
@@ -86,9 +95,11 @@ codex login
 npm run doctor
 ```
 
-`codex login status` must report `Logged in using ChatGPT`. Fill in the two private profile
-files and configure sources in `config/jobs.yml`. On macOS, jobOps automatically finds the
-Codex binary bundled with the ChatGPT desktop app; `CODEX_BIN` is available as an override.
+`codex login status` must report `Logged in using ChatGPT`. Fill in the three private files:
+`profile/01-candidate-profile.md`, `profile/02-preferences.md`, and an exact text snapshot of the
+resume currently being sent in `profile/03-current-resume.md`. Then configure sources in
+`config/jobs.yml`. On macOS, jobOps automatically finds the Codex binary bundled with the ChatGPT
+desktop app; `CODEX_BIN` is available as an override.
 
 ```bash
 npm run jobs -- --dry-run --ats-only  # safe ATS preview
@@ -124,11 +135,14 @@ the listener belongs to this jobOps checkout before signaling it, so they do not
 Node.js processes. The WhatsApp Collector is a separate background service and remains active after
 the dashboard is stopped.
 
-The dashboard runs only on `127.0.0.1:4177` and redirects `/` to three focused pages:
+The dashboard runs only on `127.0.0.1:4177` and redirects `/` to `/scan`; the focused pages are:
 
 - `/scan` — run a scan, inspect source health, review per-group coverage, and diagnose failures.
-- `/decisions` — review suitable jobs, open/archive them, and create company candidates.
+- `/decisions` — review suitable jobs and record a decision for each (interested, company to track,
+  company not interesting, too senior, role not relevant); every decision archives the job.
 - `/companies` — inspect the watchlist, resolve a careers URL, and explicitly approve sources.
+- `/personal-area` — resume improvements transferred from the Decisions page.
+- `/decision-stats` — what you did with the jobs you were shown, and where the score disagreed.
 
 All pages use the same SQLite store. A scan keeps running in the local server process when the
 user moves between pages. Only one action can run at a time, and the scan page displays its live
@@ -148,21 +162,25 @@ their minimal deduplication identity is retained.
 
 ### Scheduled scans
 
-A scan can run unattended on a fixed schedule instead of only from the dashboard button. Two
+A scan can run unattended on a fixed schedule instead of only from the dashboard button. Three
 independent macOS LaunchAgents are available: WhatsApp groups at `10:00`, `15:00`, and `20:00`,
-and an ATS run once daily at `14:00`. Neither passes `--open`, so unattended matches wait for
+an ATS run once daily at `14:00`, and LinkedIn at `08:00`, `12:30`, and `20:30` (normal windows
+of roughly 11.5, 4.5, and 8 hours, so a full day is covered; the times deliberately avoid the
+WhatsApp slots, and the LinkedIn agent waits up to 20 minutes for the scan lock instead of
+skipping). Neither passes `--open`, so unattended matches wait for
 review on `/decisions` rather than opening a flood of Chrome tabs while no one is watching.
 
 ```bash
-npm run jobs:schedule:install    # install both LaunchAgents
+npm run jobs:schedule:install    # install all LaunchAgents (three scans + the WhatsApp trigger)
 npm run jobs:schedule:status     # confirm they're loaded and see each schedule
-npm run jobs:schedule:uninstall  # remove both; the database and config are untouched
+npm run jobs:schedule:uninstall  # remove all three; the database and config are untouched
 ```
 
 The schedule itself lives in `SCHEDULES` in
 [`scripts/jobs/scheduled-scan-service.mjs`](../scripts/jobs/scheduled-scan-service.mjs) — edit
 the `times` array for either entry and reinstall to change it. Each entry becomes its own
-LaunchAgent (`com.amirgefen.jobops.scan-ats`, `com.amirgefen.jobops.scan-whatsapp`) because one
+LaunchAgent (`com.amirgefen.jobops.scan-ats`, `com.amirgefen.jobops.scan-whatsapp`,
+`com.amirgefen.jobops.scan-linkedin`) because one
 `StartCalendarInterval` always fires the same fixed command, so a source that runs at several
 times a day and one that runs once cannot share a single agent.
 
@@ -179,11 +197,33 @@ macOS does not run a `StartCalendarInterval` job while the Mac is asleep; a miss
 retried, it simply waits for the next scheduled time. If the Mac is reliably asleep through one of
 these times, adjust `SCHEDULES` to a time it's normally awake instead.
 
+#### Smart WhatsApp trigger (every 30 minutes)
+
+The persistent Collector stores group messages locally at no cost; only processing (page reads
+and Codex scoring) uses ChatGPT/Codex quota, and every Codex batch resends a fixed ~2.4k-token
+prompt. `scripts/jobs/whatsapp-trigger.mjs` therefore runs every 30 minutes as its own
+LaunchAgent (`com.amirgefen.jobops.whatsapp-trigger`, `StartInterval` 1800) and spends no tokens
+deciding. It counts the **new jobs** in the collected backlog: unique job links from pending
+messages that are not already in SQLite and are not known non-job links (a link shared in all
+four groups counts once). It then starts the same local-backlog processing as the dashboard's
+"עבד הודעות שנאספו" button only when:
+
+- at least `sources.whatsapp.trigger.minNewJobs` new jobs are waiting (default 8, a well-filled
+  batch, about 12% fixed-prompt overhead per job), or
+- the oldest new job has waited `maxWaitMinutes` (default 120), so nothing sits for long.
+
+The check itself never records, marks, or fetches anything. `npm run jobs:whatsapp-trigger` runs
+it once by hand. The fixed WhatsApp scans at 10:00, 15:00, and 20:00 remain for history coverage
+and read receipts.
+
 ### Two-minute dashboard workflow
 
 1. Run the scan and review only the suitable jobs.
-2. Use **פתח והעבר לארכיון** to open a posting and remove it from the active list in one action.
-   If Chrome blocks the new tab or archiving fails, the job remains active.
+2. Decide on every match. **מעניין אותי** opens the posting and records the decision in one action
+   (if Chrome blocks the new tab or recording fails, the job remains active). **העבר חברה
+   למועמדות** adds the company as a tracking candidate. Under **לא בשבילי**, pick the reason:
+   **חברה לא מעניינת**, **בכיר מדי**, or **תפקיד לא רלוונטי**. Each decision removes the job from
+   the list; **פתח משרה** only peeks and records nothing.
 3. Use **בדוק חברה למעקב** on a useful WhatsApp/ATS result. jobOps inspects the final application
    URL (after a short-link redirect), identifies a supported job source, and saves a preview only.
 4. Select **אשר והוסף למעקב** only when the preview is correct. The source joins the next scan.
@@ -214,11 +254,90 @@ choice; source verification records `verified_jobs`, `verified_empty`, `blocked`
 count. This prevents a working board with zero openings from looking like a failed scan.
 
 Dashboard read endpoints are deliberately small and local-only: `GET /api/summary`,
-`GET /api/scan`, `GET /api/readiness`, `GET /api/jobs`, and `GET /api/companies`.
+`GET /api/scan`, `GET /api/readiness`, `GET /api/jobs`, `GET /api/companies`, and
+`GET /api/linkedin`. LinkedIn searches are read-only in the dashboard; the only LinkedIn mutation
+is `POST /api/linkedin/enabled`, which switches the whole source and requires a JSON content type.
 Company mutations remain
 `POST /api/companies/research`, `POST /api/companies/resolve`, `POST /api/companies/:id/watch`, and
 `POST /api/companies/:id/status`. Request bodies are bounded and validated; approval is idempotent,
 and the browser never supplies provider or board identifiers for a watch decision.
+
+### LinkedIn job search
+
+LinkedIn is an optional third discovery source that reads LinkedIn's public, logged-out job search
+(`jobs-guest` endpoints). jobOps never logs in, never stores a LinkedIn session or password, never
+solves a CAPTCHA, and stops on the first block. Postings then follow the same path as every other
+source: dedup in SQLite, page verification, Codex scoring, and resume-gap analysis.
+
+```bash
+npm run jobs:linkedin                             # LinkedIn only, automatic windows
+npm run jobs -- --linkedin-only --linkedin-hours 12  # LinkedIn only, a manual 12-hour window
+npm run jobs:linkedin-probe                       # bounded read-only health check of the endpoint
+```
+
+**Searches.** `sources.linkedin.searches` in `config/jobs.yml` is the only place searches are
+defined; each needs a unique `key`. Editing a search's keywords or location starts a fresh coverage
+history for it, renaming it does not, and removing it disables it while keeping its history. The
+scan page shows the active searches and their status read-only, plus a switch that turns the whole
+source off without affecting ATS or WhatsApp. The defaults search Backend, Data
+Engineering, and Data Analyst roles across `Israel` and keep only cards in the Tel Aviv and Center
+districts (plus postings tagged just "Israel"). LinkedIn matches keywords against the whole
+description, so a "data analyst" query also returns FP&A, planning, and data-science roles. Each
+search therefore lists `titleIncludes` terms, and a card is kept only when its title contains at
+least one term from **any** configured search as a whole word ("java" never matches "javascript";
+Hebrew gendered forms such as "מנתח-ת" are normalized). On live data this kept 16 of 77 cards, all
+of them target roles. Titles then pass the same negative keyword list as WhatsApp (`portals.yml`
+`title_filter.negative`); there is no seniority, sector, or Easy Apply filter. Editing
+`titleIncludes` does not reset a search's coverage.
+
+Each card also carries LinkedIn's relative age label ("3 hours ago"). It is read as a lower bound
+on the posting's age: a card older than the window (plus one hour of slack) is dropped and counted
+as out of window, and a page made only of such cards ends pagination. This backs up LinkedIn's own
+`f_TPR` filter, which was honored in testing.
+
+**Time windows.** Each search has its own coverage point (UTC; displayed in local time):
+
+- Automatic mode searches from the last successful coverage minus `overlapMinutes`.
+- A new search, or one whose keywords or location changed meaningfully, starts from
+  `initialLookbackHours`. Renaming a search keeps its coverage.
+- After the computer was off, the catch-up is capped at `maxBackfillHours`; anything older is
+  recorded and shown as an uncovered gap instead of being silently absorbed.
+- Manual mode (`--linkedin-hours`, or the dashboard's "חלון LinkedIn" field) searches the chosen
+  number of hours and only extends coverage when it reaches back to it.
+- Coverage advances only after a complete collection whose postings were saved. A partial, capped,
+  or failed search never advances it, so the next run retries the same stretch. The pagination
+  position is never reused as a time anchor.
+- A clock that moved backwards restarts from the initial window with a warning.
+
+**Failure states.** Each search ends as `complete`, `partial`, or `failed`, with a reason:
+`blocked` (HTTP 999, authwall, or a sign-in page), `rate_limited` (HTTP 429), `structure_changed`
+(content arrived but no card could be read), `network_error`, `timeout`, `capped` (page limit
+reached before the window was covered), or `empty_unverified` (an empty answer while no other
+search in the run proved the endpoint was answering). A block halts every remaining LinkedIn
+request in the run. LinkedIn answers an unmatched query with unrelated "popular" jobs rather than
+an empty page, so a page whose titles share almost no term with the query is treated as "no real
+matches" and nothing from it is stored or scored. None of these outcomes is shown as "no jobs".
+
+**Reading postings.** Descriptions come from the public posting page through plain HTTP (never
+the automated browser), paced, capped per run (`maxDetailFetchesPerRun`), and behind a circuit
+breaker. A posting that cannot be read stays pending with a `linkedin_*` reason and is retried by
+the next run or by "retry failed" without searching again. It is never marked "not suitable".
+
+**Identity.** A LinkedIn posting is keyed by its numeric posting id, so subdomain, slug, and
+tracking-parameter variants, and a LinkedIn link shared in WhatsApp, all collapse into one job
+that remembers every discovery source. LinkedIn never merges on company and title alone: a twin
+is created as its own job and flagged `possible_duplicate_of`, shown on the Decisions page as
+"ייתכן כפילות". Archived and rejected postings are never revived by a new sighting, and a rejected
+posting keeps only its technical identity. A LinkedIn failure never holds back the ATS/WhatsApp
+scan window, because each run also records a window status judged without LinkedIn.
+
+**Limits** (`sources.linkedin.limits`): pages per search, requests per run, posting reads per run,
+delays between requests, and a run time budget. The UI shows when a limit prevented full coverage.
+
+**Known limitations.** The guest endpoints are unofficial and can change or be throttled from a
+single IP. Logged-out pages usually hide the company-site apply link, so most postings keep their
+LinkedIn URL. `sortBy=DD` is sent but was not honored in testing, so collection never depends on
+sort order. Listing dates are day-granular.
 
 ### Understanding failures
 
@@ -268,8 +387,8 @@ again (wait for any active scan to finish first). A browser refresh alone does n
 
 The source-health panel distinguishes "no new jobs" from a failed or incomplete collection run.
 It reports ATS errors, WhatsApp message/link counts, configured groups found, and the last-run
-result. Each matching job also has an optional score breakdown for CV fit, seniority, role scope,
-location, sector, and remaining uncertainties. The Markdown report remains minimal.
+result. The Decisions page combines the final score and fit label, then focuses on actionable
+resume gaps instead of exposing per-criterion score breakdowns. The Markdown report remains minimal.
 
 Only suitable active jobs appear in the dashboard and reports. A rejected job keeps only its
 canonical identity and cache hashes required to prevent duplicate work; its company, title,
@@ -408,6 +527,44 @@ behavior.
 
 ## Codex scoring without API billing
 
+### Token accounting, model choice, and quota checks
+
+Every Codex call runs `codex exec --json`. The final agent message is the structured answer, and
+`turn.completed` reports input, cached-input, output, and reasoning tokens. Each call is stored in
+the `codex_calls` table (purpose, model, jobs in the batch, tokens, duration, outcome; kept for 90
+days). Each CLI run prints a token line, and the scan page's "צריכת Codex" panel shows 24-hour and
+7-day totals per purpose, tokens per scored item, and a per-run breakdown.
+
+`scoring.model` in `config/jobs.yml` selects the model for all Codex calls (currently
+`gpt-reserve`, Codex's "fast and affordable" tier). Without it, `codex exec` uses its own default
+model, because `--ignore-user-config` deliberately ignores your personal Codex config.
+`scoring.reasoningEffort`, `resumeGap.model`, and `resumeGap.reasoningEffort` are optional
+overrides.
+
+A ChatGPT account's Codex usage limit is checked before every run: a stored block (with the reset
+time Codex reports, e.g. "try again at 1:43 PM") skips the run; a successful call in the last two
+hours is trusted; otherwise one tiny probe call runs (a call rejected for the limit costs nothing).
+When the limit is hit mid-run, the rest of that run makes no further Codex calls, and the unscored
+jobs stay pending for automatic retry. Scheduled runs and the WhatsApp trigger skip entirely while
+blocked, and every source resumes from its last success afterwards. The dashboard shows the block as
+a readiness blocker until it resets.
+The fit prompt scores every dimension (`cvMatch`, `seniority`, `roleScope`, `location`, `sector`)
+against fixed anchor bands and hard caps (for example, `cvMatch` 5 requires every stated must-have
+to be evidenced; an unstated fact is scored as unknown, never as the favourable case). The schema
+requires one evidence sentence per dimension; these are stored in `fitBreakdown.evidence` and shown
+on demand in the decisions table. Changing anchors requires bumping `decision.criteriaVersion`,
+which re-scores jobs still in the scan window. The suitability threshold is
+`decision.minimumScore` (currently a 3.6 trial, down from 4.0).
+
+Suitable jobs then enter a separate resume-gap pass. Its cache key contains the job-content hash,
+candidate-profile hash, exact-resume hash, and analysis version. The pass returns at most three
+items and may classify a keyword as safe to add only when the private profile contains supporting
+evidence and the exact resume does not already contain it. The same call also returns up to five
+`employerPriorities` (ranked by the posting's own emphasis, each with a `critical`/`important`/`nice`
+weight and `strong`/`partial`/`missing` coverage in the exact resume) and a `screenPass`
+(`high`/`medium`/`low` with the deciding factor), judged only from the resume text. Analysis failures are stored separately:
+they never change the fit decision, hide the job, or fail the source scan.
+
 New active jobs are scored through `codex exec`, authenticated with the local ChatGPT login.
 The child process is forced to the `chatgpt` login method, ignores API-oriented user config,
 does not inherit `OPENAI_API_KEY`, and runs in a read-only ephemeral sandbox. Jobs are grouped
@@ -423,8 +580,40 @@ Codex/ChatGPT usage allowance or workspace credits associated with the signed-in
 `data/jobs.db` is the source of truth for job URLs, normalized company/role identities, the company
 watchlist and source health, message status, page cache, scan checkpoints, and whether a result was
 already shown or opened.
-The dashboard also lets you archive a reviewed match. Archived jobs disappear from active lists,
-retain only their dedup identity, and cannot surface again in later scans.
+Every decision on the Decisions page (`POST /api/jobs/:jobKey/decision`) first writes one row to
+`job_decisions` and then archives the job in the same transaction. Archived jobs disappear from
+active lists, retain only their dedup identity, and cannot surface again in later scans — so the
+archive must never be emptied; its rows are tiny. The decision row is the only durable snapshot:
+decision, time, company, title, application URL, score, fit label, the five numeric fit
+dimensions, source kinds, screen-pass level, and criteria version — never page text, evidence, or
+gap analysis. `/decision-stats` (`GET /api/decision-stats`, built by
+`scripts/jobs/decision-stats.mjs`) summarizes it: counts per decision over 7/30 days and all
+time, positive rate per score band (including the trial band below 4.0) and per source, and
+calibration signals — "too senior" despite a seniority score of 4–5, "not relevant" despite
+role-scope or CV-match of 4–5, and interest in jobs scored below 4.0. Only positive decisions keep
+a clickable link in the stats view.
+
+**Source value.** Runs keep full details for only the last few scans, and rejected or archived jobs
+lose their content, so neither can answer "is this source worth scanning?" over weeks. Three small
+durable records do: `source_scan_stats` (one row per collected source per run — found, filtered by
+title/location/recency, candidates, model-scored, suitable, failed, errors, collection seconds),
+`job_source_sightings` (the first time each source kind saw each job, with the ATS company name),
+and the `jobs.first_scored_at` / `jobs.first_suitable_at` timestamps, which archiving never clears.
+`first_scored_at` counts only real model calls (`scoredByModel`), not local title filters or
+dead-link verdicts. `scripts/jobs/source-value.mjs` turns them into three numbers over 30 days,
+shown at the top of `/decision-stats`: yield per source (scans, scan time, found → scored →
+suitable → interested, suitable per scan, scorings per suitable job); ATS company productivity
+(how many watched companies produced a fit, how many produced no candidate at all, and the share of
+fits from the top three); and exclusivity (fits only one source found, and the median days a source
+was ahead of the others). History before 2026-09-29 is only partially backfilled.
+
+**ATS title filter.** `title_filter` in `portals.yml` runs before the location filter and is a cheap
+pre-screen, not the fit decision; the scorer decides fit. A 2026-09-29 audit of all 793 Israel ATS
+jobs found real backend/AI roles dropped only for missing an exact phrase ("SW Engineer",
+"Staff Engineer", "AI Engineer", "Back-End", "Forward Deployed"), so those were added, raising kept
+jobs from 109 to 140. `title_filter.always_allow` passes a title even when a negative matches —
+e.g. "Senior Full Stack Developer (Backend Oriented)". A full ATS collection of 85 companies takes
+about 11 seconds; the real cost is model scoring (~13 s per job, batches of 5 with a 240 s limit).
 
 The unified ATS adapter deliberately ignores the older Markdown/TSV dedup files while collecting;
 every candidate first reaches SQLite, which prevents a legacy pipeline entry from disappearing
@@ -438,7 +627,8 @@ success, matches, rejections, failures, and previously processed jobs. Known arc
 roles do not reappear as new matches.
 
 - The first run looks back two days by default.
-- Later runs start from the last successful run with a 12-hour overlap.
+- Later runs start from the last successful run with a 12-hour overlap. (LinkedIn keeps its own
+  per-search coverage; see [LinkedIn job search](#linkedin-job-search).)
 - `--days N` explicitly selects a window, capped by `maxLookbackDays`.
 - Tracking parameters are removed before URL comparison.
 - Failed WhatsApp messages remain retryable; successful messages are not processed again.
@@ -455,6 +645,9 @@ scripts/jobs.mjs         unified CLI
 scripts/jobs/            shared collection, scoring, storage, and reporting modules
 scripts/jobs/company-*   company catalogue bootstrap and persistent registry rules
 scripts/jobs/company-source-resolver.mjs  researched URL discovery, safe probing, and source selection
+scripts/jobs/sources/linkedin.mjs  LinkedIn guest search, parsing, failure classification, collection
+scripts/jobs/linkedin-window.mjs   per-search coverage windows and advancement rules
+scripts/jobs/linkedin-probe.mjs    bounded read-only LinkedIn feasibility probe
 scripts/providers/       ATS and official career-source adapters
 scripts/web.mjs          local dashboard entry point and API composition
 scripts/dashboard/       dashboard actions, focused queries, and safe static routing
@@ -467,6 +660,7 @@ docs/assets/             public screenshots generated from demo data
 docs/company-expansion-research.md  seed-to-peer map and career-source verification
 docs/adr/0004-company-source-resolution.md  source-discovery architecture and trade-offs
 docs/adr/0005-platform-adapters.md  reusable hiring-platform adapter contract
+docs/adr/0006-linkedin-guest-search.md  LinkedIn as a bounded, optional discovery source
 .agents/skills/          reusable Codex job-search workflows
 
 profile/                 private candidate profile (ignored)
@@ -520,8 +714,11 @@ The repository is designed so the reusable application can be published while ca
 CVs, WhatsApp credentials, scan state, generated reports, and environment variables stay local.
 Before publishing, review `git status --ignored` and run `gitleaks dir . --redact`.
 
-During scoring, the candidate profile and fetched job text are sent to Codex under the data and
-retention settings of the ChatGPT account or workspace used by `codex login`.
+During scoring and resume-gap analysis, the candidate profile, exact current-resume snapshot, and
+fetched job text are sent to Codex under the data and retention settings of the ChatGPT account or
+workspace used by `codex login`. The resume snapshot and analysis results remain in ignored local
+files and SQLite state; rejected or archived jobs have their analysis fields cleared. A decided
+job keeps only the small `job_decisions` snapshot described above.
 
 jobOps is available under the [MIT License](../LICENSE). Adapted upstream components and their
 original MIT notice are documented in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
