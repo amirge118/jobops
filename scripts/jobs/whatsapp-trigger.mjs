@@ -20,7 +20,7 @@ import { canonicalizeJobUrl } from './core.mjs';
 import { knownNonJobReason } from './fetch-page.mjs';
 import { createJobStore } from './store.mjs';
 
-export const DEFAULT_TRIGGER = Object.freeze({ minNewJobs: 8, maxWaitMinutes: 120, lookbackDays: 7 });
+export const DEFAULT_TRIGGER = Object.freeze({ minNewJobs: 10, maxWaitMinutes: 120, lookbackDays: 7 });
 
 const URL_PATTERN = /https?:\/\/[^\s)]+/g;
 

@@ -1463,7 +1463,7 @@ export function createJobStore(databasePath) {
     recordCodexCall(entry = {}) {
       const at = Number(entry.at) || Date.now();
       const usage = entry.usage || {};
-      const int = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : null);
+      const int = (value) => (value != null && Number.isFinite(Number(value)) ? Math.round(Number(value)) : null);
       db.prepare(`
         INSERT INTO codex_calls (run_id, purpose, model, reasoning_effort, items, input_tokens, cached_input_tokens,
           output_tokens, reasoning_tokens, duration_ms, ok, error_code, created_at, source_mix)
@@ -1752,6 +1752,7 @@ export function createJobStore(databasePath) {
           j.resume_gap_input_hash AS storedResumeGapInputHash,
           j.resume_gap_error_code AS resumeGapErrorCode,
           j.sources_json AS sourcesJson,
+          j.evaluated_at AS evaluatedAt,
           p.content
         FROM jobs j
         JOIN job_pages p ON p.canonical_url = j.canonical_url
