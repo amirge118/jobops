@@ -7,12 +7,18 @@ import { promisify } from 'node:util';
 import { chromium } from 'playwright';
 import { resolveCodexBinary } from '../jobs/score-job.mjs';
 import { createJobStore } from '../jobs/store.mjs';
+import { rateLimitBlockedUntil, readCodexRateLimits } from '../jobs/llm-usage.mjs';
 
 function defaultQuotaState(config) {
   if (!config?.jobsDbPath) return null;
   const store = createJobStore(config.jobsDbPath);
-  try { return store.getLlmQuota(); }
+  let stored;
+  try { stored = store.getLlmQuota(); }
   finally { store.close(); }
+  // Free: Codex's own local record of the account's usage windows.
+  let limitedUntil = null;
+  try { limitedUntil = rateLimitBlockedUntil(readCodexRateLimits({ fsModule: fs })); } catch { limitedUntil = null; }
+  return { ...stored, blockedUntil: Math.max(Number(stored?.blockedUntil) || 0, Number(limitedUntil) || 0) || null };
 }
 
 const SANDBOX_REASON = 'האתר הופעל מתוך סביבת Codex מוגבלת, ולכן תהליכי Chromium ומנגנון הציון אינם יכולים לפעול.';

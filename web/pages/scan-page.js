@@ -304,9 +304,12 @@ function renderLlmUsage(usage) {
   const quota = usage.quota || {};
   const blocked = quota.blockedUntil && quota.blockedUntil > Date.now();
   elements.llmQuota.dataset.state = blocked ? 'blocked' : 'ok';
+  const windowText = (label, window) => (window ? `${label}: ${Math.round(window.usedPercent)}% נוצלו${window.resetsAt ? `, מתאפס ${formatTime(window.resetsAt)}` : ''}` : '');
+  const limits = usage.rateLimits;
+  const windows = limits ? [windowText('חלון 5 שעות', limits.primary), windowText('שבועי', limits.secondary)].filter(Boolean).join(' · ') : '';
   elements.llmQuota.textContent = blocked
-    ? `המכסה נגמרה ותתחדש בערך ב-${formatTime(quota.blockedUntil)}. סריקות מדולגות עד אז; אין צורך בפעולה.`
-    : `יש מכסה${quota.lastSuccessAt ? ` · קריאה מוצלחת אחרונה ${formatTime(quota.lastSuccessAt)}` : ''}${quota.lastSkipAt ? ` · ריצה אחרונה שדולגה בגלל מכסה ${formatTime(quota.lastSkipAt)}` : ''}.`;
+    ? `המכסה נגמרה ותתחדש בערך ב-${formatTime(quota.blockedUntil)}. סריקות מדולגות עד אז; אין צורך בפעולה.${windows ? ` (${windows})` : ''}`
+    : `${windows ? `${windows} (לפי Codex, נכון ל-${formatTime(limits.observedAt)})` : 'יש מכסה'}${quota.lastSkipAt ? ` · ריצה אחרונה שדולגה בגלל מכסה ${formatTime(quota.lastSkipAt)}` : ''}.`;
   const purposes = [...new Set([...(usage.day || []), ...(usage.week || [])].map((row) => row.purpose))];
   const find = (rows, purpose) => (rows || []).find((row) => row.purpose === purpose);
   elements.llmUsageBody.innerHTML = purposes.map((purpose) => {
