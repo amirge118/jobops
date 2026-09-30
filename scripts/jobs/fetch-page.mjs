@@ -199,6 +199,34 @@ function hostnameOf(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
 }
 
+// Company and title as the source states them, so a job can be matched to one
+// already known before it is sent for scoring. API-backed pages carry them as
+// the leading "Title:"/"Company:" lines built above; anything else is null.
+function labeledIdentity(content) {
+  const head = String(content || '').split('\n', 6);
+  const field = (label) => head.find((line) => line.startsWith(`${label}: `))?.slice(label.length + 2).trim() || null;
+  const title = field('Title');
+  const company = field('Company');
+  return title || company ? { company, title } : null;
+}
+
+function jsonLdIdentity(html) {
+  for (const [, raw] of String(html || '').matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    let data;
+    try { data = JSON.parse(raw); } catch { continue; }
+    const nodes = [data, ...(Array.isArray(data) ? data : []), ...(Array.isArray(data?.['@graph']) ? data['@graph'] : [])];
+    const posting = nodes.find((node) => node && [].concat(node['@type']).includes('JobPosting'));
+    if (posting?.title) {
+      const organization = posting.hiringOrganization;
+      return {
+        title: htmlToText(String(posting.title)),
+        company: typeof organization === 'string' ? organization : organization?.name ? String(organization.name) : null,
+      };
+    }
+  }
+  return null;
+}
+
 function linkedinContent(posting) {
   const criteria = Object.entries(posting.criteria).map(([name, value]) => `${name}: ${value}`).join('\n');
   return [posting.title, posting.company, posting.location, criteria, posting.description]
@@ -271,289 +299,300 @@ export function createJobPageFetcher({
     }
   }
 
-  return {
-    async fetch(url) {
-      const canonicalUrl = canonicalizeJobUrl(url);
-      if (!canonicalUrl) throw new Error(`Invalid job URL: ${url}`);
+  async function fetchPage(url) {
+    const canonicalUrl = canonicalizeJobUrl(url);
+    if (!canonicalUrl) throw new Error(`Invalid job URL: ${url}`);
 
-      const cached = store.getFreshPage(canonicalUrl, { ttlMs: cacheTtlMs });
-      // Uncertain pages are dependency failures, not final decisions. Retry them on the next run.
-      if (cached && cached.status !== 'uncertain') {
-        return {
-          canonicalUrl,
-          finalUrl: cached.final_url,
-          status: cached.status,
-          content: cached.content,
-          contentHash: cached.content_hash,
-          code: 'cache',
-          fromCache: true,
-        };
-      }
+    const cached = store.getFreshPage(canonicalUrl, { ttlMs: cacheTtlMs });
+    // Uncertain pages are dependency failures, not final decisions. Retry them on the next run.
+    if (cached && cached.status !== 'uncertain') {
+      return {
+        canonicalUrl,
+        finalUrl: cached.final_url,
+        status: cached.status,
+        content: cached.content,
+        contentHash: cached.content_hash,
+        code: 'cache',
+        fromCache: true,
+      };
+    }
 
-      const nonJobReason = knownNonJobReason(url);
-      if (nonJobReason) {
-        const result = {
-          status: 'non-job',
-          code: 'known_non_job_url',
-          reason: nonJobReason,
+    const nonJobReason = knownNonJobReason(url);
+    if (nonJobReason) {
+      const result = {
+        status: 'non-job',
+        code: 'known_non_job_url',
+        reason: nonJobReason,
+        finalUrl: canonicalUrl,
+        content: '',
+      };
+      const contentHash = hashContent(result.content);
+      store.savePage({ canonicalUrl, ...result, contentHash });
+      return { canonicalUrl, ...result, contentHash, fromCache: false };
+    }
+
+    const hireMeTechId = hireMeTechJobId(url);
+    if (hireMeTechId) {
+      const apiUrl = `https://hiremetech.com/api/jobs/${hireMeTechId}`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      let result;
+      try {
+        const response = await fetchImpl(apiUrl, {
+          signal: controller.signal,
+          headers: { accept: 'application/json', 'user-agent': USER_AGENT },
+        });
+        if (response.status === 404) {
+          result = {
+            status: 'expired',
+            code: 'hiremetech_not_found',
+            reason: 'HireMeTech reports that the job no longer exists.',
+            finalUrl: canonicalUrl,
+            content: '',
+          };
+        } else if (!response.ok) {
+          result = {
+            status: 'uncertain',
+            code: `hiremetech_api_http_${response.status}`,
+            reason: `HireMeTech API returned HTTP ${response.status}.`,
+            finalUrl: canonicalUrl,
+            content: '',
+          };
+        } else {
+          const payload = await response.json();
+          const job = payload?.job;
+          if (!job || typeof job !== 'object') throw new Error('HireMeTech API returned no job object');
+          const active = job.is_active !== false && job.accepting_applications !== false;
+          result = {
+            status: active ? 'active' : 'expired',
+            code: 'hiremetech_api',
+            reason: active ? 'Loaded from the HireMeTech public job API.' : 'HireMeTech marks the job as inactive.',
+            finalUrl: safeHttpUrl(job.apply_url || job.job_url, canonicalUrl),
+            content: hireMeTechContent(job),
+          };
+        }
+      } catch (error) {
+        result = {
+          status: 'uncertain',
+          code: error?.name === 'AbortError' ? 'hiremetech_api_timeout' : 'hiremetech_api_error',
+          reason: error?.name === 'AbortError'
+            ? `HireMeTech API timed out after ${FETCH_TIMEOUT_MS}ms.`
+            : String(error?.message || 'HireMeTech API failed.'),
           finalUrl: canonicalUrl,
           content: '',
         };
-        const contentHash = hashContent(result.content);
-        store.savePage({ canonicalUrl, ...result, contentHash });
-        return { canonicalUrl, ...result, contentHash, fromCache: false };
-      }
-
-      const hireMeTechId = hireMeTechJobId(url);
-      if (hireMeTechId) {
-        const apiUrl = `https://hiremetech.com/api/jobs/${hireMeTechId}`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-        let result;
-        try {
-          const response = await fetchImpl(apiUrl, {
-            signal: controller.signal,
-            headers: { accept: 'application/json', 'user-agent': USER_AGENT },
-          });
-          if (response.status === 404) {
-            result = {
-              status: 'expired',
-              code: 'hiremetech_not_found',
-              reason: 'HireMeTech reports that the job no longer exists.',
-              finalUrl: canonicalUrl,
-              content: '',
-            };
-          } else if (!response.ok) {
-            result = {
-              status: 'uncertain',
-              code: `hiremetech_api_http_${response.status}`,
-              reason: `HireMeTech API returned HTTP ${response.status}.`,
-              finalUrl: canonicalUrl,
-              content: '',
-            };
-          } else {
-            const payload = await response.json();
-            const job = payload?.job;
-            if (!job || typeof job !== 'object') throw new Error('HireMeTech API returned no job object');
-            const active = job.is_active !== false && job.accepting_applications !== false;
-            result = {
-              status: active ? 'active' : 'expired',
-              code: 'hiremetech_api',
-              reason: active ? 'Loaded from the HireMeTech public job API.' : 'HireMeTech marks the job as inactive.',
-              finalUrl: safeHttpUrl(job.apply_url || job.job_url, canonicalUrl),
-              content: hireMeTechContent(job),
-            };
-          }
-        } catch (error) {
-          result = {
-            status: 'uncertain',
-            code: error?.name === 'AbortError' ? 'hiremetech_api_timeout' : 'hiremetech_api_error',
-            reason: error?.name === 'AbortError'
-              ? `HireMeTech API timed out after ${FETCH_TIMEOUT_MS}ms.`
-              : String(error?.message || 'HireMeTech API failed.'),
-            finalUrl: canonicalUrl,
-            content: '',
-          };
-        } finally {
-          clearTimeout(timer);
-        }
-
-        const contentHash = hashContent(result.content);
-        store.savePage({ canonicalUrl, ...result, contentHash });
-        return { canonicalUrl, ...result, contentHash, fromCache: false };
-      }
-
-      const smartRecruiters = smartRecruitersIdentity(url);
-      if (smartRecruiters) {
-        const apiUrl = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(smartRecruiters.company)}/postings/${smartRecruiters.postingId}`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-        let result;
-        try {
-          const response = await fetchImpl(apiUrl, {
-            signal: controller.signal,
-            headers: { accept: 'application/json', 'user-agent': USER_AGENT },
-          });
-          if (response.status === 404) {
-            result = { status: 'expired', code: 'smartrecruiters_not_found', reason: 'SmartRecruiters reports that the job no longer exists.', finalUrl: canonicalUrl, content: '' };
-          } else if (!response.ok) {
-            result = { status: 'uncertain', code: `smartrecruiters_api_http_${response.status}`, reason: `SmartRecruiters API returned HTTP ${response.status}.`, finalUrl: canonicalUrl, content: '' };
-          } else {
-            const posting = await response.json();
-            result = {
-              status: 'active',
-              code: 'smartrecruiters_api',
-              reason: 'Loaded from the SmartRecruiters public posting API.',
-              finalUrl: safeHttpUrl(posting.applyUrl || posting.postingUrl, canonicalUrl),
-              content: smartRecruitersContent(posting),
-            };
-          }
-        } catch (error) {
-          result = {
-            status: 'uncertain',
-            code: error?.name === 'AbortError' ? 'smartrecruiters_api_timeout' : 'smartrecruiters_api_error',
-            reason: error?.name === 'AbortError' ? `SmartRecruiters API timed out after ${FETCH_TIMEOUT_MS}ms.` : String(error?.message || 'SmartRecruiters API failed.'),
-            finalUrl: canonicalUrl,
-            content: '',
-          };
-        } finally {
-          clearTimeout(timer);
-        }
-        const contentHash = hashContent(result.content);
-        store.savePage({ canonicalUrl, ...result, contentHash });
-        return { canonicalUrl, ...result, contentHash, fromCache: false };
-      }
-
-      const greenhouse = greenhouseIdentity(url);
-      if (greenhouse) {
-        const apiUrl = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(greenhouse.board)}/jobs/${greenhouse.jobId}?content=true`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-        let result;
-        try {
-          const response = await fetchImpl(apiUrl, {
-            signal: controller.signal,
-            headers: { accept: 'application/json', 'user-agent': USER_AGENT },
-          });
-          if (response.status === 404) {
-            result = { status: 'expired', code: 'greenhouse_not_found', reason: 'Greenhouse reports that the job no longer exists.', finalUrl: canonicalUrl, content: '' };
-          } else if (!response.ok) {
-            result = { status: 'uncertain', code: `greenhouse_api_http_${response.status}`, reason: `Greenhouse API returned HTTP ${response.status}.`, finalUrl: canonicalUrl, content: '' };
-          } else {
-            const posting = await response.json();
-            result = {
-              status: 'active',
-              code: 'greenhouse_api',
-              reason: 'Loaded from the Greenhouse public job API.',
-              finalUrl: safeHttpUrl(posting.absolute_url, canonicalUrl),
-              content: greenhouseContent(posting),
-            };
-          }
-        } catch (error) {
-          result = {
-            status: 'uncertain',
-            code: error?.name === 'AbortError' ? 'greenhouse_api_timeout' : 'greenhouse_api_error',
-            reason: error?.name === 'AbortError' ? `Greenhouse API timed out after ${FETCH_TIMEOUT_MS}ms.` : String(error?.message || 'Greenhouse API failed.'),
-            finalUrl: canonicalUrl,
-            content: '',
-          };
-        } finally {
-          clearTimeout(timer);
-        }
-        const contentHash = hashContent(result.content);
-        store.savePage({ canonicalUrl, ...result, contentHash });
-        return { canonicalUrl, ...result, contentHash, fromCache: false };
-      }
-
-      const linkedinId = linkedinJobId(canonicalUrl);
-      if (linkedinId) {
-        if (linkedin.haltedBy || linkedin.fetched >= linkedin.maxDetailFetchesPerRun) {
-          return {
-            canonicalUrl, finalUrl: canonicalUrl, content: '', contentHash: hashContent(''), fromCache: false,
-            status: 'uncertain',
-            code: 'linkedin_deferred',
-            reason: linkedin.haltedBy
-              ? `LinkedIn ${linkedin.haltedBy} earlier in this run; reading was postponed to the next retry.`
-              : 'The per-run LinkedIn reading limit was reached; reading was postponed to the next retry.',
-          };
-        }
-        if (linkedin.fetched > 0) {
-          const [min, max] = linkedin.detailDelayMs || [2_000, 4_000];
-          await sleep(Math.round(min + Math.random() * Math.max(0, max - min)));
-        }
-        linkedin.fetched += 1;
-        let result;
-        try {
-          const response = await fetchWithTimeout(fetchImpl, `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`, { timeoutMs: FETCH_TIMEOUT_MS });
-          const posting = response.status === 200 ? parsePostingPage(response.html) : null;
-          if (response.status === 404 || response.status === 410) {
-            result = { status: 'expired', code: 'linkedin_not_found', reason: 'LinkedIn reports that the posting no longer exists.', content: '' };
-          } else if (posting?.closed) {
-            result = { status: 'expired', code: 'linkedin_closed', reason: 'LinkedIn marks the posting as no longer accepting applications.', content: '' };
-          } else if (posting && posting.description.length >= 200) {
-            if (posting.applyUrl) {
-              const twin = store.recordLinkedInExternalUrl?.(linkedinId, posting.applyUrl);
-              if (twin) store.flagPossibleDuplicate?.(canonicalUrl, twin);
-            }
-            result = { status: 'active', code: 'linkedin_posting_api', reason: 'Loaded from the LinkedIn public posting page.', content: linkedinContent(posting) };
-          } else {
-            const classification = classifySearchResponse({ ...response, cards: [] });
-            const blocked = ['blocked', 'rate_limited'].includes(classification.status);
-            if (blocked) linkedin.haltedBy = classification.status;
-            result = {
-              status: 'uncertain',
-              code: blocked ? `linkedin_${classification.status}` : 'linkedin_structure_changed',
-              reason: blocked ? classification.reason : 'LinkedIn returned a page without a readable job description.',
-              content: '',
-            };
-          }
-        } catch (error) {
-          const timedOut = error?.name === 'AbortError';
-          result = {
-            status: 'uncertain',
-            code: timedOut ? 'timeout' : 'network_error',
-            reason: timedOut ? `LinkedIn did not answer within ${FETCH_TIMEOUT_MS}ms.` : 'LinkedIn could not be reached.',
-            content: '',
-          };
-        }
-        result.finalUrl = canonicalUrl;
-        const contentHash = hashContent(result.content);
-        store.savePage({ canonicalUrl, ...result, contentHash });
-        return { canonicalUrl, ...result, contentHash, fromCache: false };
-      }
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      let finalUrl = url;
-      let content = '';
-      let liveness;
-      try {
-        const response = await fetchImpl(url, {
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: { 'user-agent': USER_AGENT },
-        });
-        finalUrl = response.url || url;
-        const html = await response.text();
-        content = htmlToText(html);
-        liveness = classifyLiveness({
-          status: response.status,
-          finalUrl,
-          bodyText: content,
-          applyControls: visibleApplyLabels(html),
-        });
-      } catch (error) {
-        liveness = { result: 'uncertain', code: 'fetch_error', reason: error.message };
       } finally {
         clearTimeout(timer);
       }
 
-      if (liveness.result === 'uncertain') {
-        const rendered = await renderedCheck(url);
-        if (rendered.content.length > content.length) content = rendered.content;
-        finalUrl = rendered.finalUrl || finalUrl;
-        liveness = rendered.liveness;
+      const contentHash = hashContent(result.content);
+      store.savePage({ canonicalUrl, ...result, contentHash });
+      return { canonicalUrl, ...result, contentHash, fromCache: false };
+    }
+
+    const smartRecruiters = smartRecruitersIdentity(url);
+    if (smartRecruiters) {
+      const apiUrl = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(smartRecruiters.company)}/postings/${smartRecruiters.postingId}`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      let result;
+      try {
+        const response = await fetchImpl(apiUrl, {
+          signal: controller.signal,
+          headers: { accept: 'application/json', 'user-agent': USER_AGENT },
+        });
+        if (response.status === 404) {
+          result = { status: 'expired', code: 'smartrecruiters_not_found', reason: 'SmartRecruiters reports that the job no longer exists.', finalUrl: canonicalUrl, content: '' };
+        } else if (!response.ok) {
+          result = { status: 'uncertain', code: `smartrecruiters_api_http_${response.status}`, reason: `SmartRecruiters API returned HTTP ${response.status}.`, finalUrl: canonicalUrl, content: '' };
+        } else {
+          const posting = await response.json();
+          result = {
+            status: 'active',
+            code: 'smartrecruiters_api',
+            reason: 'Loaded from the SmartRecruiters public posting API.',
+            finalUrl: safeHttpUrl(posting.applyUrl || posting.postingUrl, canonicalUrl),
+            content: smartRecruitersContent(posting),
+          };
+        }
+      } catch (error) {
+        result = {
+          status: 'uncertain',
+          code: error?.name === 'AbortError' ? 'smartrecruiters_api_timeout' : 'smartrecruiters_api_error',
+          reason: error?.name === 'AbortError' ? `SmartRecruiters API timed out after ${FETCH_TIMEOUT_MS}ms.` : String(error?.message || 'SmartRecruiters API failed.'),
+          finalUrl: canonicalUrl,
+          content: '',
+        };
+      } finally {
+        clearTimeout(timer);
       }
+      const contentHash = hashContent(result.content);
+      store.savePage({ canonicalUrl, ...result, contentHash });
+      return { canonicalUrl, ...result, contentHash, fromCache: false };
+    }
 
-      const contentHash = hashContent(content);
-      store.savePage({
-        canonicalUrl,
-        finalUrl,
-        status: liveness.result,
-        content,
-        contentHash,
+    const greenhouse = greenhouseIdentity(url);
+    if (greenhouse) {
+      const apiUrl = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(greenhouse.board)}/jobs/${greenhouse.jobId}?content=true`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+      let result;
+      try {
+        const response = await fetchImpl(apiUrl, {
+          signal: controller.signal,
+          headers: { accept: 'application/json', 'user-agent': USER_AGENT },
+        });
+        if (response.status === 404) {
+          result = { status: 'expired', code: 'greenhouse_not_found', reason: 'Greenhouse reports that the job no longer exists.', finalUrl: canonicalUrl, content: '' };
+        } else if (!response.ok) {
+          result = { status: 'uncertain', code: `greenhouse_api_http_${response.status}`, reason: `Greenhouse API returned HTTP ${response.status}.`, finalUrl: canonicalUrl, content: '' };
+        } else {
+          const posting = await response.json();
+          result = {
+            status: 'active',
+            code: 'greenhouse_api',
+            reason: 'Loaded from the Greenhouse public job API.',
+            finalUrl: safeHttpUrl(posting.absolute_url, canonicalUrl),
+            content: greenhouseContent(posting),
+          };
+        }
+      } catch (error) {
+        result = {
+          status: 'uncertain',
+          code: error?.name === 'AbortError' ? 'greenhouse_api_timeout' : 'greenhouse_api_error',
+          reason: error?.name === 'AbortError' ? `Greenhouse API timed out after ${FETCH_TIMEOUT_MS}ms.` : String(error?.message || 'Greenhouse API failed.'),
+          finalUrl: canonicalUrl,
+          content: '',
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+      const contentHash = hashContent(result.content);
+      store.savePage({ canonicalUrl, ...result, contentHash });
+      return { canonicalUrl, ...result, contentHash, fromCache: false };
+    }
+
+    const linkedinId = linkedinJobId(canonicalUrl);
+    if (linkedinId) {
+      if (linkedin.haltedBy || linkedin.fetched >= linkedin.maxDetailFetchesPerRun) {
+        return {
+          canonicalUrl, finalUrl: canonicalUrl, content: '', contentHash: hashContent(''), fromCache: false,
+          status: 'uncertain',
+          code: 'linkedin_deferred',
+          reason: linkedin.haltedBy
+            ? `LinkedIn ${linkedin.haltedBy} earlier in this run; reading was postponed to the next retry.`
+            : 'The per-run LinkedIn reading limit was reached; reading was postponed to the next retry.',
+        };
+      }
+      if (linkedin.fetched > 0) {
+        const [min, max] = linkedin.detailDelayMs || [2_000, 4_000];
+        await sleep(Math.round(min + Math.random() * Math.max(0, max - min)));
+      }
+      linkedin.fetched += 1;
+      let result;
+      try {
+        const response = await fetchWithTimeout(fetchImpl, `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`, { timeoutMs: FETCH_TIMEOUT_MS });
+        const posting = response.status === 200 ? parsePostingPage(response.html) : null;
+        if (response.status === 404 || response.status === 410) {
+          result = { status: 'expired', code: 'linkedin_not_found', reason: 'LinkedIn reports that the posting no longer exists.', content: '' };
+        } else if (posting?.closed) {
+          result = { status: 'expired', code: 'linkedin_closed', reason: 'LinkedIn marks the posting as no longer accepting applications.', content: '' };
+        } else if (posting && posting.description.length >= 200) {
+          if (posting.applyUrl) {
+            const twin = store.recordLinkedInExternalUrl?.(linkedinId, posting.applyUrl);
+            if (twin) store.markDuplicateUrl?.(canonicalUrl, twin);
+          }
+          result = {
+            status: 'active', code: 'linkedin_posting_api', reason: 'Loaded from the LinkedIn public posting page.', content: linkedinContent(posting),
+            identity: { company: posting.company || null, title: posting.title || null },
+          };
+        } else {
+          const classification = classifySearchResponse({ ...response, cards: [] });
+          const blocked = ['blocked', 'rate_limited'].includes(classification.status);
+          if (blocked) linkedin.haltedBy = classification.status;
+          result = {
+            status: 'uncertain',
+            code: blocked ? `linkedin_${classification.status}` : 'linkedin_structure_changed',
+            reason: blocked ? classification.reason : 'LinkedIn returned a page without a readable job description.',
+            content: '',
+          };
+        }
+      } catch (error) {
+        const timedOut = error?.name === 'AbortError';
+        result = {
+          status: 'uncertain',
+          code: timedOut ? 'timeout' : 'network_error',
+          reason: timedOut ? `LinkedIn did not answer within ${FETCH_TIMEOUT_MS}ms.` : 'LinkedIn could not be reached.',
+          content: '',
+        };
+      }
+      result.finalUrl = canonicalUrl;
+      const contentHash = hashContent(result.content);
+      store.savePage({ canonicalUrl, ...result, contentHash });
+      return { canonicalUrl, ...result, contentHash, fromCache: false };
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let finalUrl = url;
+    let content = '';
+    let liveness;
+    let identity = null;
+    try {
+      const response = await fetchImpl(url, {
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: { 'user-agent': USER_AGENT },
       });
-
-      return {
-        canonicalUrl,
+      finalUrl = response.url || url;
+      const html = await response.text();
+      content = htmlToText(html);
+      identity = jsonLdIdentity(html);
+      liveness = classifyLiveness({
+        status: response.status,
         finalUrl,
-        status: liveness.result,
-        content,
-        contentHash,
-        code: liveness.code || 'liveness_uncertain',
-        reason: liveness.reason,
-        fromCache: false,
-      };
+        bodyText: content,
+        applyControls: visibleApplyLabels(html),
+      });
+    } catch (error) {
+      liveness = { result: 'uncertain', code: 'fetch_error', reason: error.message };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (liveness.result === 'uncertain') {
+      const rendered = await renderedCheck(url);
+      if (rendered.content.length > content.length) content = rendered.content;
+      finalUrl = rendered.finalUrl || finalUrl;
+      liveness = rendered.liveness;
+    }
+
+    const contentHash = hashContent(content);
+    store.savePage({
+      canonicalUrl,
+      finalUrl,
+      status: liveness.result,
+      content,
+      contentHash,
+    });
+
+    return {
+      canonicalUrl,
+      finalUrl,
+      status: liveness.result,
+      content,
+      contentHash,
+      code: liveness.code || 'liveness_uncertain',
+      reason: liveness.reason,
+      identity,
+      fromCache: false,
+    };
+  }
+
+  return {
+    async fetch(url) {
+      const result = await fetchPage(url);
+      return { ...result, identity: result.identity ?? labeledIdentity(result.content) };
     },
 
     async close() {

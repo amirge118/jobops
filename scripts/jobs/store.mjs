@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 
-import { canonicalizeJobUrl, normalizeCompanyRole, resumeGapInputHash } from './core.mjs';
+import { canonicalizeJobUrl, companyIdentityKey, normalizeCompanyRole, resumeGapInputHash } from './core.mjs';
 import {
   COMPANY_STATUSES,
   CompanyRegistryError,
@@ -559,6 +559,16 @@ export function createJobStore(databasePath) {
 
     CREATE INDEX IF NOT EXISTS job_decisions_decided_idx ON job_decisions(decided_at);
 
+    -- Companies the user marked "not interesting" on the decisions page. New
+    -- jobs from them are rejected locally, before any page fetch or scoring.
+    -- Filled only by new decisions; older decisions were deliberately not
+    -- backfilled.
+    CREATE TABLE IF NOT EXISTS blocked_companies (
+      company_key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      blocked_at INTEGER NOT NULL
+    );
+
     -- Source-value history. Unlike runs (pruned to the last few) and job
     -- content (wiped on rejection/archive), these small rows are durable so
     -- per-source yield can be measured over weeks. No job text is stored.
@@ -708,6 +718,7 @@ export function createJobStore(databasePath) {
     resume_gap_error_reason: 'TEXT',
     resume_gap_last_attempted_at: 'INTEGER',
     possible_duplicate_of: 'TEXT',
+    duplicate_of: 'TEXT',
   })) {
     if (!jobColumns.some((column) => column.name === name)) {
       try {
@@ -935,13 +946,148 @@ export function createJobStore(databasePath) {
     if (kind) insertSourceSighting.run(jobKey, kind, String(company || '').trim().slice(0, 200) || null, Number(seenAt));
   };
 
+  // A duplicate row keeps only its URL and identity key; company+role matches
+  // always land on the representative.
   const findByIdentity = db.prepare(`
     SELECT * FROM jobs
     WHERE canonical_url = @canonicalUrl
-       OR (@companyRoleKey <> '::' AND company_role_key = @companyRoleKey)
+       OR (@companyRoleKey <> '::' AND company_role_key = @companyRoleKey AND duplicate_of IS NULL)
     ORDER BY canonical_url = @canonicalUrl DESC
     LIMIT 1
   `);
+
+  // ---- Job identity dedup ----------------------------------------------
+  // One company + one role = one job, whatever source or URL it came from.
+  // Extra postings become duplicate_of rows: technical identity only, never
+  // scored, never shown, their sources credited to the representative.
+
+  const getJobRow = db.prepare('SELECT * FROM jobs WHERE job_key = ?');
+  const findTwinRow = db.prepare(`
+    SELECT * FROM jobs
+    WHERE company_role_key = ? AND job_key <> ? AND duplicate_of IS NULL
+    ORDER BY archived_at IS NOT NULL DESC,
+      (evaluated_at IS NOT NULL AND last_error_code IS NULL) DESC,
+      first_seen_at ASC
+    LIMIT 1
+  `);
+
+  const representativeOf = (row) => {
+    let current = row;
+    for (let hops = 0; current?.duplicate_of && hops < 10; hops += 1) {
+      const next = getJobRow.get(current.duplicate_of);
+      if (!next) break;
+      current = next;
+    }
+    return current;
+  };
+
+  // Whether a twin's existing verdict settles the job for this evaluation
+  // context. A local verdict (no profile hash) defers to any real decision.
+  const isSettled = (row, { profileHash = null, criteriaVersion = null } = {}) => {
+    if (row.archived_at) return true;
+    if (!row.evaluated_at || row.last_error_code) return false;
+    if (!profileHash || !row.profile_hash) return true;
+    return row.profile_hash === profileHash && row.criteria_version === criteriaVersion;
+  };
+
+  const markDuplicateRow = db.transaction((duplicateKey, representativeKey, at) => {
+    const duplicate = getJobRow.get(duplicateKey);
+    const representative = representativeOf(getJobRow.get(representativeKey));
+    if (!duplicate || !representative || representative.job_key === duplicate.job_key) return null;
+    const repKey = representative.job_key;
+
+    const representativeIsLive = !representative.archived_at &&
+      (!representative.evaluated_at || representative.suitable);
+    if (representativeIsLive) {
+      const sources = new Set([...parseSources(representative.sources_json), ...parseSources(duplicate.sources_json)]);
+      db.prepare('UPDATE jobs SET sources_json = ?, last_seen_at = MAX(last_seen_at, ?) WHERE job_key = ?')
+        .run(JSON.stringify([...sources]), duplicate.last_seen_at, repKey);
+    } else {
+      db.prepare('UPDATE jobs SET last_seen_at = MAX(last_seen_at, ?) WHERE job_key = ?').run(duplicate.last_seen_at, repKey);
+    }
+    db.prepare('UPDATE jobs SET duplicate_of = ? WHERE duplicate_of = ?').run(repKey, duplicate.job_key);
+    db.prepare(`
+      INSERT INTO job_source_sightings (job_key, source_kind, company, first_seen_at)
+      SELECT ?, source_kind, company, first_seen_at FROM job_source_sightings WHERE job_key = ?
+      ON CONFLICT(job_key, source_kind) DO UPDATE SET first_seen_at = MIN(first_seen_at, excluded.first_seen_at)
+    `).run(repKey, duplicate.job_key);
+    db.prepare('DELETE FROM job_source_sightings WHERE job_key = ?').run(duplicate.job_key);
+    db.prepare('UPDATE OR IGNORE job_decisions SET job_key = ? WHERE job_key = ?').run(repKey, duplicate.job_key);
+    db.prepare('DELETE FROM job_decisions WHERE job_key = ?').run(duplicate.job_key);
+    db.prepare(`
+      UPDATE jobs SET
+        duplicate_of = @repKey,
+        possible_duplicate_of = NULL,
+        company = NULL,
+        title = NULL,
+        summary = NULL,
+        score = NULL,
+        fit_label = NULL,
+        decision_reason = NULL,
+        fit_breakdown_json = NULL,
+        resume_gap_json = NULL,
+        resume_gap_input_hash = NULL,
+        resume_gap_analyzed_at = NULL,
+        resume_gap_error_code = NULL,
+        resume_gap_error_reason = NULL,
+        resume_gap_last_attempted_at = NULL,
+        suitable = 0,
+        apply_url = canonical_url,
+        sources_json = '[]',
+        evaluated_at = COALESCE(evaluated_at, @at),
+        last_error_code = NULL,
+        last_error_reason = NULL
+      WHERE job_key = @jobKey
+    `).run({ repKey, at, jobKey: duplicate.job_key });
+    db.prepare('DELETE FROM job_pages WHERE canonical_url = ?').run(duplicate.canonical_url);
+    db.prepare('UPDATE linkedin_postings SET external_canonical_url = NULL WHERE job_key = ?').run(duplicate.job_key);
+    return repKey;
+  });
+
+  // Groups of rows sharing a real company+role key, with the row that should
+  // represent each group first. Key recomputation covers rows written before
+  // the current normalization (rejected rows keep only the key itself).
+  const planIdentityDedup = () => {
+    const rekeys = [];
+    for (const row of db.prepare('SELECT job_key, company, title, company_role_key FROM jobs').all()) {
+      const [keyCompany = '', keyTitle = ''] = String(row.company_role_key || '').split('::');
+      const key = normalizeCompanyRole(row.company || keyCompany, row.title || keyTitle);
+      if (key !== row.company_role_key) rekeys.push({ jobKey: row.job_key, from: row.company_role_key, to: key });
+    }
+    const keyOf = new Map(rekeys.map(({ jobKey, to }) => [jobKey, to]));
+    const byKey = new Map();
+    for (const row of db.prepare(`
+      SELECT j.*, d.job_key IS NOT NULL AS has_decision
+      FROM jobs j LEFT JOIN job_decisions d ON d.job_key = j.job_key
+      WHERE j.duplicate_of IS NULL
+    `).all()) {
+      const key = keyOf.get(row.job_key) ?? row.company_role_key;
+      if (!key || key === '::') continue;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(row);
+    }
+    const rank = (row) => [
+      row.has_decision ? 0 : 1,
+      row.archived_at ? 0 : 1,
+      row.suitable && row.active_status === 'active' && row.evaluated_at ? 0 : 1,
+      row.evaluated_at && !row.last_error_code ? 0 : 1,
+      row.first_seen_at,
+    ];
+    const compare = (left, right) => {
+      const a = rank(left);
+      const b = rank(right);
+      for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return a[index] - b[index];
+      return 0;
+    };
+    const groups = [...byKey.entries()]
+      .filter(([, rows]) => rows.length > 1)
+      .map(([key, rows]) => {
+        const [representative, ...duplicates] = [...rows].sort(compare);
+        return { key, representative, duplicates };
+      })
+      .sort((left, right) => right.duplicates.length - left.duplicates.length || left.key.localeCompare(right.key));
+    return { rekeys, groups };
+  };
 
   const getCompanyRow = db.prepare('SELECT * FROM companies WHERE id = ?');
   const listCompanySources = db.prepare('SELECT * FROM company_job_sources WHERE company_id = ? ORDER BY id');
@@ -1403,17 +1549,12 @@ export function createJobStore(databasePath) {
       return { updated };
     },
 
-    // matchCompanyRole=false (LinkedIn) keys identity on the URL alone: two
-    // postings are never merged just because company and title agree. A
-    // company+role twin is only flagged via possible_duplicate_of.
-    recordSighting({ url, company = '', title = '', source, seenAt = Date.now(), matchCompanyRole = true }) {
+    // Same URL, or same company + role from any source, is the same job.
+    recordSighting({ url, company = '', title = '', source, seenAt = Date.now() }) {
       const canonicalUrl = canonicalizeJobUrl(url);
       if (!canonicalUrl) throw new Error(`Invalid job URL: ${url}`);
       const companyRoleKey = normalizeCompanyRole(company, title);
-      const existing = findByIdentity.get({ canonicalUrl, companyRoleKey: matchCompanyRole ? companyRoleKey : '::' });
-      const twin = !existing && !matchCompanyRole && companyRoleKey !== '::'
-        ? db.prepare('SELECT job_key FROM jobs WHERE company_role_key = ? ORDER BY first_seen_at ASC LIMIT 1').get(companyRoleKey)
-        : null;
+      const existing = representativeOf(findByIdentity.get({ canonicalUrl, companyRoleKey }));
 
       if (existing) {
         if (existing.archived_at || (existing.evaluated_at && !existing.suitable)) {
@@ -1438,16 +1579,15 @@ export function createJobStore(databasePath) {
       db.prepare(`
         INSERT INTO jobs (
           job_key, canonical_url, apply_url, company_role_key, company, title,
-          sources_json, first_seen_at, last_seen_at, possible_duplicate_of
+          sources_json, first_seen_at, last_seen_at
         ) VALUES (
           @jobKey, @canonicalUrl, @url, @companyRoleKey, @company, @title,
-          @sources, @seenAt, @seenAt, @possibleDuplicateOf
+          @sources, @seenAt, @seenAt
         )
       `).run({
         jobKey,
         canonicalUrl,
         url: canonicalUrl.startsWith('https://www.linkedin.com/jobs/view/') ? canonicalUrl : url,
-        possibleDuplicateOf: twin?.job_key ?? null,
         companyRoleKey,
         company,
         title,
@@ -1611,6 +1751,49 @@ export function createJobStore(databasePath) {
       return Boolean(db.prepare('SELECT 1 FROM jobs WHERE canonical_url = ?').get(String(canonicalUrl)));
     },
 
+    // Called once a job's real company and title are known (after the page
+    // fetch, before scoring). A twin that is already decided, or already
+    // queued in this run, makes this job a duplicate so it is never scored.
+    // Otherwise the identity is stored so later sightings match it directly.
+    claimJobIdentity(jobKey, { company, title, profileHash = null, criteriaVersion = null, at = Date.now() }) {
+      const job = getJobRow.get(String(jobKey));
+      if (!job || job.duplicate_of) return { duplicateOf: job?.duplicate_of ?? null };
+      const key = normalizeCompanyRole(company, title);
+      if (key === '::') return { duplicateOf: null };
+      const twin = findTwinRow.get(key, job.job_key);
+      const twinIsQueued = twin && !twin.evaluated_at && !twin.last_error_code;
+      if (twin && (twinIsQueued || isSettled(twin, { profileHash, criteriaVersion }))) {
+        return { duplicateOf: markDuplicateRow(job.job_key, twin.job_key, at) };
+      }
+      db.prepare(`
+        UPDATE jobs SET company_role_key = ?, company = COALESCE(NULLIF(company, ''), ?), title = COALESCE(NULLIF(title, ''), ?)
+        WHERE job_key = ?
+      `).run(key, String(company), String(title), job.job_key);
+      return { duplicateOf: null };
+    },
+
+    // Exact evidence (e.g. a LinkedIn posting whose apply URL is a known job).
+    markDuplicate(duplicateKey, representativeKey, at = Date.now()) {
+      return markDuplicateRow(String(duplicateKey), String(representativeKey), at);
+    },
+
+    planIdentityDedup() {
+      return planIdentityDedup();
+    },
+
+    // One-off cleanup of rows stored before cross-source dedup existed.
+    applyIdentityDedup(at = Date.now()) {
+      const { rekeys, groups } = planIdentityDedup();
+      db.transaction(() => {
+        const rekey = db.prepare('UPDATE jobs SET company_role_key = ? WHERE job_key = ?');
+        for (const { jobKey, to } of rekeys) rekey.run(to, jobKey);
+        for (const { representative, duplicates } of groups) {
+          for (const duplicate of duplicates) markDuplicateRow(duplicate.job_key, representative.job_key, at);
+        }
+      })();
+      return { rekeyed: rekeys.length, groups: groups.length, duplicates: groups.reduce((sum, group) => sum + group.duplicates.length, 0) };
+    },
+
     getJob(jobKey) {
       return db.prepare('SELECT * FROM jobs WHERE job_key = ?').get(jobKey) ?? null;
     },
@@ -1639,7 +1822,7 @@ export function createJobStore(databasePath) {
           title,
           sources_json AS sourcesJson
         FROM jobs
-        WHERE archived_at IS NULL
+        WHERE archived_at IS NULL AND duplicate_of IS NULL
           AND (evaluated_at IS NULL OR last_error_code IS NOT NULL)
           ${excludeClause}
         ORDER BY first_seen_at ASC
@@ -1653,7 +1836,7 @@ export function createJobStore(databasePath) {
     getDashboardStats() {
       const stats = db.prepare(`
         SELECT
-          SUM(CASE WHEN archived_at IS NULL THEN 1 ELSE 0 END) AS total,
+          SUM(CASE WHEN archived_at IS NULL AND duplicate_of IS NULL THEN 1 ELSE 0 END) AS total,
           SUM(CASE WHEN archived_at IS NULL AND suitable = 1 AND active_status = 'active' THEN 1 ELSE 0 END) AS suitable,
           SUM(CASE WHEN archived_at IS NULL AND suitable = 1 AND active_status = 'active' AND opened_at IS NULL THEN 1 ELSE 0 END) AS unopened
         FROM jobs
@@ -1688,10 +1871,9 @@ export function createJobStore(databasePath) {
           resume_gap_error_reason AS resumeGapErrorReason,
           last_seen_at AS lastSeenAt,
           opened_at AS openedAt,
-          sources_json AS sourcesJson,
-          possible_duplicate_of AS possibleDuplicateOf
+          sources_json AS sourcesJson
         FROM jobs
-        WHERE archived_at IS NULL
+        WHERE archived_at IS NULL AND duplicate_of IS NULL
           AND evaluated_at IS NOT NULL AND suitable = 1 AND active_status = 'active'
         ORDER BY last_seen_at DESC, score DESC
         LIMIT 500
@@ -1756,7 +1938,7 @@ export function createJobStore(databasePath) {
           p.content
         FROM jobs j
         JOIN job_pages p ON p.canonical_url = j.canonical_url
-        WHERE j.archived_at IS NULL
+        WHERE j.archived_at IS NULL AND j.duplicate_of IS NULL
           AND j.evaluated_at IS NOT NULL
           AND j.suitable = 1
           AND j.active_status = 'active'
@@ -1896,6 +2078,18 @@ export function createJobStore(databasePath) {
         db.prepare('DELETE FROM job_pages WHERE canonical_url = ?').run(existing.canonical_url);
         db.prepare('UPDATE linkedin_postings SET external_canonical_url = NULL WHERE job_key = ?').run(jobKey);
       }
+
+      // Scoring can reveal an identity that matches another job. A twin whose
+      // verdict still holds wins; a stale or pending twin yields to this fresh
+      // verdict — unless this one is a dead link, which never hides a live twin.
+      const key = normalizeCompanyRole(evaluation.company, evaluation.title);
+      const twin = key === '::' ? null : findTwinRow.get(key, jobKey);
+      if (twin) {
+        const context = { profileHash: evaluation.profileHash, criteriaVersion: evaluation.criteriaVersion };
+        const thisIsDead = evaluation.activeStatus && evaluation.activeStatus !== 'active' && evaluation.activeStatus !== 'unknown';
+        if (thisIsDead || isSettled(twin, context)) markDuplicateRow(jobKey, twin.job_key, evaluation.evaluatedAt ?? Date.now());
+        else markDuplicateRow(twin.job_key, jobKey, evaluation.evaluatedAt ?? Date.now());
+      }
     },
 
     listUnpresentedSuitable() {
@@ -1910,7 +2104,7 @@ export function createJobStore(databasePath) {
           decision_reason AS decisionReason,
           apply_url AS applyUrl
         FROM jobs
-        WHERE archived_at IS NULL
+        WHERE archived_at IS NULL AND duplicate_of IS NULL
           AND suitable = 1 AND presented_at IS NULL AND active_status = 'active'
         ORDER BY score DESC, first_seen_at ASC
       `).all();
@@ -1920,7 +2114,7 @@ export function createJobStore(databasePath) {
       return db.prepare(`
         SELECT job_key AS jobKey, company, title, apply_url AS applyUrl
         FROM jobs
-        WHERE archived_at IS NULL
+        WHERE archived_at IS NULL AND duplicate_of IS NULL
           AND suitable = 1 AND opened_at IS NULL AND active_status = 'active'
         ORDER BY score DESC, first_seen_at ASC
       `).all();
@@ -1964,6 +2158,11 @@ export function createJobStore(databasePath) {
           JSON.stringify(sourceKinds(parseSources(job.sources_json))),
           screenPass, job.criteria_version, job.first_seen_at,
         );
+        const companyKey = decision === 'company_not_interesting' ? companyIdentityKey(job.company) : '';
+        if (companyKey) {
+          db.prepare('INSERT OR IGNORE INTO blocked_companies (company_key, name, blocked_at) VALUES (?, ?, ?)')
+            .run(companyKey, String(job.company).slice(0, 200), at);
+        }
         if (!this.archiveJob(jobKey, at)) throw new Error(`Cannot archive decided job: ${jobKey}`);
         return true;
       })();
@@ -2976,11 +3175,14 @@ export function createJobStore(databasePath) {
       return db.prepare('SELECT job_key FROM jobs WHERE canonical_url = ?').get(canonical)?.job_key ?? null;
     },
 
-    flagPossibleDuplicate(canonicalUrl, otherJobKey) {
-      db.prepare(`
-        UPDATE jobs SET possible_duplicate_of = ?
-        WHERE canonical_url = ? AND job_key <> ? AND possible_duplicate_of IS NULL
-      `).run(String(otherJobKey), String(canonicalUrl), String(otherJobKey));
+    isCompanyBlocked(company) {
+      const key = companyIdentityKey(company);
+      return Boolean(key && db.prepare('SELECT 1 FROM blocked_companies WHERE company_key = ?').get(key));
+    },
+
+    markDuplicateUrl(canonicalUrl, representativeKey, at = Date.now()) {
+      const row = db.prepare('SELECT job_key FROM jobs WHERE canonical_url = ?').get(String(canonicalUrl));
+      return row ? markDuplicateRow(row.job_key, String(representativeKey), at) : null;
     },
 
     getLinkedInPosting(linkedinId) {

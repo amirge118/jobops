@@ -126,11 +126,11 @@ test('scan page exposes LinkedIn as a separately controllable source with visibl
   assert.match(script, /no_matches_fallback/);
 });
 
-test('decisions show where a job was found and flag possible duplicates without merging them', () => {
+test('decisions show every source a merged job was found in', () => {
   const decisions = readWeb('pages', 'decisions-page.js');
   assert.match(decisions, /function renderSourceBadges\(job\)/);
   assert.match(decisions, /linkedin: 'LinkedIn'/);
-  assert.match(decisions, /ייתכן כפילות/);
+  assert.doesNotMatch(decisions, /possibleDuplicateOf/);
   assert.match(decisions, /job-title">[^\n]*\$\{renderSourceBadges\(job\)\}/);
 });
 

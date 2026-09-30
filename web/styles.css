@@ -400,7 +400,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .improvements-table .gap-kind[data-kind="safe_addition"],
 .employer-priorities li[data-coverage="strong"] .priority-coverage { background: var(--accent-soft); color: var(--accent-text); }
 .coverage-pill[data-state="partial"], .coverage-pill[data-state="unknown"], .company-status[data-state="paused"],
-.decision-pill[data-decision="too_senior"], .duplicate-badge, .resume-gap-item[data-kind="experience_gap"] .gap-kind,
+.decision-pill[data-decision="too_senior"], .resume-gap-item[data-kind="experience_gap"] .gap-kind,
 .improvements-table .gap-kind[data-kind="experience_gap"],
 .employer-priorities li[data-coverage="missing"] .priority-coverage { background: var(--gold-soft); color: var(--gold); }
 .coverage-pill[data-state="failed"] { background: var(--red-soft); color: var(--red); }

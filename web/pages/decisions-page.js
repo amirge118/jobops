@@ -27,6 +27,10 @@ const declineLabels = {
   not_relevant: 'תפקיד לא רלוונטי',
 };
 
+const declineEffects = {
+  company_not_interesting: 'משרות חדשות מהחברה הזו לא ייבדקו ולא יוצגו מעכשיו',
+};
+
 const screenLabels = {
   high: 'סיכוי גבוה לעבור סינון',
   medium: 'סיכוי בינוני לעבור סינון',
@@ -111,9 +115,6 @@ const sourceBadgeLabels = { ats: 'ATS', whatsapp: 'WhatsApp', linkedin: 'LinkedI
 function renderSourceBadges(job) {
   const badges = (job.sourceKinds || []).map((kind) =>
     `<span class="source-badge" data-source="${escapeHtml(kind)}">${escapeHtml(sourceBadgeLabels[kind] || kind)}</span>`);
-  if (job.possibleDuplicateOf) {
-    badges.push('<span class="source-badge duplicate-badge" title="אותה חברה ואותו תפקיד כבר נמצאו ממקור אחר; לא אוחדו אוטומטית כי אין ראיה מדויקת שזו אותה משרה.">ייתכן כפילות</span>');
-  }
   return badges.length ? `<span class="source-badges">${badges.join('')}</span>` : '';
 }
 
@@ -132,7 +133,7 @@ function renderJobs() {
       <a class="job-action-button job-open" href="${escapeHtml(job.applyUrl)}" target="_blank" rel="noreferrer">פתח משרה</a>
       <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="interested" title="פותח את המשרה, רושם את ההחלטה ומעביר לארכיון">מעניין אותי</button>
       <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="company_candidate" title="מוסיף את החברה למועמדות למעקב ומעביר לארכיון">העבר חברה למועמדות</button>
-      ${Object.entries(declineLabels).map(([decision, label]) => `<button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="${decision}" title="לא בשבילי: ${label}. רושם את ההחלטה ומעביר לארכיון">${label}</button>`).join('')}
+      ${Object.entries(declineLabels).map(([decision, label]) => `<button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="${decision}" title="לא בשבילי: ${label}. רושם את ההחלטה ומעביר לארכיון${declineEffects[decision] ? `. ${declineEffects[decision]}` : ''}">${label}</button>`).join('')}
     </div></td>
   </tr>`).join('');
 }

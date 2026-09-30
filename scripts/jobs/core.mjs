@@ -76,8 +76,55 @@ function normalizeIdentityPart(value) {
     .trim();
 }
 
+// Values the pipeline writes when it does not know the real company/title.
+// Matching on them would merge every unidentified job into one.
+const PLACEHOLDER_IDENTITIES = new Set([
+  'unknown',
+  'unknown company',
+  'unknown role',
+  'n a',
+  'חברה לא ידועה',
+  'משרה לא ידועה',
+  'משרה לא מזוהה',
+  'חברה לא מזוהה',
+]);
+
+// Legal/generic trailing words: "Check Point Software Technologies Ltd" and
+// "Check Point" are one employer. Only trailing tokens are stripped, and
+// never down to an empty name.
+const COMPANY_SUFFIX = /\s+(?:ltd|limited|inc|incorporated|llc|corp|corporation|co|plc|gmbh|technologies|technology|software|group|israel|il|io|com|ai|בע מ|ישראל)$/u;
+
+function normalizeCompanyKey(value) {
+  let name = normalizeIdentityPart(value);
+  for (let next = name.replace(COMPANY_SUFFIX, ''); next && next !== name; next = name.replace(COMPANY_SUFFIX, '')) {
+    name = next;
+  }
+  return name;
+}
+
+function normalizeTitleKey(value) {
+  return normalizeIdentityPart(value)
+    .replace(/(^| )sr( |$)/g, '$1senior$2')
+    .replace(/(^| )jr( |$)/g, '$1junior$2');
+}
+
+export function isPlaceholderIdentity(company, title) {
+  const companyPart = normalizeIdentityPart(company);
+  const titlePart = normalizeIdentityPart(title);
+  return !companyPart || !titlePart ||
+    PLACEHOLDER_IDENTITIES.has(companyPart) || PLACEHOLDER_IDENTITIES.has(titlePart);
+}
+
+// The company half of the identity key; '' when the company is unknown.
+export function companyIdentityKey(company) {
+  const part = normalizeIdentityPart(company);
+  return !part || PLACEHOLDER_IDENTITIES.has(part) ? '' : normalizeCompanyKey(company);
+}
+
+// '::' means "no usable identity" and must never be matched against.
 export function normalizeCompanyRole(company, title) {
-  return `${normalizeIdentityPart(company)}::${normalizeIdentityPart(title)}`;
+  if (isPlaceholderIdentity(company, title)) return '::';
+  return `${normalizeCompanyKey(company)}::${normalizeTitleKey(title)}`;
 }
 
 export function deduplicateJobs(jobs) {

@@ -33,10 +33,15 @@ and no third-party application server are in the loop.
   carries a one-line evidence sentence you can open under "למה הציון?".
 - ✅ **Verifies before it scores** — a dead or reposted listing never gets treated as a fresh
   match; liveness is checked, not assumed.
-- 🔁 **Deduplicates across sources** — the same role found on WhatsApp and a company's own
-  board collapses into one entry, once. LinkedIn postings are identified by their stable posting
-  id; a LinkedIn role that merely shares a company and title with another source is flagged as a
-  possible duplicate rather than silently merged.
+- 🔁 **One company + one role = one job** — the same role found on WhatsApp, LinkedIn and a
+  company's own board collapses into one entry, whatever URL it came from. Company names ignore
+  legal suffixes (Ltd, Inc, Technologies…); the company and title are read from the page *before*
+  scoring, so a repeat is never scored twice and never shown again once decided. Extra links are
+  kept only as technical duplicate rows. `npm run jobs:dedup` previews the one-off cleanup of
+  older data; `-- --apply` writes it.
+- 🚫 **Remembers companies you're done with** — "חברה לא מעניינת" on the decisions page blocks
+  that company from then on: its new jobs are rejected locally, before any page fetch or
+  scoring. Data/analytics/BI titles are excluded by `title_filter.negative` in `portals.yml`.
 - 🏢 **Grows its own watchlist** — a company surfaced from a good WhatsApp lead becomes a
   tracked source with one click, no manual config editing.
 - 🖥️ **A real dashboard, not just a CLI** — scan, review matches, and manage tracked companies

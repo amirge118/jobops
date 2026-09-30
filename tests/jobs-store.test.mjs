@@ -589,7 +589,7 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     unopened: 0,
   });
   assert.deepEqual(snapshot.jobs.map((job) => Object.keys(job)), [
-    ['jobKey', 'company', 'title', 'summary', 'score', 'fitLabel', 'decisionReason', 'applyUrl', 'suitable', 'activeStatus', 'lastSeenAt', 'openedAt', 'possibleDuplicateOf', 'sourceKinds', 'fitBreakdown', 'resumeGap'],
+    ['jobKey', 'company', 'title', 'summary', 'score', 'fitLabel', 'decisionReason', 'applyUrl', 'suitable', 'activeStatus', 'lastSeenAt', 'openedAt', 'sourceKinds', 'fitBreakdown', 'resumeGap'],
   ]);
   assert.equal(snapshot.jobs[0].fitLabel, 'בול מתאים');
   assert.deepEqual(snapshot.jobs[0].fitBreakdown, {
@@ -679,9 +679,9 @@ test('archived jobs disappear from active queues while retaining only dedup iden
 test('LinkedIn identity is the posting id across subdomains, slugs and tracking params', () => {
   const store = newStore();
   const first = store.recordSighting({ url: 'https://il.linkedin.com/jobs/view/backend-engineer-at-acme-4425439971?refId=a&trackingId=b',
-    company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Backend', matchCompanyRole: false });
+    company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Backend' });
   const second = store.recordSighting({ url: 'https://www.linkedin.com/jobs/search/?currentJobId=4425439971&geoId=101620260',
-    company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Data', matchCompanyRole: false });
+    company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Data' });
   const shared = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4425439971/', source: 'WhatsApp: Group A' });
 
   assert.equal(first.isNew, true);
@@ -693,26 +693,25 @@ test('LinkedIn identity is the posting id across subdomains, slugs and tracking 
   store.close();
 });
 
-test('LinkedIn never merges on company and role alone; the twin is only flagged', () => {
+test('LinkedIn merges with a known job on company and role, like every other source', () => {
   const store = newStore();
   const ats = store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme', title: 'Data Analyst', source: 'ATS: greenhouse-api' });
-  const linkedin = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000001', company: 'Acme', title: 'Data Analyst',
-    source: 'LinkedIn: Analyst', matchCompanyRole: false });
-  assert.notEqual(linkedin.jobKey, ats.jobKey);
-  assert.equal(linkedin.isNew, true);
-  assert.equal(store.getJob(linkedin.jobKey).possible_duplicate_of, ats.jobKey);
-  // ATS and WhatsApp keep their existing company+role dedup.
+  const linkedin = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000001', company: 'Acme Ltd', title: 'Data Analyst',
+    source: 'LinkedIn: Analyst' });
+  assert.equal(linkedin.jobKey, ats.jobKey);
+  assert.equal(linkedin.isNew, false);
   const atsTwin = store.recordSighting({ url: 'https://jobs.lever.co/acme/2', company: 'Acme', title: 'Data Analyst', source: 'ATS: lever-api' });
   assert.equal(atsTwin.jobKey, ats.jobKey);
+  assert.deepEqual(JSON.parse(store.getJob(ats.jobKey).sources_json), ['ATS: greenhouse-api', 'LinkedIn: Analyst', 'ATS: lever-api']);
   store.close();
 });
 
 test('an archived or rejected LinkedIn posting is not revived by a new sighting', () => {
   const store = newStore();
   const url = 'https://www.linkedin.com/jobs/view/4000000002';
-  const archived = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend', matchCompanyRole: false });
+  const archived = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend' });
   store.archiveJob(archived.jobKey);
-  const again = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend', matchCompanyRole: false });
+  const again = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend' });
   assert.equal(again.isNew, false);
   assert.ok(store.getJob(archived.jobKey).archived_at);
   assert.equal(store.listPendingEvaluation().length, 0);
@@ -722,7 +721,7 @@ test('an archived or rejected LinkedIn posting is not revived by a new sighting'
 test('rejected LinkedIn postings keep only technical dedup identity', () => {
   const store = newStore();
   const sighting = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000003', company: 'Acme', title: 'Backend',
-    source: 'LinkedIn: Backend', matchCompanyRole: false });
+    source: 'LinkedIn: Backend' });
   store.recordLinkedInPosting({ linkedinId: '4000000003', jobKey: sighting.jobKey, listedAt: '2026-09-28' });
   store.recordLinkedInExternalUrl('4000000003', 'https://boards.greenhouse.io/acme/jobs/9');
   store.saveEvaluation(sighting.jobKey, {
