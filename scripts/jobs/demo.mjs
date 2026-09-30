@@ -113,7 +113,6 @@ export function createDemoEnvironment({ rootDir, now = Date.now() }) {
       title: job.title,
       source: linkedin ? 'LinkedIn: Backend' : index % 2 === 0 ? `WhatsApp: ${GROUPS[0]}` : 'ATS: demo',
       seenAt: now - index * 60 * 60 * 1000,
-      matchCompanyRole: !linkedin,
     });
     store.saveEvaluation(sighting.jobKey, {
       company: job.company,

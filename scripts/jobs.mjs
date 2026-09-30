@@ -145,7 +145,9 @@ export function summarizeProcessingResults(candidates, outcomes) {
       row.failed += 1;
       const code = outcome?.code || 'unknown_failure';
       row.failureReasons[code] = Number(row.failureReasons[code] || 0) + 1;
-    } else if (outcome.status === 'already-processed') {
+    } else if (outcome.status === 'already-processed' || outcome.status === 'duplicate') {
+      // A duplicate is the same company+role already known from another
+      // link: no scoring tokens were spent on it.
       row.alreadyProcessed += 1;
     } else if (outcome.status === 'filtered') {
       // Screened locally by the negative-keyword filter, before ever
@@ -532,6 +534,29 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   const pendingScores = [];
   let processingStage = 'page-fetch';
   let titleFilteredCount = 0;
+  let duplicateCount = 0;
+  let blockedCompanyCount = 0;
+  // A company marked "not interesting" on the decisions page: rejected
+  // locally, never fetched (when the source names it) and never scored.
+  const rejectBlockedCompany = (candidate, company, page = null) => {
+    blockedCompanyCount += 1;
+    store.saveEvaluation(candidate.jobKey, {
+      company,
+      title: candidate.title || 'משרה לא ידועה',
+      summary: 'המשרה סוננה מקומית: החברה סומנה כלא מעניינת.',
+      score: 1,
+      fitLabel: 'לא מתאים',
+      decisionReason: `${company} סומנה כ"חברה לא מעניינת" בעמוד ההחלטות.`,
+      suitable: false,
+      applyUrl: page?.finalUrl || candidate.url,
+      activeStatus: page?.status || 'unknown',
+      contentHash: page?.contentHash ?? null,
+      profileHash: scorer.profileHash,
+      criteriaVersion: config.decision.criteriaVersion,
+      evaluatedAt: Date.now(),
+    });
+    outcomes.set(candidate.jobKey, { status: 'filtered' });
+  };
   // ATS candidates are already screened by portals.yml's title_filter before
   // they ever become a candidate (scan.mjs runs it against the source's own
   // structured title). A WhatsApp link has no such title until its page is
@@ -587,8 +612,17 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     const evaluationIsCurrent = existing?.evaluated_at && !existing.last_error_code &&
       existing.profile_hash === scorer.profileHash &&
       existing.criteria_version === config.decision.criteriaVersion;
+    if (existing?.duplicate_of) {
+      outcomes.set(candidate.jobKey, { status: 'duplicate' });
+      continue;
+    }
     if (evaluationIsCurrent || existing?.archived_at) {
       outcomes.set(candidate.jobKey, { status: 'already-processed' });
+      continue;
+    }
+    const listedCompany = candidate.company || existing?.company || '';
+    if (listedCompany && store.isCompanyBlocked?.(listedCompany)) {
+      rejectBlockedCompany(candidate, listedCompany);
       continue;
     }
 
@@ -645,6 +679,29 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
       continue;
     }
 
+    // Same company + role as a job already decided or queued → never score it
+    // twice. The identity comes from the page (API fields / JSON-LD), falling
+    // back to what the source listed. A LinkedIn apply URL pointing at a known
+    // job may already have marked it during the fetch.
+    const identity = {
+      company: page.identity?.company || candidate.company || existing?.company || '',
+      title: page.identity?.title || candidate.title || existing?.title || '',
+    };
+    if (identity.company && store.isCompanyBlocked?.(identity.company)) {
+      rejectBlockedCompany(candidate, identity.company, page);
+      continue;
+    }
+    const { duplicateOf } = store.claimJobIdentity?.(candidate.jobKey, {
+      ...identity,
+      profileHash: scorer.profileHash,
+      criteriaVersion: config.decision.criteriaVersion,
+    }) ?? {};
+    if (duplicateOf) {
+      duplicateCount += 1;
+      outcomes.set(candidate.jobKey, { status: 'duplicate' });
+      continue;
+    }
+
     // Only WhatsApp links get this local check — ATS titles are already
     // filtered before discovery, and re-running a *title* filter against a
     // full page's worth of description text would risk false-positive
@@ -683,6 +740,8 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
 
     pendingScores.push({ candidate, page });
   }
+  if (blockedCompanyCount > 0) console.log(`סוננו ${blockedCompanyCount} משרות מחברות שסימנת כלא מעניינות, לפני שליחה לניקוד.`);
+  if (duplicateCount > 0) console.log(`דולגו ${duplicateCount} משרות כפולות (אותה חברה ואותו תפקיד כבר נבדקו), לפני שליחה לניקוד.`);
   if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי כותרת (מילות מפתח שליליות או ללא תפקיד יעד), לפני שליחה לניקוד.`);
 
   const persistResult = (result) => {

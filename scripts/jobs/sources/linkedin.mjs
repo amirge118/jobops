@@ -373,13 +373,14 @@ export async function scanLinkedIn({
     const source = `LinkedIn: ${search.label}`;
     for (const card of outcome.cards) {
       const sighting = store.recordSighting({
-        url: card.url, company: card.company, title: card.title, source, seenAt: now, matchCompanyRole: false,
+        url: card.url, company: card.company, title: card.title, source, seenAt: now,
       });
       store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, seenAt: now });
       counts[sighting.isNew ? 'new' : 'known'] += 1;
       if (!sighting.isNew) continue;
       const filterReason = !inScope(card.title) ? 'scope' : !passesTitle(card.title) ? 'title'
-        : !passesArea(card.location) ? 'location' : null;
+        : !passesArea(card.location) ? 'location'
+          : store.isCompanyBlocked?.(card.company) ? 'company' : null;
       if (filterReason) {
         counts.filtered += 1;
         store.saveEvaluation(sighting.jobKey, {
@@ -389,6 +390,7 @@ export async function scanLinkedIn({
             scope: 'סונן: הכותרת אינה כוללת אף מילת תפקיד שהוגדרה לחיפוש (titleIncludes).',
             title: 'סונן לפי מילת מפתח שלילית בכותרת.',
             location: 'סונן לפי אזור (מחוץ לתל אביב והמרכז).',
+            company: 'סונן: החברה סומנה כ"חברה לא מעניינת" בעמוד ההחלטות.',
           }[filterReason],
           suitable: false, applyUrl: card.url, activeStatus: 'unknown',
           contentHash: null, profileHash: null, criteriaVersion: config.decision?.criteriaVersion ?? null,
