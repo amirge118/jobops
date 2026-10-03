@@ -379,7 +379,7 @@ export async function scanLinkedIn({
       const sighting = store.recordSighting({
         url: card.url, company: card.company, title: card.title, source, seenAt: now,
       });
-      store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, seenAt: now });
+      store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, postedAgeMs: card.postedAgeMs, seenAt: now });
       counts[sighting.isNew ? 'new' : 'known'] += 1;
       if (!sighting.isNew) continue;
       const filterReason = !inScope(card.title) ? 'scope' : !passesTitle(card.title) ? 'title'

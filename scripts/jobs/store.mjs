@@ -811,6 +811,19 @@ export function createJobStore(databasePath) {
     );
     CREATE INDEX IF NOT EXISTS linkedin_postings_job_idx ON linkedin_postings(job_key);
 
+    -- Messages for the person about a strong new job. A scan run only queues
+    -- them; the WhatsApp collector, which owns the only connection, sends
+    -- them. One row per job, so a job is never announced twice.
+    CREATE TABLE IF NOT EXISTS notification_outbox (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_key     TEXT NOT NULL UNIQUE,
+      text        TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      sent_at     INTEGER,
+      attempts    INTEGER NOT NULL DEFAULT 0,
+      last_error  TEXT
+    );
+
     -- One row per Codex call: what it was for, which model, how many jobs,
     -- and the tokens it used (from codex exec --json). Kept 90 days.
     CREATE TABLE IF NOT EXISTS codex_calls (
@@ -861,6 +874,11 @@ export function createJobStore(databasePath) {
       updated_at INTEGER NOT NULL
     );
   `);
+  // Estimated LinkedIn posting time from the card's "N hours ago" label;
+  // listed_at alone is only a date.
+  if (!db.prepare('PRAGMA table_info(linkedin_postings)').all().some((column) => column.name === 'posted_at')) {
+    db.exec('ALTER TABLE linkedin_postings ADD COLUMN posted_at INTEGER');
+  }
 
   if (!db.prepare('PRAGMA table_info(codex_calls)').all().some((column) => column.name === 'source_mix')) {
     try { db.exec('ALTER TABLE codex_calls ADD COLUMN source_mix TEXT'); }
@@ -1533,6 +1551,46 @@ export function createJobStore(databasePath) {
       );
       if (!result.changes) throw new CompanyRegistryError('source_not_found', 'Company source was not found');
       return true;
+    },
+
+    // ---- Notifications ----------------------------------------------------
+
+    enqueueJobNotification({ jobKey, text, at = Date.now() }) {
+      return db.prepare(`
+        INSERT INTO notification_outbox (job_key, text, created_at) VALUES (?, ?, ?)
+        ON CONFLICT(job_key) DO NOTHING
+      `).run(String(jobKey), String(text).slice(0, 2_000), Number(at)).changes === 1;
+    },
+
+    // Unsent, still-fresh notifications that have not exhausted their attempts.
+    listPendingNotifications({ now = Date.now(), maxAgeMs = 24 * 60 * 60 * 1000, maxAttempts = 5, limit = 10 } = {}) {
+      return db.prepare(`
+        SELECT id, job_key AS jobKey, text, attempts FROM notification_outbox
+        WHERE sent_at IS NULL AND attempts < ? AND created_at >= ?
+        ORDER BY created_at ASC LIMIT ?
+      `).all(Number(maxAttempts), Number(now) - Number(maxAgeMs), Math.max(1, Math.min(Number(limit) || 10, 50)));
+    },
+
+    markNotificationSent(id, at = Date.now()) {
+      db.prepare('UPDATE notification_outbox SET sent_at = ?, attempts = attempts + 1, last_error = NULL WHERE id = ?')
+        .run(Number(at), Number(id));
+    },
+
+    markNotificationFailed(id, error) {
+      db.prepare('UPDATE notification_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?')
+        .run(String(error || 'unknown').slice(0, 300), Number(id));
+    },
+
+    // "Interested" in a job means its company is worth watching: it lands as a
+    // candidate for one-click approval on the companies page (never demoting
+    // a watched one). Best effort — a job without a usable company is skipped.
+    suggestCompanyForJob(jobKey, at = Date.now()) {
+      try {
+        const saved = this.upsertCompanyCandidate(this.resolveCompanyCandidateForJob(jobKey), at);
+        return this.markCompanyAsCandidate(saved.company.id, at);
+      } catch {
+        return null;
+      }
     },
 
     // Per-company ATS progress: when each company's enabled sources were last
@@ -3193,12 +3251,31 @@ export function createJobStore(databasePath) {
       });
     },
 
-    recordLinkedInPosting({ linkedinId, jobKey, listedAt = null, seenAt = Date.now() }) {
+    // postedAgeMs is the card's "N hours ago" lower bound; the first
+    // sighting's estimate is kept, since later labels only get coarser.
+    recordLinkedInPosting({ linkedinId, jobKey, listedAt = null, postedAgeMs = null, seenAt = Date.now() }) {
+      const postedAt = Number.isFinite(postedAgeMs) ? seenAt - postedAgeMs : null;
       db.prepare(`
-        INSERT INTO linkedin_postings (linkedin_id, job_key, listed_at, first_seen_at, last_seen_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(linkedin_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, job_key = excluded.job_key
-      `).run(String(linkedinId), String(jobKey), listedAt, seenAt, seenAt);
+        INSERT INTO linkedin_postings (linkedin_id, job_key, listed_at, posted_at, first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(linkedin_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, job_key = excluded.job_key,
+          posted_at = COALESCE(linkedin_postings.posted_at, excluded.posted_at)
+      `).run(String(linkedinId), String(jobKey), listedAt, postedAt, seenAt, seenAt);
+    },
+
+    listSightingTimes() {
+      return db.prepare('SELECT job_key AS jobKey, source_kind AS sourceKind, first_seen_at AS firstSeenAt FROM job_source_sightings').all();
+    },
+
+    listLinkedInPostingTimes({ since = 0 } = {}) {
+      return db.prepare(`
+        SELECT posted_at AS postedAt, first_seen_at AS firstSeenAt FROM linkedin_postings
+        WHERE posted_at IS NOT NULL AND first_seen_at >= ?
+      `).all(Number(since) || 0);
+    },
+
+    linkedinPostedAt(linkedinId) {
+      return db.prepare('SELECT posted_at FROM linkedin_postings WHERE linkedin_id = ?').get(String(linkedinId))?.posted_at ?? null;
     },
 
     // An external apply URL is exact evidence: when it names a job already

@@ -454,3 +454,18 @@ test('configured company import is additive, idempotent, and preserves user stat
   assert.equal(store.getCompany(enabled.id).status, 'ignored');
   store.close();
 });
+
+test('interested companies to import skip watched, ignored, blocked and anonymous ones', async () => {
+  const { companiesToImport } = await import('../scripts/jobs/import-interested-companies.mjs');
+  const targets = companiesToImport({
+    decisions: [
+      { decision: 'interested', company: 'Rubrik' }, { decision: 'company_candidate', company: 'Rubrik' },
+      { decision: 'interested', company: 'Acme Ltd.' }, { decision: 'interested', company: 'Unknown' },
+      { decision: 'interested', company: 'לקוח לא מזוהה של TechBiz' }, { decision: 'interested', company: 'Paused Co' },
+      { decision: 'interested', company: 'Blocked Co' }, { decision: 'not_relevant', company: 'Gamma' },
+    ],
+    companies: [{ name: 'acme ltd', status: 'watched' }, { name: 'Paused Co', status: 'paused' }],
+    isBlocked: (name) => name === 'Blocked Co',
+  });
+  assert.deepEqual(targets, [{ name: 'Rubrik', count: 2 }, { name: 'Paused Co', count: 1 }]);
+});

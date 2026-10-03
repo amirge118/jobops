@@ -8,6 +8,13 @@ import { NON_RETRYABLE_FAILURE_CODES } from '../liveness-browser.mjs';
 import { linkedinWindowSettings } from '../jobs/linkedin-window.mjs';
 import { readCodexRateLimits } from '../jobs/llm-usage.mjs';
 import fs from 'node:fs';
+import path from 'node:path';
+import { buildSpeedStats, parseTrackerRows } from '../jobs/speed-stats.mjs';
+
+function readTrackerRows(config) {
+  try { return parseTrackerRows(fs.readFileSync(path.join(config.rootDir, 'data', 'applications.md'), 'utf8')); }
+  catch { return []; }
+}
 
 function safeRateLimits() {
   try { return readCodexRateLimits({ fsModule: fs }); } catch { return null; }
@@ -245,6 +252,13 @@ export function createDashboardQueries(config, action) {
         sourceValue: buildSourceValue(store.listSourceValueFacts({
           since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
         })),
+        speed: buildSpeedStats({
+          decisions: store.listJobDecisions(),
+          sightings: store.listSightingTimes(),
+          linkedinPostings: store.listLinkedInPostingTimes({ since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000 }),
+          watchedCompanies: store.listCompanies({ status: 'watched', limit: 1_000 }).map((company) => company.name),
+          trackerRows: readTrackerRows(config),
+        }),
       }));
     },
 

@@ -491,7 +491,8 @@ export function mergeTrackedCompanies(configured = [], additional = []) {
 
 // `maxAgeHoursFor(companyName)` gives one company its own recency window (its
 // own catch-up after a failed scan); it returns null to use the shared one.
-export async function runPortalScan(args = [], { additionalCompanies = [], maxAgeHoursFor = null } = {}) {
+// `shouldScan(company)` returning false skips a company for this run only.
+export async function runPortalScan(args = [], { additionalCompanies = [], maxAgeHoursFor = null, shouldScan = null } = {}) {
   const log = args.includes('--quiet') ? () => {} : console.log;
   const dryRun = args.includes('--dry-run');
   const verify = args.includes('--verify');
@@ -547,6 +548,7 @@ export async function runPortalScan(args = [], { additionalCompanies = [], maxAg
       continue;
     }
     if (filterCompany && !company.name.toLowerCase().includes(filterCompany)) continue;
+    if (shouldScan && !shouldScan(company)) continue;
     const resolved = resolveProvider(company, providers);
     if (!resolved) {
       skippedCount++;

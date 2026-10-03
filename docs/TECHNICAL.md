@@ -163,12 +163,17 @@ their minimal deduplication identity is retained.
 ### Scheduled scans
 
 A scan can run unattended on a fixed schedule instead of only from the dashboard button. Three
-independent macOS LaunchAgents are available: WhatsApp groups at `10:00`, `15:00`, and `20:00`,
-an ATS run once daily at `14:00`, and LinkedIn at `08:00`, `12:30`, and `20:30` (normal windows
-of roughly 11.5, 4.5, and 8 hours, so a full day is covered; the times deliberately avoid the
-WhatsApp slots, and the LinkedIn agent waits up to 20 minutes for the scan lock instead of
-skipping). Neither passes `--open`, so unattended matches wait for
-review on `/decisions` rather than opening a flood of Chrome tabs while no one is watching.
+independent macOS LaunchAgents are available: WhatsApp groups at `10:00`, `15:00`, and `20:00`;
+ATS every hour from `08:05` to `21:05`; and LinkedIn every two hours from `08:30` to `22:30`.
+The slots never coincide, and the ATS and LinkedIn agents wait up to 20 minutes for the scan lock
+instead of skipping. Hourly ATS is cheap: the public board APIs cost no tokens, and Codex only
+scores new titles that pass the filters. A company rendered in a headless browser is scanned at
+most every 6 hours (`BROWSER_SCAN_INTERVAL_HOURS` in `sources/ats.mjs`); skipping keeps its old
+last success, so its own window still covers the hours in between. Short LinkedIn windows mean
+few pages per run, so the total request count stays close to the old three long runs. None of
+them passes `--open`, so unattended matches wait for review on `/decisions` rather than opening a
+flood of Chrome tabs while no one is watching. Each agent writes stdout and stderr to
+`logs/scheduled/<key>.log`, so a skipped run (lock, cooldown, quota) or a crash leaves a trace.
 
 ```bash
 npm run jobs:schedule:install    # install all LaunchAgents (three scans + the WhatsApp trigger)
@@ -193,9 +198,11 @@ cleanly rather than risk two writers on the same SQLite database at once. A dry 
 since it never touches the real database. This is a rare collision in practice, not something to
 watch for day to day.
 
-macOS does not run a `StartCalendarInterval` job while the Mac is asleep; a missed time is not
-retried, it simply waits for the next scheduled time. If the Mac is reliably asleep through one of
-these times, adjust `SCHEDULES` to a time it's normally awake instead.
+macOS does not run a `StartCalendarInterval` job while the Mac is asleep; launchd runs it once on
+wake instead, coalescing every slot missed during sleep into a single run. Each source resumes
+from its own progress, so that one run covers the whole gap. A Mac that sleeps through the
+working day still delays jobs until it wakes, so keep it awake (or on power) during the hours you
+want jobs to arrive quickly.
 
 #### Smart WhatsApp trigger (every 30 minutes)
 
@@ -524,6 +531,16 @@ after a new message arrives in that group. Re-pairing is a possible later troubl
 not an automatic action or a guaranteed fix. The scanner never resets credentials automatically.
 The Baileys 6 line is pinned to `6.7.24` so a reinstall cannot silently change linked-device
 behavior.
+
+### Notifications for strong jobs
+
+A scan run queues one WhatsApp message per new suitable job scoring at least
+`notifications.whatsapp.minScore` (4.0) in `notification_outbox` — one row per job, so a job is
+never announced twice. It never sends anything itself: the WhatsApp Collector owns the only
+connection, and its connected loop (the same 2-second poll that serves history requests) sends
+pending messages to the account's own chat ("Message yourself", from `sock.user.id`) and to no
+one else. A failed send is retried up to five times; a message older than a day is dropped
+rather than sent late. Set `notifications.whatsapp.enabled: false` to turn it off.
 
 ## Codex scoring without API billing
 

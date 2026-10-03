@@ -15,6 +15,12 @@ export function companyLookbackHours({ lastSuccessAt, sharedFrom, now, overlapMs
   return Math.ceil((now - Math.max(from, now - maxLookbackMs)) / HOUR_MS);
 }
 
+// A company rendered in a headless browser costs a whole Chromium page, so
+// with hourly ATS runs it is scanned only once this many hours have passed
+// since its last success. Skipping keeps its old last success, so its own
+// window still covers the hours in between.
+export const BROWSER_SCAN_INTERVAL_HOURS = 6;
+
 export async function scanAts({ store, lookbackHours, companyWindow = null, runScan = runPortalScan }) {
   // The unified SQLite store owns dedup. Legacy pipeline/history files must not
   // hide jobs that have never reached the unified evaluation flow.
@@ -28,8 +34,16 @@ export async function scanAts({ store, lookbackHours, companyWindow = null, runS
     ? store.getCompanyLastSuccessTimes()
     : null;
   const catchUp = new Map();
+  const skipped = new Set();
   const options = { additionalCompanies: watchedCompanies };
   if (lastSuccess) {
+    options.shouldScan = (company) => {
+      if (company.render_with_browser !== true) return true;
+      const last = lastSuccess.get(normalizeCompanyIdentity(company.name));
+      if (last == null || companyWindow.now - last >= BROWSER_SCAN_INTERVAL_HOURS * HOUR_MS) return true;
+      skipped.add(company.name);
+      return false;
+    };
     options.maxAgeHoursFor = (name) => {
       const hours = companyLookbackHours({ ...companyWindow, lastSuccessAt: lastSuccess.get(normalizeCompanyIdentity(name)) ?? null });
       if (hours > lookbackHours) catchUp.set(name, hours);
@@ -39,7 +53,7 @@ export async function scanAts({ store, lookbackHours, companyWindow = null, runS
   const result = await runScan(args, options);
   if (typeof store.recordCompanyScanResults === 'function') {
     store.recordCompanyScanResults({
-      scannedNames: watchedCompanies.map((company) => company.name),
+      scannedNames: watchedCompanies.map((company) => company.name).filter((name) => !skipped.has(name)),
       errorNames: (result.errors || []).map((error) => error.company),
     });
   }
@@ -70,5 +84,6 @@ export async function scanAts({ store, lookbackHours, companyWindow = null, runS
   const unique = [...byKey.values()];
   return { source: 'ats', candidates, stats: result.stats, errors: result.errors,
     catchUp: [...catchUp].map(([company, hours]) => ({ company, hours })),
+    skippedBrowser: [...skipped],
     discovery: { found: unique.length, new: unique.filter((candidate) => candidate.isNew).length, known: unique.filter((candidate) => !candidate.isNew).length } };
 }

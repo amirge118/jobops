@@ -114,3 +114,12 @@ scoring:
 browser:
   application: "Google Chrome"
   openOnlyNew: true
+
+# A WhatsApp message to your own number ("Message yourself") for every new
+# suitable job at or above minScore. Scan runs queue it; the running
+# WhatsApp collector sends it. Each job is announced once.
+notifications:
+  whatsapp:
+    enabled: false
+    minScore: 4.0
+    dashboardUrl: "http://127.0.0.1:4177/decisions"

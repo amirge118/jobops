@@ -103,6 +103,32 @@ test('ATS scan gives each company its own window and reports which ones catch up
   assert.deepEqual(result.catchUp, [{ company: 'Failed Co.', hours: 84 }]);
 });
 
+test('a browser-rendered company is scanned at most every few hours and keeps its catch-up window', async () => {
+  const now = Date.now();
+  const health = [];
+  const store = {
+    listWatchedCompanySources: () => [
+      { name: 'Rendered Co', provider: 'official-html', careers_url: 'https://rendered.example/careers', render_with_browser: true, enabled: true },
+      { name: 'Api Co', provider: 'lever', careers_url: 'https://jobs.lever.co/api', enabled: true },
+    ],
+    getCompanyLastSuccessTimes: () => new Map([['rendered co', now - HOUR], ['api co', now - HOUR]]),
+    recordCompanyScanResults(result) { health.push(result); },
+    recordSighting: (input) => ({ jobKey: input.url, canonicalUrl: input.url, isNew: true }),
+  };
+  let scanned;
+  const runScan = async (_args, options) => {
+    scanned = options.additionalCompanies.filter((company) => options.shouldScan(company)).map((company) => company.name);
+    return { offers: [], stats: {}, errors: [] };
+  };
+  const result = await scanAts({ store, lookbackHours: 13, runScan,
+    companyWindow: { sharedFrom: now - 13 * HOUR, now, overlapMs: 12 * HOUR, maxLookbackMs: 14 * 24 * HOUR } });
+
+  assert.deepEqual(scanned, ['Api Co']);
+  assert.deepEqual(result.skippedBrowser, ['Rendered Co']);
+  // Not recorded as scanned, so its last success (and catch-up window) stays.
+  assert.deepEqual(health[0].scannedNames, ['Api Co']);
+});
+
 test('ATS catalogue merges approved database sources without rescanning configured boards', () => {
   const configured = [{ name: 'Acme', provider: 'lever', careers_url: 'https://jobs.lever.co/acme' }];
   const approved = [

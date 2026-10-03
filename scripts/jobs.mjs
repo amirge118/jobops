@@ -15,6 +15,7 @@ import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
 import { createJobScorer } from './jobs/score-job.mjs';
 import { checkCodexQuota, readCodexRateLimits, setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { createJobStore, sourceKindOf } from './jobs/store.mjs';
+import { queueJobNotifications } from './jobs/notifications.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
 import { scanLinkedIn } from './jobs/sources/linkedin.mjs';
@@ -1200,6 +1201,8 @@ async function runJobsLocked(options, config) {
       fs.writeFileSync(paths.dated, report, 'utf8');
       fs.writeFileSync(paths.latest, report, 'utf8');
       appendMatchingJobs(config.pipelinePath, matchingJobs);
+      const notified = queueJobNotifications({ store, jobs: matchingJobs, config });
+      if (notified) console.log(`${notified} התראות WhatsApp על משרות חזקות נוספו לתור; ה-Collector ישלח אותן.`);
       // Mark equivalent source records together so a duplicate cannot surface tomorrow.
       store.markPresented(unpresentedJobs.map((job) => job.jobKey));
       console.log(`הדוח נשמר: ${path.relative(config.rootDir, paths.dated)}`);

@@ -820,3 +820,28 @@ test('a run that only fell short on LinkedIn still anchors the ATS/WhatsApp wind
   assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp'])?.id, runId);
   store.close();
 });
+
+test('an interesting job suggests its company as a candidate, never demoting a watched one', () => {
+  const store = newStore();
+  const evaluate = (url, company) => {
+    const sighting = store.recordSighting({ url, company, title: 'Backend Engineer', source: 'LinkedIn: Backend', seenAt: 1_000 });
+    store.saveEvaluation(sighting.jobKey, {
+      company, title: 'Backend Engineer', summary: 'x', score: 4.2, fitLabel: 'מתאים', decisionReason: 'x',
+      suitable: true, applyUrl: url, activeStatus: 'active', contentHash: 'c', profileHash: 'p',
+      criteriaVersion: 'v1', evaluatedAt: 2_000,
+    });
+    return sighting.jobKey;
+  };
+
+  const suggested = store.suggestCompanyForJob(evaluate('https://jobs.lever.co/acme/1', 'Acme'));
+  assert.equal(suggested.name, 'Acme');
+  assert.equal(suggested.status, 'candidate');
+
+  store.approveCompany(suggested.id);
+  const again = store.suggestCompanyForJob(evaluate('https://jobs.lever.co/acme/2', 'Acme'));
+  assert.equal(again.status, 'watched');
+
+  // A job that cannot resolve a company is skipped, not an error.
+  assert.equal(store.suggestCompanyForJob('0'.repeat(24)), null);
+  store.close();
+});
