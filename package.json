@@ -39,6 +39,7 @@
     "jobs:linkedin-probe": "node scripts/jobs/linkedin-probe.mjs",
     "jobs:whatsapp-trigger": "node scripts/jobs/whatsapp-trigger.mjs",
     "jobs:dedup": "node scripts/jobs/dedup.mjs",
+    "jobs:health": "node scripts/scan-health.mjs",
     "whatsapp:collector": "node scripts/jobs/whatsapp-collector.mjs",
     "whatsapp:collector:install": "node scripts/jobs/collector-service.mjs install",
     "whatsapp:collector:uninstall": "node scripts/jobs/collector-service.mjs uninstall",

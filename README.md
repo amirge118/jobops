@@ -65,7 +65,11 @@ and no third-party application server are in the loop.
   overlap, capped at 16 hours), keeps only titles that match your target roles (a "data analyst"
   query no longer drags in FP&A or data-science roles), and reads the "3 hours ago" label on
   every card as a second check. A block or rate limit stops the search and is shown as such —
-  never as "no jobs" — and coverage only moves forward after a complete run.
+  never as "no jobs" — and coverage only moves forward after a complete run. The pause
+  carries across runs: after a block, no run calls LinkedIn for an hour, and LinkedIn job
+  pages shared on WhatsApp wait 15 minutes after any LinkedIn activity. Waiting jobs stay
+  pending, are not counted as failures, and are read on the next run
+  (`sources.linkedin.cooldown.afterBlockMinutes` / `afterActivityMinutes` in `config/jobs.yml`).
 - 💬 **WhatsApp, processed when it is worth it** — the collector stores group messages locally
   for free. A token-free check every 30 minutes counts the *new jobs* waiting (unique, unseen
   links — one job shared in four groups counts once) and processes them once at least 8 are
@@ -95,7 +99,11 @@ limit, not money.
 - 🛑 **No quota, no run** — before each run jobOps checks whether the account still has Codex
   quota. If the limit was hit, it reads the reset time from Codex ("try again at 1:43 PM"), skips
   every scheduled run until then, and shows it on the dashboard. Nothing is lost: each source
-  resumes from its last success, and unscored jobs are retried automatically.
+  resumes from its last success (never more than `maxLookbackDays` back), and unscored jobs are retried automatically.
+
+When something did fail, `/scan-health` audits the latest run of every source plus the scan
+page's failure list (`npm run jobs:health` prints the read-only digest it works from), traces each
+failure to its cause, and separates what to fix from what to accept.
 
 ## A compact, dark dashboard
 

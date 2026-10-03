@@ -239,6 +239,11 @@ export function createJobPageFetcher({
   fetchImpl = globalThis.fetch,
   chromiumImpl = chromium,
   linkedinLimits = {},
+  // Cross-run pacing, decided once when the run starts: { until, reason }.
+  linkedinCooldown = null,
+  onLinkedInRequest = () => {},
+  onLinkedInBlock = () => {},
+  now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   // LinkedIn postings are read through the guest posting API only — never
@@ -474,6 +479,14 @@ export function createJobPageFetcher({
 
     const linkedinId = linkedinJobId(canonicalUrl);
     if (linkedinId) {
+      if (linkedinCooldown && now() < linkedinCooldown.until) {
+        return {
+          canonicalUrl, finalUrl: canonicalUrl, content: '', contentHash: hashContent(''), fromCache: false,
+          status: 'uncertain',
+          code: 'linkedin_cooldown',
+          reason: `LinkedIn is cooling down (${linkedinCooldown.reason}) until ${new Date(linkedinCooldown.until).toISOString()}; reading was postponed.`,
+        };
+      }
       if (linkedin.haltedBy || linkedin.fetched >= linkedin.maxDetailFetchesPerRun) {
         return {
           canonicalUrl, finalUrl: canonicalUrl, content: '', contentHash: hashContent(''), fromCache: false,
@@ -489,6 +502,7 @@ export function createJobPageFetcher({
         await sleep(Math.round(min + Math.random() * Math.max(0, max - min)));
       }
       linkedin.fetched += 1;
+      onLinkedInRequest();
       let result;
       try {
         const response = await fetchWithTimeout(fetchImpl, `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`, { timeoutMs: FETCH_TIMEOUT_MS });
@@ -509,7 +523,10 @@ export function createJobPageFetcher({
         } else {
           const classification = classifySearchResponse({ ...response, cards: [] });
           const blocked = ['blocked', 'rate_limited'].includes(classification.status);
-          if (blocked) linkedin.haltedBy = classification.status;
+          if (blocked) {
+            linkedin.haltedBy = classification.status;
+            onLinkedInBlock(classification.status);
+          }
           result = {
             status: 'uncertain',
             code: blocked ? `linkedin_${classification.status}` : 'linkedin_structure_changed',

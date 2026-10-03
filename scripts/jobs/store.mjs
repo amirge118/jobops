@@ -62,6 +62,9 @@ export function sourceMixOf(sources) {
   return mix;
 }
 
+// The retry source a sighting kind maps back to (the prefix filters match on).
+const SIGHTING_RETRY_SOURCES = { ats: 'ATS: retry', whatsapp: 'WhatsApp: retry', linkedin: 'LinkedIn: retry' };
+
 function sourceKinds(sources) {
   const kinds = new Set();
   for (const source of sources) {
@@ -563,6 +566,16 @@ export function createJobStore(databasePath) {
     -- jobs from them are rejected locally, before any page fetch or scoring.
     -- Filled only by new decisions; older decisions were deliberately not
     -- backfilled.
+    -- Cross-run LinkedIn pacing. Per-run budgets cannot stop a run that
+    -- starts minutes after another one exhausted LinkedIn's patience.
+    CREATE TABLE IF NOT EXISTS linkedin_state (
+      id               INTEGER PRIMARY KEY CHECK (id = 1),
+      blocked_until    INTEGER,
+      blocked_reason   TEXT,
+      blocked_at       INTEGER,
+      last_activity_at INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS blocked_companies (
       company_key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -1522,6 +1535,23 @@ export function createJobStore(databasePath) {
       return true;
     },
 
+    // Per-company ATS progress: when each company's enabled sources were last
+    // scanned successfully (the oldest one if they differ; null if never).
+    // Keyed by normalized company identity, like recordCompanyScanResults.
+    getCompanyLastSuccessTimes() {
+      const rows = db.prepare(`
+        SELECT c.name, MIN(s.last_success_at) AS lastSuccessAt, COUNT(s.last_success_at) AS succeeded, COUNT(*) AS total
+        FROM company_job_sources s
+        JOIN companies c ON c.id = s.company_id
+        WHERE s.enabled = 1 AND s.provider <> 'unsupported'
+        GROUP BY c.id
+      `).all();
+      return new Map(rows.map((row) => [
+        normalizeCompanyIdentity(row.name),
+        row.succeeded === row.total ? Number(row.lastSuccessAt) : null,
+      ]));
+    },
+
     recordCompanyScanResults({ scannedNames = [], errorNames = [], at = Date.now() } = {}) {
       if (!Array.isArray(scannedNames) || !Array.isArray(errorNames) || scannedNames.length + errorNames.length > 10_000) {
         throw new CompanyRegistryError('invalid_scan_results', 'Company scan result list is invalid');
@@ -1820,16 +1850,21 @@ export function createJobStore(databasePath) {
           apply_url AS url,
           company,
           title,
-          sources_json AS sourcesJson
+          sources_json AS sourcesJson,
+          (SELECT source_kind FROM job_source_sightings s WHERE s.job_key = jobs.job_key
+            ORDER BY s.first_seen_at DESC LIMIT 1) AS sightingKind
         FROM jobs
         WHERE archived_at IS NULL AND duplicate_of IS NULL
           AND (evaluated_at IS NULL OR last_error_code IS NOT NULL)
           ${excludeClause}
         ORDER BY first_seen_at ASC
         LIMIT ?
-      `).all(...codes, boundedLimit).map(({ sourcesJson, ...job }) => ({
+      `).all(...codes, boundedLimit).map(({ sourcesJson, sightingKind, ...job }) => ({
         ...job,
-        source: parseSources(sourcesJson)[0] || 'retry',
+        // A rejected job keeps no sources_json, so a failed re-check of it
+        // falls back to its latest sighting; otherwise no per-source run
+        // would ever retry it.
+        source: parseSources(sourcesJson)[0] || SIGHTING_RETRY_SOURCES[sightingKind] || 'retry',
       }));
     },
 
@@ -3173,6 +3208,37 @@ export function createJobStore(databasePath) {
       if (!canonical || linkedinJobIdFromCanonical(canonical)) return null;
       db.prepare('UPDATE linkedin_postings SET external_canonical_url = ? WHERE linkedin_id = ?').run(canonical, String(linkedinId));
       return db.prepare('SELECT job_key FROM jobs WHERE canonical_url = ?').get(canonical)?.job_key ?? null;
+    },
+
+    // ---- LinkedIn cooldown -------------------------------------------------
+
+    noteLinkedInBlock(reason, { at = Date.now(), cooldownMs = 60 * 60 * 1000 } = {}) {
+      db.prepare(`
+        INSERT INTO linkedin_state (id, blocked_until, blocked_reason, blocked_at, last_activity_at)
+        VALUES (1, @until, @reason, @at, @at)
+        ON CONFLICT(id) DO UPDATE SET
+          blocked_until = MAX(COALESCE(blocked_until, 0), @until),
+          blocked_reason = @reason, blocked_at = @at,
+          last_activity_at = MAX(COALESCE(last_activity_at, 0), @at)
+      `).run({ until: Number(at) + Number(cooldownMs), reason: String(reason).slice(0, 32), at: Number(at) });
+    },
+
+    noteLinkedInActivity(at = Date.now()) {
+      db.prepare(`
+        INSERT INTO linkedin_state (id, last_activity_at) VALUES (1, @at)
+        ON CONFLICT(id) DO UPDATE SET last_activity_at = MAX(COALESCE(last_activity_at, 0), @at)
+      `).run({ at: Number(at) });
+    },
+
+    // A block stops every LinkedIn request; recent activity (another run's
+    // searches or page reads) only spaces out page reads, so frequent
+    // WhatsApp runs can never starve the scheduled LinkedIn scan.
+    getLinkedInCooldown({ now = Date.now(), afterActivityMs = 15 * 60 * 1000 } = {}) {
+      const row = db.prepare('SELECT * FROM linkedin_state WHERE id = 1').get();
+      const block = row?.blocked_until > now ? { until: row.blocked_until, reason: row.blocked_reason || 'blocked' } : null;
+      const activityUntil = row?.last_activity_at ? row.last_activity_at + Number(afterActivityMs) : 0;
+      const reads = block || (activityUntil > now ? { until: activityUntil, reason: 'recent_activity' } : null);
+      return { scans: block, reads };
     },
 
     isCompanyBlocked(company) {

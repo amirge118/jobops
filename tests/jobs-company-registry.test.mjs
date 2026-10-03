@@ -65,6 +65,17 @@ test('detects every ATS shape supported by the scanner', () => {
   }
 });
 
+test('Greenhouse embed URLs resolve to the board in `for`, never to a board named "embed"', () => {
+  for (const url of [
+    'https://boards.greenhouse.io/embed/job_board?for=appsflyer',
+    'https://job-boards.greenhouse.io/embed/job_app?for=AppsFlyer&token=123',
+  ]) {
+    assert.equal(detectCompanyJobSource(url)?.boardKey, 'appsflyer');
+    assert.equal(detectCompanyJobSource(url)?.apiUrl, 'https://boards-api.greenhouse.io/v1/boards/appsflyer/jobs');
+  }
+  assert.notEqual(detectCompanyJobSource('https://job-boards.greenhouse.io/embed/job_app?token=123')?.boardKey, 'embed');
+});
+
 test('unsupported official job URLs remain reviewable and are never scanner-enabled', () => {
   const candidate = resolveCompanyCandidate({
     company: 'Acme',

@@ -635,7 +635,21 @@ roles do not reappear as new matches.
 
 - The first run looks back two days by default.
 - Later runs start from the last successful run with a 12-hour overlap. (LinkedIn keeps its own
-  per-search coverage; see [LinkedIn job search](#linkedin-job-search).)
+  per-search coverage; see [LinkedIn job search](#linkedin-job-search).) That automatic window
+  is also capped by `maxLookbackDays`, so one old, unrecoverable gap cannot keep every later run
+  partial and the window growing.
+- ATS keeps per-company progress (`company_job_sources.last_success_at`). A company whose scan
+  failed starts its next scan from its own last success minus the overlap (still capped by
+  `maxLookbackDays`), and the run lists it as catching up. So a failed company leaves the run
+  `incomplete` for visibility, but no longer holds back the shared window for everyone else.
+- A job whose page read or scoring failed does not hold the window back either: it keeps its
+  error code and the retry queue picks it up on the next run of its source. A rejected job keeps
+  no `sources_json`, so its retry falls back to its latest `job_source_sightings` source.
+- Partial WhatsApp coverage (a collector gap) does not hold the window back: every group shares
+  one collector connection, a missed message cannot be recovered by rescanning, and the gap stays
+  recorded per group (`syncState`, `gapFrom`). Late-delivered messages older than the window are
+  still processed by the scheduled backlog run (`whatsapp-trigger`), which ignores the window.
+  Failed message processing and failed read marks still hold it back.
 - `--days N` explicitly selects a window, capped by `maxLookbackDays`.
 - Tracking parameters are removed before URL comparison.
 - Failed WhatsApp messages remain retryable; successful messages are not processed again.

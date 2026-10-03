@@ -78,7 +78,9 @@ export function scanWindow({ config, store, requestedDays, sources = [], now = D
     : lastRun?.finished_at
       ? lastRun.finished_at - overlapMs
       : now - defaultMs;
-  return { from, to: now };
+  // The automatic window is capped too: otherwise one long-past gap keeps
+  // every later run partial, so the window never closes and only grows.
+  return { from: Math.max(from, now - maxDays * 24 * 60 * 60 * 1000), to: now };
 }
 
 function uniqueCandidates(candidates) {
@@ -136,6 +138,7 @@ export function summarizeProcessingResults(candidates, outcomes) {
       failed: 0,
       alreadyProcessed: 0,
       filtered: 0,
+      deferred: 0,
       failureReasons: {},
     };
     row.links += 1;
@@ -149,6 +152,9 @@ export function summarizeProcessingResults(candidates, outcomes) {
       // A duplicate is the same company+role already known from another
       // link: no scoring tokens were spent on it.
       row.alreadyProcessed += 1;
+    } else if (outcome.status === 'deferred') {
+      // LinkedIn cooldown: not read on purpose, still pending — not a failure.
+      row.deferred += 1;
     } else if (outcome.status === 'filtered') {
       // Screened locally by the negative-keyword filter, before ever
       // reaching Codex — kept out of `processed` so per-source cost
@@ -164,14 +170,14 @@ export function summarizeProcessingResults(candidates, outcomes) {
 
   const rows = [...scopes.values()];
   const totals = rows.reduce((summary, row) => {
-    for (const field of ['links', 'processed', 'suitable', 'notSuitable', 'failed', 'alreadyProcessed', 'filtered']) {
+    for (const field of ['links', 'processed', 'suitable', 'notSuitable', 'failed', 'alreadyProcessed', 'filtered', 'deferred']) {
       summary[field] += row[field];
     }
     for (const [code, count] of Object.entries(row.failureReasons)) {
       summary.failureReasons[code] = Number(summary.failureReasons[code] || 0) + Number(count);
     }
     return summary;
-  }, { links: 0, processed: 0, suitable: 0, notSuitable: 0, failed: 0, alreadyProcessed: 0, filtered: 0, failureReasons: {} });
+  }, { links: 0, processed: 0, suitable: 0, notSuitable: 0, failed: 0, alreadyProcessed: 0, filtered: 0, deferred: 0, failureReasons: {} });
 
   return { totals, scopes: rows };
 }
@@ -309,6 +315,7 @@ export function summarizeSourceResults(sourceResults) {
       companies: Number(ats.stats?.companies || 0),
       found: Number(ats.stats?.totalFound || 0),
       errors: ats.errors?.length || 0,
+      catchUp: ats.catchUp || [],
       filtered: {
         title: Number(ats.stats?.filteredTitle || 0),
         location: Number(ats.stats?.filteredLocation || 0),
@@ -339,13 +346,25 @@ export function summarizeSourceResults(sourceResults) {
 // The run's status judged without LinkedIn. It anchors the shared
 // ATS/WhatsApp scan window, which LinkedIn (with its own per-search
 // progress) must never hold back.
+//
+// A failed ATS company does not hold it back either: each company keeps its
+// own progress (company_job_sources.last_success_at) and catches up from it
+// on the next run — see companyLookbackHours in sources/ats.mjs. Nor does a
+// job whose page or scoring failed: it keeps its error code and the retry
+// queue (listPendingEvaluation) picks it up on the next run of its source,
+// so rescanning the whole window adds nothing. Nor does partial WhatsApp
+// coverage: all groups share one collector connection, a missed message
+// cannot be recovered by holding the window back, and the gap itself stays
+// recorded per group (syncState/gapFrom). Late-delivered messages outside the
+// window are still processed by the backlog run, which ignores the window.
+// The run itself still reports incomplete, so every failure stays visible.
 export function windowStatusFor(summary) {
-  const scopes = (summary?.processing?.scopes || []).filter((scope) => scope.source !== 'linkedin');
-  const failed = scopes.reduce((total, scope) => total + Number(scope.failed || 0), 0);
   return completionStatusFor({
     ...summary,
+    ats: summary?.ats ? { ...summary.ats, errors: 0 } : summary?.ats,
+    whatsapp: summary?.whatsapp ? { ...summary.whatsapp, coverageStatus: 'complete' } : summary?.whatsapp,
     linkedin: null,
-    processing: summary?.processing ? { ...summary.processing, totals: { ...summary.processing.totals, failed } } : summary?.processing,
+    processing: null,
   });
 }
 
@@ -456,6 +475,9 @@ function recordRunAudit(store, runId, summary) {
 function printSourceSummary(summary) {
   if (summary.ats) {
     console.log(`ATS: ${summary.ats.candidates} מועמדויות מתוך ${summary.ats.found} משרות ב-${summary.ats.companies} חברות; ${summary.ats.errors} שגיאות.`);
+    if (summary.ats.catchUp?.length) {
+      console.log(`ATS: השלמה לחברות שנכשלו קודם — ${summary.ats.catchUp.map(({ company, hours }) => `${company} (${hours} שעות)`).join(', ')}.`);
+    }
     console.log(`  סוננו: ${summary.ats.filtered.title} לפי תפקיד, ${summary.ats.filtered.location} לפי מיקום, ${summary.ats.filtered.recency} לפי זמן.`);
     if (summary.ats.discovery) console.log(`  לאחר מניעת כפילויות: ${summary.ats.discovery.new} חדשות במאגר, ${summary.ats.discovery.known} כבר מוכרות. מציאת מועמדות אינה החלטת התאמה.`);
   }
@@ -511,7 +533,7 @@ function printLinkedInSummary(linkedin) {
 function printProcessingSummary(processing) {
   console.log('עיבוד קישורים:');
   for (const scope of processing.scopes) {
-    console.log(`  ${scope.name}: ${scope.links} קישורים, ${scope.processed} נקראו, ${scope.suitable} מתאימים, ${scope.notSuitable} לא מתאימים, ${scope.failed} נכשלו, ${scope.alreadyProcessed} כבר נבדקו.`);
+    console.log(`  ${scope.name}: ${scope.links} קישורים, ${scope.processed} נקראו, ${scope.suitable} מתאימים, ${scope.notSuitable} לא מתאימים, ${scope.failed} נכשלו, ${scope.alreadyProcessed} כבר נבדקו${scope.deferred ? `, ${scope.deferred} ממתינים לסיום הפסקת LinkedIn` : ''}.`);
     if (scope.failed > 0) {
       const reasons = Object.entries(scope.failureReasons)
         .map(([code, count]) => `${code}: ${count}`)
@@ -637,6 +659,12 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
       if (fetched % 20 === 0 || fetched === candidates.length) {
         console.log(`פתיחת קישורים: ${fetched}/${candidates.length}; ${pendingScores.length} עמודים פעילים ממתינים לציון.`);
       }
+    }
+    if (page.code === 'linkedin_cooldown') {
+      // Left pending with no error code: the next run after the cooldown
+      // reads it, and it never counts as a failed run.
+      outcomes.set(candidate.jobKey, { status: 'deferred' });
+      continue;
     }
     if (!store.needsEvaluation(candidate.jobKey, {
       contentHash: page.contentHash,
@@ -963,10 +991,21 @@ async function runJobsLocked(options, config) {
   // Same model for LinkedIn: config seeds searches, the dashboard owns edits.
   store.syncLinkedInSearches(config.sources.linkedin?.searches || []);
   const linkedinEnabled = linkedinEnabledFor(config, store);
+  // Decided once, before this run sends anything, so its own requests never
+  // throttle it; only earlier runs' blocks and activity count.
+  const cooldownSettings = config.sources.linkedin?.cooldown || {};
+  const linkedinBlockMs = Number(cooldownSettings.afterBlockMinutes ?? 60) * 60_000;
+  const linkedinCooldown = store.getLinkedInCooldown({
+    afterActivityMs: Number(cooldownSettings.afterActivityMinutes ?? 15) * 60_000,
+  });
+  const noteLinkedInBlock = (status) => store.noteLinkedInBlock(status, { cooldownMs: linkedinBlockMs });
   const fetcher = createJobPageFetcher({
     store,
     cacheTtlMs: Number(config.scan.pageCacheHours) * 60 * 60 * 1000,
     linkedinLimits: config.sources.linkedin?.limits || {},
+    linkedinCooldown: linkedinCooldown.reads,
+    onLinkedInRequest: () => store.noteLinkedInActivity(),
+    onLinkedInBlock: noteLinkedInBlock,
   });
   let runId = null;
   let runDetails = null;
@@ -1033,6 +1072,12 @@ async function runJobsLocked(options, config) {
       saveSource(await scanAts({
         store,
         lookbackHours: Math.ceil((window.to - window.from) / (60 * 60 * 1000)),
+        companyWindow: {
+          sharedFrom: window.from,
+          now: window.to,
+          overlapMs: Number(config.scan.overlapHours) * 60 * 60 * 1000,
+          maxLookbackMs: Number(config.scan.maxLookbackDays) * 24 * 60 * 60 * 1000,
+        },
       }));
     }
     if (sources.includes('whatsapp')) {
@@ -1051,14 +1096,21 @@ async function runJobsLocked(options, config) {
       lifecycle?.stage('collection', 'linkedin');
       sourceStartedAt = Date.now();
       const passesTitle = buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')));
+      if (linkedinCooldown.scans) {
+        console.log(`LinkedIn בהפסקה אחרי ${linkedinCooldown.scans.reason} עד ${new Date(linkedinCooldown.scans.until).toLocaleTimeString('he-IL')}; החיפוש נדחה לריצה הבאה.`);
+      }
       try {
-        saveSource(await scanLinkedIn({
+        const result = await scanLinkedIn({
           config,
           store,
           mode: options.linkedinHours != null ? 'manual' : 'auto',
           manualHours: options.linkedinHours,
           passesTitle,
-        }));
+          cooldown: linkedinCooldown.scans,
+        });
+        if (result.requests > 0) store.noteLinkedInActivity();
+        if (['rate_limited', 'blocked'].includes(result.haltedBy)) noteLinkedInBlock(result.haltedBy);
+        saveSource(result);
       } catch (error) {
         // LinkedIn is an optional, unofficial source: its failure is reported
         // and never aborts ATS/WhatsApp collection or processing.

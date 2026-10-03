@@ -65,7 +65,7 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
   assert.throws(() => parseArgs(['--whatsapp-backlog', '--ats-only']), /whatsapp-backlog/);
 });
 
-test('scan window uses last successful run with overlap and caps explicit days', () => {
+test('scan window uses last successful run with overlap and caps both explicit and automatic windows', () => {
   const config = { scan: { maxLookbackDays: 14, defaultLookbackDays: 2, overlapHours: 12 } };
   const now = Date.UTC(2026, 7, 24);
   const store = {
@@ -81,6 +81,11 @@ test('scan window uses last successful run with overlap and caps explicit days',
   );
   assert.equal(
     scanWindow({ config, store, requestedDays: 30, sources: ['ats', 'whatsapp'], now }).from,
+    now - 14 * 24 * 60 * 60 * 1000,
+  );
+  const staleStore = { getLastSuccessfulRun: () => ({ finished_at: now - 40 * 24 * 60 * 60 * 1000 }) };
+  assert.equal(
+    scanWindow({ config, store: staleStore, sources: ['ats', 'whatsapp'], now }).from,
     now - 14 * 24 * 60 * 60 * 1000,
   );
 });
@@ -167,9 +172,9 @@ test('link processing is summarized independently for ATS and each WhatsApp grou
   const processing = summarizeProcessingResults(candidates, outcomes);
 
   assert.deepEqual(processing.scopes, [
-    { source: 'ats', name: 'ATS', links: 1, processed: 1, suitable: 1, notSuitable: 0, failed: 0, alreadyProcessed: 0, filtered: 0, failureReasons: {} },
-    { source: 'whatsapp', name: 'Group A', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 1, alreadyProcessed: 0, filtered: 0, failureReasons: { page_uncertain: 1 } },
-    { source: 'whatsapp', name: 'Group B', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 0, alreadyProcessed: 1, filtered: 0, failureReasons: {} },
+    { source: 'ats', name: 'ATS', links: 1, processed: 1, suitable: 1, notSuitable: 0, failed: 0, alreadyProcessed: 0, filtered: 0, deferred: 0, failureReasons: {} },
+    { source: 'whatsapp', name: 'Group A', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 1, alreadyProcessed: 0, filtered: 0, deferred: 0, failureReasons: { page_uncertain: 1 } },
+    { source: 'whatsapp', name: 'Group B', links: 2, processed: 1, suitable: 0, notSuitable: 1, failed: 0, alreadyProcessed: 1, filtered: 0, deferred: 0, failureReasons: {} },
   ]);
   assert.deepEqual(processing.totals, {
     links: 5,
@@ -179,6 +184,7 @@ test('link processing is summarized independently for ATS and each WhatsApp grou
     failed: 1,
     alreadyProcessed: 1,
     filtered: 0,
+    deferred: 0,
     failureReasons: { page_uncertain: 1 },
   });
   assert.equal(completionStatusFor({ processing }), 'incomplete');
@@ -223,8 +229,33 @@ test('a LinkedIn shortfall marks the run incomplete without holding back the ATS
   assert.equal(completionStatusFor(summary), 'incomplete');
   assert.equal(windowStatusFor(summary), 'success');
 
+  // A failed job read is retried from the queue; it does not hold the window back.
   summary.processing.scopes.push({ source: 'ats', name: 'ATS', failed: 1 });
-  assert.equal(windowStatusFor(summary), 'incomplete');
+  assert.equal(completionStatusFor(summary), 'incomplete');
+  assert.equal(windowStatusFor(summary), 'success');
+});
+
+test('partial WhatsApp coverage keeps the run incomplete but no longer holds back the window', () => {
+  const group = (extra = {}) => ({ name: 'Group A', found: true, messages: 1, failedMessages: 0, candidates: 0,
+    coverage: { status: 'partial', reason: 'collector_gap' }, read: { status: 'skipped', marked: false }, error: null, ...extra });
+  const summary = summarizeSourceResults([{ source: 'whatsapp', candidates: [], groups: [group()] }]);
+  assert.notEqual(summary.whatsapp.coverageStatus, 'complete');
+  assert.equal(completionStatusFor(summary), 'incomplete');
+  assert.equal(windowStatusFor(summary), 'success');
+
+  // A message that failed processing still holds the window back.
+  const failed = summarizeSourceResults([{ source: 'whatsapp', candidates: [], groups: [group({ failedMessages: 1 })] }]);
+  assert.equal(windowStatusFor(failed), 'incomplete');
+});
+
+test('a failed ATS company keeps the run incomplete but no longer holds back the shared window', () => {
+  const summary = summarizeSourceResults([
+    { source: 'ats', candidates: [], stats: { companies: 120, totalFound: 2400 },
+      errors: [{ company: 'AppsFlyer', error: 'HTTP 404' }] },
+  ]);
+  assert.equal(summary.ats.errors, 1);
+  assert.equal(completionStatusFor(summary), 'incomplete');
+  assert.equal(windowStatusFor(summary), 'success');
 });
 
 test('a source-level LinkedIn crash is reported as a failure, never as zero jobs', () => {
