@@ -7,9 +7,18 @@
       <main class="page-main">
         <section class="page-hero"><div><h1>אזור אישי</h1><p>פערים שהעברת מעמוד ההחלטות, כדי לעקוב אחריהם ולסדר לפי עדיפות.</p></div></section>
         <section class="improvements-section page-section" aria-labelledby="improvements-title">
-          <div class="section-heading improvements-heading"><div><h2 id="improvements-title">מה כדאי לחזק?</h2><p>אפשר לגרור שורה כדי לשנות סדר עדיפויות, ולהסיר נושא שכבר טופל.</p></div></div>
-          <div class="table-wrap"><table class="improvements-table"><thead><tr><th></th><th>נושא</th><th>סוג הפער</th><th>הסבר והמלצה</th><th>מקור</th><th>פעולות</th></tr></thead><tbody id="improvements-body"></tbody></table><div id="improvements-empty" class="empty-state"><strong>עדיין אין נקודות לשיפור</strong><span>אפשר להעביר פערים לכאן מכל משרה בעמוד ההחלטות.</span><a class="button button-secondary" href="/decisions">עבור להחלטות</a></div></div>
+          <div class="section-heading improvements-heading"><div><h2 id="improvements-title">מה כדאי לחזק? <span class="improvements-count" data-count-for="safe_addition"></span></h2><p>דברים שאפשר להוסיף לקורות החיים בבטחה. אפשר לגרור שורה כדי לשנות סדר עדיפויות, ולהסיר נושא שכבר טופל.</p></div></div>
+          <div class="table-wrap"><table class="improvements-table"><thead><tr><th></th><th>נושא</th><th>הסבר והמלצה</th><th>מקור</th><th>פעולות</th></tr></thead><tbody class="improvements-body" data-kind="safe_addition"></tbody></table><div class="empty-state" data-empty-for="safe_addition"><strong>אין כרגע נושאים להוספה</strong></div></div>
         </section>
+        <section class="improvements-section page-section" aria-labelledby="confirmation-title">
+          <div class="section-heading improvements-heading"><div><h2 id="confirmation-title">דורש אימות <span class="improvements-count" data-count-for="needs_confirmation"></span></h2><p>נושאים שצריך לבדוק אם באמת יש לך ניסיון בהם לפני שמוסיפים לקורות החיים.</p></div></div>
+          <div class="table-wrap"><table class="improvements-table"><thead><tr><th></th><th>נושא</th><th>הסבר והמלצה</th><th>מקור</th><th>פעולות</th></tr></thead><tbody class="improvements-body" data-kind="needs_confirmation"></tbody></table><div class="empty-state" data-empty-for="needs_confirmation"><strong>אין כרגע נושאים שדורשים אימות</strong></div></div>
+        </section>
+        <section class="improvements-section page-section" aria-labelledby="experience-gap-title">
+          <div class="section-heading improvements-heading"><div><h2 id="experience-gap-title">פער ניסיון <span class="improvements-count" data-count-for="experience_gap"></span></h2><p>תחומים שחסר בהם ניסיון בפועל — מועמדים ללמידה או לפרויקט צד.</p></div></div>
+          <div class="table-wrap"><table class="improvements-table"><thead><tr><th></th><th>נושא</th><th>הסבר והמלצה</th><th>מקור</th><th>פעולות</th></tr></thead><tbody class="improvements-body" data-kind="experience_gap"></tbody></table><div class="empty-state" data-empty-for="experience_gap"><strong>אין כרגע פערי ניסיון</strong></div></div>
+        </section>
+        <div id="improvements-empty" class="empty-state page-section"><strong>עדיין אין נקודות לשיפור</strong><span>אפשר להעביר פערים לכאן מכל משרה בעמוד ההחלטות.</span><a class="button button-secondary" href="/decisions">עבור להחלטות</a></div>
         <p id="page-feedback" class="company-feedback" role="status" aria-live="polite"></p>
       </main>
       <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>

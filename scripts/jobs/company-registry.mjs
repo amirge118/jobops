@@ -158,7 +158,11 @@ export function detectCompanyJobSource(value) {
 
   if (GREENHOUSE_HOSTS.has(hostname)) {
     const isApi = hostname === 'boards-api.greenhouse.io';
-    const board = isApi && segments[0] === 'v1' && segments[1] === 'boards' ? segments[2] : segments[0];
+    // `/embed/job_board?for=<board>` and `/embed/job_app?token=…` are widget
+    // paths, not a board named "embed": the board is only in `for`, if at all.
+    const board = isApi && segments[0] === 'v1' && segments[1] === 'boards' ? segments[2]
+      : segments[0] === 'embed' ? parsed.searchParams.get('for')
+        : segments[0];
     const boardKey = normalizeBoardKey(board);
     if (boardKey) {
       return normalizedSource(

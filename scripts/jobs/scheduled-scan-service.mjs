@@ -14,12 +14,21 @@ const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 // separate agents even though both just invoke the same jobs.mjs CLI.
 // Neither passes --open: unattended runs should leave new matches for
 // review on /decisions, not flood Chrome with tabs while no one is looking.
+function hourly({ from, to, minute, every = 1 }) {
+  const times = [];
+  for (let hour = from; hour <= to; hour += every) times.push({ hour, minute });
+  return times;
+}
+
 export const SCHEDULES = [
+  // Hourly through the working day: a company's own board is where a job
+  // appears first, and polling its public ATS API costs no tokens (Codex only
+  // scores new titles that pass the filters). :05 stays off the other slots.
   {
     key: 'ats',
     label: 'com.amirgefen.jobops.scan-ats',
-    args: ['--ats-only'],
-    times: [{ hour: 14, minute: 0 }],
+    args: ['--ats-only', '--wait-for-lock', '20'],
+    times: hourly({ from: 8, to: 21, minute: 5 }),
   },
   {
     key: 'whatsapp',
@@ -27,15 +36,17 @@ export const SCHEDULES = [
     args: ['--whatsapp-only'],
     times: [{ hour: 10, minute: 0 }, { hour: 15, minute: 0 }, { hour: 20, minute: 0 }],
   },
-  // Off the WhatsApp slots on purpose. Normal windows are ~11.5h / 4.5h /
-  // 8h, covering the full day; each search resumes from its own last
-  // success, so a missed slot is caught up rather than lost. Waiting up to
-  // 20 minutes for the scan lock turns a rare collision into a short delay.
+  // Every two hours, off the WhatsApp and ATS slots. Short windows mean few
+  // pages per run, so the total request count stays close to the old three
+  // long runs a day. Each search resumes from its own last success, so a
+  // missed slot is caught up rather than lost; the cross-run cooldown skips
+  // runs after a block. Waiting up to 20 minutes for the scan lock turns a
+  // rare collision into a short delay.
   {
     key: 'linkedin',
     label: 'com.amirgefen.jobops.scan-linkedin',
     args: ['--linkedin-only', '--wait-for-lock', '20'],
-    times: [{ hour: 8, minute: 0 }, { hour: 12, minute: 30 }, { hour: 20, minute: 30 }],
+    times: hourly({ from: 8, to: 22, minute: 30, every: 2 }),
   },
   // A token-free check every 30 minutes: it processes the locally collected
   // WhatsApp backlog only once enough new jobs are waiting, or once the
@@ -64,6 +75,8 @@ export function renderScheduledScanAgent(schedule, { nodePath = process.execPath
     .map(({ hour, minute }) => `<dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`)
     .join('')}</array>`;
   const argsXml = schedule.args.map((arg) => `<string>${xml(arg)}</string>`).join('');
+  // Without a log, a skipped or failed scheduled run leaves no trace at all.
+  const logPath = scheduleLogPath(schedule, rootDir);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -72,10 +85,16 @@ export function renderScheduledScanAgent(schedule, { nodePath = process.execPath
   <key>ProgramArguments</key>
   <array><string>${xml(nodePath)}</string><string>${xml(jobsPath)}</string>${argsXml}</array>
   <key>WorkingDirectory</key><string>${xml(rootDir)}</string>
+  <key>StandardOutPath</key><string>${xml(logPath)}</string>
+  <key>StandardErrorPath</key><string>${xml(logPath)}</string>
   ${trigger}
 </dict>
 </plist>
 `;
+}
+
+export function scheduleLogPath(schedule, rootDir = ROOT_DIR) {
+  return path.join(rootDir, 'logs', 'scheduled', `${schedule.key}.log`);
 }
 
 function plistPathFor(label) {
@@ -104,6 +123,7 @@ export function manageScheduledScans(command = process.argv[2]) {
     for (const schedule of SCHEDULES) {
       const target = plistPathFor(schedule.label);
       fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.mkdirSync(path.dirname(scheduleLogPath(schedule)), { recursive: true });
       fs.writeFileSync(target, renderScheduledScanAgent(schedule), { mode: 0o644 });
       fs.chmodSync(target, 0o644);
       launchctl(['bootout', domain, target], { allowFailure: true });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { scanAts } from '../scripts/jobs/sources/ats.mjs';
+import { companyLookbackHours, scanAts } from '../scripts/jobs/sources/ats.mjs';
 import { buildNegativeTitleFilter, loadTitleFilterNegative, mergeTrackedCompanies } from '../scripts/scan.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,6 +20,8 @@ import {
   suppressKnownLibsignalNoise,
 } from '../scripts/jobs/sources/whatsapp-client.mjs';
 import { fetchGroupMessagesSince } from '../scripts/jobs/sources/whatsapp-history.mjs';
+
+const HOUR = 60 * 60 * 1000;
 
 test('ATS source feeds portal offers into the shared store', async () => {
   const sightings = [];
@@ -67,6 +69,64 @@ test('ATS source includes only approved registry sources and records their healt
   await scanAts({ store, lookbackHours: 24, runScan });
 
   assert.deepEqual(health, [{ scannedNames: ['Watched Co'], errorNames: ['Watched Co'] }]);
+});
+
+test('a failed ATS company catches up from its own last success, capped by the max lookback', () => {
+  const now = Date.UTC(2026, 9, 3);
+  const window = { sharedFrom: now - 13 * HOUR, now, overlapMs: 12 * HOUR, maxLookbackMs: 14 * 24 * HOUR };
+  // Healthy (scanned in the previous run): the shared window.
+  assert.equal(companyLookbackHours({ ...window, lastSuccessAt: now - HOUR }), 13);
+  // Failed for the last three days: three days plus the overlap.
+  assert.equal(companyLookbackHours({ ...window, lastSuccessAt: now - 72 * HOUR }), 84);
+  // Failed for a month: never beyond the max lookback.
+  assert.equal(companyLookbackHours({ ...window, lastSuccessAt: now - 30 * 24 * HOUR }), 14 * 24);
+  // Never succeeded (new company): the shared window.
+  assert.equal(companyLookbackHours({ ...window, lastSuccessAt: null }), 13);
+});
+
+test('ATS scan gives each company its own window and reports which ones catch up', async () => {
+  const now = Date.now();
+  const store = {
+    listWatchedCompanySources: () => [],
+    getCompanyLastSuccessTimes: () => new Map([['healthy co', now - HOUR], ['failed co', now - 72 * HOUR]]),
+    recordSighting: (input) => ({ jobKey: input.url, canonicalUrl: input.url, isNew: true }),
+  };
+  let seen;
+  const runScan = async (_args, options) => {
+    seen = { healthy: options.maxAgeHoursFor('Healthy Co'), failed: options.maxAgeHoursFor('Failed Co.') };
+    return { offers: [], stats: {}, errors: [] };
+  };
+  const result = await scanAts({ store, lookbackHours: 13, runScan,
+    companyWindow: { sharedFrom: now - 13 * HOUR, now, overlapMs: 12 * HOUR, maxLookbackMs: 14 * 24 * HOUR } });
+
+  assert.deepEqual(seen, { healthy: 13, failed: 84 });
+  assert.deepEqual(result.catchUp, [{ company: 'Failed Co.', hours: 84 }]);
+});
+
+test('a browser-rendered company is scanned at most every few hours and keeps its catch-up window', async () => {
+  const now = Date.now();
+  const health = [];
+  const store = {
+    listWatchedCompanySources: () => [
+      { name: 'Rendered Co', provider: 'official-html', careers_url: 'https://rendered.example/careers', render_with_browser: true, enabled: true },
+      { name: 'Api Co', provider: 'lever', careers_url: 'https://jobs.lever.co/api', enabled: true },
+    ],
+    getCompanyLastSuccessTimes: () => new Map([['rendered co', now - HOUR], ['api co', now - HOUR]]),
+    recordCompanyScanResults(result) { health.push(result); },
+    recordSighting: (input) => ({ jobKey: input.url, canonicalUrl: input.url, isNew: true }),
+  };
+  let scanned;
+  const runScan = async (_args, options) => {
+    scanned = options.additionalCompanies.filter((company) => options.shouldScan(company)).map((company) => company.name);
+    return { offers: [], stats: {}, errors: [] };
+  };
+  const result = await scanAts({ store, lookbackHours: 13, runScan,
+    companyWindow: { sharedFrom: now - 13 * HOUR, now, overlapMs: 12 * HOUR, maxLookbackMs: 14 * 24 * HOUR } });
+
+  assert.deepEqual(scanned, ['Api Co']);
+  assert.deepEqual(result.skippedBrowser, ['Rendered Co']);
+  // Not recorded as scanned, so its last success (and catch-up window) stays.
+  assert.deepEqual(health[0].scannedNames, ['Api Co']);
 });
 
 test('ATS catalogue merges approved database sources without rescanning configured boards', () => {

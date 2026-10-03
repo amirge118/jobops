@@ -348,10 +348,14 @@ export async function scanLinkedIn({
   fetchImpl = globalThis.fetch,
   sleep,
   now = Date.now(),
+  // { until, reason } from an earlier run's block: no request is sent, and
+  // coverage is not advanced, so the next run fills the gap.
+  cooldown = null,
 }) {
   const windowSettings = linkedinWindowSettings(config);
   const linkedin = config.sources?.linkedin || {};
   const budget = createLinkedInBudget(linkedin.limits || {});
+  if (cooldown && now < cooldown.until) budget.haltedBy = 'cooldown';
   const passesArea = buildLinkedInAreaFilter(linkedin.acceptedAreas || DEFAULT_LINKEDIN_AREAS);
   const searches = store.listLinkedInSearches().filter((search) => search.enabled);
   // Title scope lives only in config (it filters results, it is not part of
@@ -375,7 +379,7 @@ export async function scanLinkedIn({
       const sighting = store.recordSighting({
         url: card.url, company: card.company, title: card.title, source, seenAt: now,
       });
-      store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, seenAt: now });
+      store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, postedAgeMs: card.postedAgeMs, seenAt: now });
       counts[sighting.isNew ? 'new' : 'known'] += 1;
       if (!sighting.isNew) continue;
       const filterReason = !inScope(card.title) ? 'scope' : !passesTitle(card.title) ? 'title'

@@ -209,7 +209,7 @@ elements.body.addEventListener('click', async (event) => {
     elements.feedback.dataset.state = '';
     if (decision === 'interested') {
       await openAndArchiveJob(job, (jobKey) => decideJob(jobKey, decision));
-      elements.feedback.textContent = 'נרשם כמעניין והמשרה נפתחה בלשונית חדשה.';
+      elements.feedback.innerHTML = 'נרשם כמעניין והמשרה נפתחה בלשונית חדשה. החברה הוצעה למעקב — <a href="/companies">לאישור בעמוד החברות</a>.';
       return;
     }
     if (decision === 'company_candidate') {

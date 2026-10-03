@@ -1,6 +1,27 @@
 import { runPortalScan } from '../../scan.mjs';
+import { normalizeCompanyIdentity } from '../company-registry.mjs';
 
-export async function scanAts({ store, lookbackHours, runScan = runPortalScan }) {
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Per-company ATS progress. Each company starts from its own last successful
+ * scan (minus the overlap), never later than the shared window and never
+ * earlier than the max lookback. So a company that failed catches up on its
+ * own next time, and its failure no longer has to hold back every other
+ * company's window. Companies that never succeeded use the shared window.
+ */
+export function companyLookbackHours({ lastSuccessAt, sharedFrom, now, overlapMs, maxLookbackMs }) {
+  const from = lastSuccessAt == null ? sharedFrom : Math.min(sharedFrom, lastSuccessAt - overlapMs);
+  return Math.ceil((now - Math.max(from, now - maxLookbackMs)) / HOUR_MS);
+}
+
+// A company rendered in a headless browser costs a whole Chromium page, so
+// with hourly ATS runs it is scanned only once this many hours have passed
+// since its last success. Skipping keeps its old last success, so its own
+// window still covers the hours in between.
+export const BROWSER_SCAN_INTERVAL_HOURS = 6;
+
+export async function scanAts({ store, lookbackHours, companyWindow = null, runScan = runPortalScan }) {
   // The unified SQLite store owns dedup. Legacy pipeline/history files must not
   // hide jobs that have never reached the unified evaluation flow.
   const args = ['--dry-run', '--quiet', '--ignore-history'];
@@ -9,10 +30,30 @@ export async function scanAts({ store, lookbackHours, runScan = runPortalScan })
   const watchedCompanies = typeof store.listWatchedCompanySources === 'function'
     ? store.listWatchedCompanySources()
     : [];
-  const result = await runScan(args, { additionalCompanies: watchedCompanies });
+  const lastSuccess = companyWindow && typeof store.getCompanyLastSuccessTimes === 'function'
+    ? store.getCompanyLastSuccessTimes()
+    : null;
+  const catchUp = new Map();
+  const skipped = new Set();
+  const options = { additionalCompanies: watchedCompanies };
+  if (lastSuccess) {
+    options.shouldScan = (company) => {
+      if (company.render_with_browser !== true) return true;
+      const last = lastSuccess.get(normalizeCompanyIdentity(company.name));
+      if (last == null || companyWindow.now - last >= BROWSER_SCAN_INTERVAL_HOURS * HOUR_MS) return true;
+      skipped.add(company.name);
+      return false;
+    };
+    options.maxAgeHoursFor = (name) => {
+      const hours = companyLookbackHours({ ...companyWindow, lastSuccessAt: lastSuccess.get(normalizeCompanyIdentity(name)) ?? null });
+      if (hours > lookbackHours) catchUp.set(name, hours);
+      return hours;
+    };
+  }
+  const result = await runScan(args, options);
   if (typeof store.recordCompanyScanResults === 'function') {
     store.recordCompanyScanResults({
-      scannedNames: watchedCompanies.map((company) => company.name),
+      scannedNames: watchedCompanies.map((company) => company.name).filter((name) => !skipped.has(name)),
       errorNames: (result.errors || []).map((error) => error.company),
     });
   }
@@ -42,5 +83,7 @@ export async function scanAts({ store, lookbackHours, runScan = runPortalScan })
   }
   const unique = [...byKey.values()];
   return { source: 'ats', candidates, stats: result.stats, errors: result.errors,
+    catchUp: [...catchUp].map(([company, hours]) => ({ company, hours })),
+    skippedBrowser: [...skipped],
     discovery: { found: unique.length, new: unique.filter((candidate) => candidate.isNew).length, known: unique.filter((candidate) => !candidate.isNew).length } };
 }

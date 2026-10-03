@@ -3,7 +3,8 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Boom } from '@hapi/boom';
-import { DisconnectReason } from '@whiskeysockets/baileys';
+import { DisconnectReason, jidNormalizedUser } from '@whiskeysockets/baileys';
+import { notificationSettings, sendPendingNotifications } from './notifications.mjs';
 
 import { loadJobsConfig } from './config.mjs';
 import { describeFailure } from './diagnostics.mjs';
@@ -37,6 +38,12 @@ export function discardExpiredWhatsAppBacklog({ store, retentionDays = 7, now = 
     beforeTs,
     retentionDays: days,
   };
+}
+
+// The account's own chat ("Message yourself"), from the connected socket.
+export function ownJidOf(sock) {
+  const id = sock?.user?.id;
+  return id ? jidNormalizedUser(id) : null;
 }
 
 function statusCodeFor(lastDisconnect) {
@@ -156,6 +163,7 @@ export async function runWhatsAppCollector({
   if (!whatsapp.authAbsPath) throw new Error('WhatsApp authPath is not configured.');
 
   const collectorConfig = whatsapp.collector || {};
+  const notify = notificationSettings(config).enabled;
   const groups = whatsapp.groups || [];
   const groupJids = new Set(groups.map((group) => group.jid));
   const runId = Number(store.startCollectorRun({ groupsExpected: groups.length }));
@@ -318,6 +326,12 @@ export async function runWhatsAppCollector({
           if (outcome.type === 'stop') break;
           if (outcome.type === 'close') { lastDisconnect = outcome.value; break; }
           await processNextHistoryRequest({ config, store, sock: connected, collectorRunId: runId });
+          if (notify) {
+            const result = await sendPendingNotifications({ store, sock: connected, ownJid: ownJidOf(connected), now });
+            if (result.sent || result.failed) {
+              store.recordCollectorEvent(runId, { stage: 'notifications', status: result.failed ? 'partial' : 'complete', count: result.sent, details: result });
+            }
+          }
         }
         connectionActive = false;
         if (stopping) break;

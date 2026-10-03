@@ -19,6 +19,10 @@ const elements = {
   sourceCompanies: document.querySelector('#source-companies'),
   sourceExclusive: document.querySelector('#source-exclusive-body'),
   sourceNote: document.querySelector('#source-value-note'),
+  speedCards: document.querySelector('#speed-cards'),
+  speedLatency: document.querySelector('#speed-latency-body'),
+  speedFirst: document.querySelector('#speed-first-body'),
+  speedUnwatched: document.querySelector('#speed-unwatched'),
 };
 
 const decisionLabels = {
@@ -137,9 +141,58 @@ function renderSourceValue(value) {
     + 'הנתונים נאספים במלואם מ-29.9.2026; לפני כן חלק מההיסטוריה לא נשמרה.';
 }
 
+function hoursText(value) {
+  if (value == null) return '—';
+  if (Math.abs(value) < 1) return `${Math.round(value * 60)} דק׳`;
+  return `${value.toFixed(1)} שע׳`;
+}
+
+function renderSpeed(speed) {
+  if (!speed) return;
+  const { coverage, outcomes, linkedinLag } = speed;
+  const coverageState = coverage.positive && coverage.watched / coverage.positive < 0.5 ? 'warn' : 'ok';
+  const outcomeState = outcomes.positive && outcomes.tracked / outcomes.positive < 0.5 ? 'warn' : 'ok';
+  const applied = Object.values(outcomes.byStatus).reduce((sum, count) => sum + count, 0);
+  elements.speedCards.innerHTML = [
+    calibrationCard(
+      'משרות שעניינו אותך — מחברות שבמעקב',
+      `${coverage.watched}/${coverage.positive}`,
+      coverageState === 'warn' ? 'רוב החברות שמעניינות אותך לא נסרקות ישירות; עמוד החברה מקדים את LinkedIn. אשר אותן בעמוד החברות.' : 'רוב החברות שמעניינות אותך כבר נסרקות ישירות.',
+      coverageState,
+    ),
+    calibrationCard(
+      'LinkedIn: מפרסום עד שראינו (לפחות)',
+      linkedinLag.count ? hoursText(linkedinLag.medianHours) : '—',
+      linkedinLag.count ? `חציון על ${linkedinLag.count} משרות; רבע מהן אחרי ${hoursText(linkedinLag.p75Hours)} ומעלה.` : 'נמדד מעכשיו לפי "לפני N שעות" בכרטיס; יופיע אחרי הסריקות הבאות.',
+      linkedinLag.medianHours > 4 ? 'warn' : 'ok',
+    ),
+    calibrationCard(
+      'מה קרה אחרי "מעניין אותי"',
+      `${applied}/${outcomes.positive}`,
+      outcomeState === 'warn' ? `רק ${outcomes.tracked} מהן מופיעות ב-data/applications.md. עדכן הגשות ותשובות (/track) כדי לדעת איזה מקור מביא ראיונות.`
+        : `הוגשו ${outcomes.byStatus.applied}, תשובה ${outcomes.byStatus.responded}, ראיון ${outcomes.byStatus.interview}, הצעה ${outcomes.byStatus.offer}.`,
+      outcomeState,
+    ),
+  ].join('');
+  elements.speedLatency.innerHTML = speed.decisionLatency.map((row) => `<tr><td>${escapeHtml(sourceLabels[row.source] || row.source)}</td><td>${row.count}</td><td>${hoursText(row.medianHours)}</td><td>${hoursText(row.p75Hours)}</td></tr>`).join('');
+  elements.speedFirst.innerHTML = speed.firstSeen.length
+    ? speed.firstSeen.map((row) => {
+      const leftLabel = sourceLabels[row.left] || row.left;
+      const rightLabel = sourceLabels[row.right] || row.right;
+      const leftWins = row.leftFirst * 2 >= row.count;
+      const lead = Math.abs(row.medianLeadHours ?? 0);
+      return `<tr><td>${escapeHtml(leftLabel)} מול ${escapeHtml(rightLabel)}</td><td>${row.count}</td><td>${escapeHtml(leftWins ? leftLabel : rightLabel)} (${leftWins ? row.leftFirst : row.count - row.leftFirst}/${row.count})</td><td>${hoursText(lead)}</td></tr>`;
+    }).join('')
+    : '<tr><td colspan="4" class="stats-muted">עדיין אין משרות שנמצאו ביותר ממקור אחד.</td></tr>';
+  elements.speedUnwatched.innerHTML = coverage.topUnwatched.length
+    ? `<p class="stats-subtitle">חברות שעניינו אותך ולא במעקב</p><div class="company-chips">${coverage.topUnwatched.map((row) => `<span>${escapeHtml(row.company)}${row.count > 1 ? ` <b>×${row.count}</b>` : ''}</span>`).join('')}</div>`
+    : '';
+}
+
 function render() {
   if (!stats) return;
   renderSourceValue(stats.sourceValue);
+  renderSpeed(stats.speed);
   const windowStats = stats.windows[selectedWindow];
   elements.total.textContent = windowStats.total;
   elements.positive.textContent = windowStats.positive;

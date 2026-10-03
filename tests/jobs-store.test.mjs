@@ -7,9 +7,12 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 
+let lastStorePath = null;
+
 function newStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-store-'));
-  return createJobStore(path.join(dir, 'jobs.db'));
+  lastStorePath = path.join(dir, 'jobs.db');
+  return createJobStore(lastStorePath);
 }
 
 test('job store deduplicates tracking variants and remembers presentation state', () => {
@@ -315,6 +318,24 @@ test('jobs whose page or scoring failed remain available for a later retry', () 
   assert.equal(evaluated.last_error_reason, null);
   assert.deepEqual(store.listPendingEvaluation(), []);
   store.close();
+});
+
+test('a rejected job whose re-check failed is retried under its latest sighting source', () => {
+  const store = newStore();
+  const sighting = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/1', source: 'LinkedIn: Backend', seenAt: 1_000 });
+  store.saveEvaluation(sighting.jobKey, {
+    company: 'Example', title: 'Backend Engineer', summary: 'x', score: 2, fitLabel: 'לא מתאים',
+    decisionReason: 'x', suitable: false, applyUrl: sighting.canonicalUrl, activeStatus: 'active',
+    contentHash: 'c1', profileHash: 'p1', criteriaVersion: 'v1', evaluatedAt: 2_000,
+  });
+  store.close();
+  // Reopening applies the rejected-job cleanup, which empties sources_json.
+  const reopened = createJobStore(lastStorePath);
+  reopened.markEvaluationFailure(sighting.jobKey, { code: 'timeout', reason: 'x', attemptedAt: 3_000 });
+
+  assert.equal(reopened.getJob(sighting.jobKey).sources_json, '[]');
+  assert.deepEqual(reopened.listPendingEvaluation().map((job) => job.source), ['LinkedIn: retry']);
+  reopened.close();
 });
 
 test('a failed re-evaluation keeps the previous decision and remains retryable', () => {
@@ -797,5 +818,30 @@ test('a run that only fell short on LinkedIn still anchors the ATS/WhatsApp wind
   const failed = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
   store.finishRun(failed, { status: 'incomplete', windowStatus: 'incomplete', finishedAt: 20 });
   assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp'])?.id, runId);
+  store.close();
+});
+
+test('an interesting job suggests its company as a candidate, never demoting a watched one', () => {
+  const store = newStore();
+  const evaluate = (url, company) => {
+    const sighting = store.recordSighting({ url, company, title: 'Backend Engineer', source: 'LinkedIn: Backend', seenAt: 1_000 });
+    store.saveEvaluation(sighting.jobKey, {
+      company, title: 'Backend Engineer', summary: 'x', score: 4.2, fitLabel: 'מתאים', decisionReason: 'x',
+      suitable: true, applyUrl: url, activeStatus: 'active', contentHash: 'c', profileHash: 'p',
+      criteriaVersion: 'v1', evaluatedAt: 2_000,
+    });
+    return sighting.jobKey;
+  };
+
+  const suggested = store.suggestCompanyForJob(evaluate('https://jobs.lever.co/acme/1', 'Acme'));
+  assert.equal(suggested.name, 'Acme');
+  assert.equal(suggested.status, 'candidate');
+
+  store.approveCompany(suggested.id);
+  const again = store.suggestCompanyForJob(evaluate('https://jobs.lever.co/acme/2', 'Acme'));
+  assert.equal(again.status, 'watched');
+
+  // A job that cannot resolve a company is skipped, not an error.
+  assert.equal(store.suggestCompanyForJob('0'.repeat(24)), null);
   store.close();
 });

@@ -543,6 +543,8 @@ export function createDashboardServer({
         }
         const store = createJobStore(config.jobsDbPath);
         try {
+          // Before archiving: the job must still be active to resolve its company.
+          if (body.decision === 'interested') store.suggestCompanyForJob(decisionMatch[1]);
           if (!store.decideJob(decisionMatch[1], body.decision)) {
             sendJson(response, 404, { error: 'המשרה לא נמצאה או שכבר הועברה לארכיון' });
             return;

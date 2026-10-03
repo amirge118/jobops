@@ -489,7 +489,10 @@ export function mergeTrackedCompanies(configured = [], additional = []) {
   return merged;
 }
 
-export async function runPortalScan(args = [], { additionalCompanies = [] } = {}) {
+// `maxAgeHoursFor(companyName)` gives one company its own recency window (its
+// own catch-up after a failed scan); it returns null to use the shared one.
+// `shouldScan(company)` returning false skips a company for this run only.
+export async function runPortalScan(args = [], { additionalCompanies = [], maxAgeHoursFor = null, shouldScan = null } = {}) {
   const log = args.includes('--quiet') ? () => {} : console.log;
   const dryRun = args.includes('--dry-run');
   const verify = args.includes('--verify');
@@ -545,6 +548,7 @@ export async function runPortalScan(args = [], { additionalCompanies = [] } = {}
       continue;
     }
     if (filterCompany && !company.name.toLowerCase().includes(filterCompany)) continue;
+    if (shouldScan && !shouldScan(company)) continue;
     const resolved = resolveProvider(company, providers);
     if (!resolved) {
       skippedCount++;
@@ -581,6 +585,8 @@ export async function runPortalScan(args = [], { additionalCompanies = [] } = {}
 
   const tasks = targets.map(company => async () => {
     let provider = company._provider;
+    const companyMaxAgeHours = maxAgeHoursFor?.(company.name) ?? null;
+    const companyRecencyFilter = companyMaxAgeHours == null ? recencyFilter : buildRecencyFilter(companyMaxAgeHours);
     const ctx = makeHttpCtx();
     let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
     try {
@@ -613,7 +619,7 @@ export async function runPortalScan(args = [], { additionalCompanies = [] } = {}
           totalFilteredLocation++;
           continue;
         }
-        if (!recencyFilter(job.postedAt)) {
+        if (!companyRecencyFilter(job.postedAt)) {
           totalFilteredRecency++;
           continue;
         }

@@ -489,10 +489,10 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 /* ---- Personal area ---------------------------------------------------- */
 .improvements-table { min-width: 940px; table-layout: fixed; }
 .improvements-table th:nth-child(1) { width: 28px; }
-.improvements-table th:nth-child(2) { width: 16%; }
-.improvements-table th:nth-child(3) { width: 13%; }
-.improvements-table th:nth-child(4) { width: 38%; }
-.improvements-table th:nth-child(5) { width: 15%; }
+.improvements-table th:nth-child(2) { width: 18%; }
+.improvements-table th:nth-child(3) { width: 48%; }
+.improvements-table th:nth-child(4) { width: 18%; }
+.improvements-count { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
 .improvement-row { cursor: grab; }
 .improvement-row.is-dragging { opacity: 0.4; background: var(--hover); }
 .drag-handle { color: var(--faint); text-align: center; cursor: grab; user-select: none; }
