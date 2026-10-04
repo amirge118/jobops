@@ -143,8 +143,10 @@ The dashboard runs only on `127.0.0.1:4177` and redirects `/` to `/scan`; the fo
 - `/companies` — inspect the watchlist, resolve a careers URL, and explicitly approve sources.
 - `/personal-area` — "what's missing for a perfect fit": gap terms aggregated across every analyzed
   suitable job (`GET /api/personal-area/insights`, `scripts/jobs/gap-insights.mjs`) in three ranked
-  tables (tools, experience, screening keywords), above the manual tracking list fed from the
-  Decisions page or those tables.
+  tables (tools, experience, screening keywords). Each term can be marked "in progress" (it leads
+  its table) or hidden as noise (`POST /api/personal-area/term-status`, table `gap_term_statuses`,
+  keyed by the same normalized term the aggregation groups by). The older manual tracking list
+  (`personal_improvements`) is no longer read; its rows were carried over as "in progress" terms.
 - `/decision-stats` — what you did with the jobs you were shown, and where the score disagreed.
 
 All pages use the same SQLite store. A scan keeps running in the local server process when the

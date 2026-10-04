@@ -42,7 +42,8 @@ function bump(map, key) {
   map.set(key, (map.get(key) || 0) + 1);
 }
 
-export function aggregateGaps(observations, { currentResumeText = '' } = {}) {
+export function aggregateGaps(observations, { currentResumeText = '', statuses = [] } = {}) {
+  const statusOf = new Map(statuses.map((entry) => [entry.termKey, entry.status]));
   const resume = {
     text: String(currentResumeText).toLowerCase(),
     compact: termKey(currentResumeText),
@@ -107,15 +108,22 @@ export function aggregateGaps(observations, { currentResumeText = '' } = {}) {
   }
 
   const sections = Object.fromEntries(GAP_CATEGORIES.map((category) => [category, []]));
+  const hidden = [];
   for (const row of rows.values()) {
     const term = mostCommon(row.spellings, row.key);
     // Rows seen only as employer priorities are screening phrases by nature.
     const category = mostCommon(row.categories, 'keyword');
     // One job with profile evidence is enough to make it a wording fix.
     const kind = row.kinds.has('safe_addition') ? 'safe_addition' : mostCommon(row.kinds, null);
+    const status = statusOf.get(row.key) || null;
+    if (status === 'hidden') {
+      hidden.push({ term, category, jobs: row.jobWeights.size });
+      continue;
+    }
     sections[category].push({
       term,
       category,
+      status,
       kind,
       jobs: row.jobWeights.size,
       required: row.required.size,
@@ -132,7 +140,9 @@ export function aggregateGaps(observations, { currentResumeText = '' } = {}) {
     });
   }
   for (const list of Object.values(sections)) {
-    list.sort((left, right) => (Number(left.inResume) - Number(right.inResume))
+    // Terms you are working on lead, terms the resume already has trail.
+    list.sort((left, right) => (Number(right.status === 'in_progress') - Number(left.status === 'in_progress'))
+      || (Number(left.inResume) - Number(right.inResume))
       || (right.rank - left.rank)
       || ((right.jobs - right.lowWeight) - (left.jobs - left.lowWeight))
       || left.term.localeCompare(right.term));
@@ -146,5 +156,6 @@ export function aggregateGaps(observations, { currentResumeText = '' } = {}) {
       lowWeight: observations.filter((observation) => LOW_WEIGHT_DECISIONS.has(observation.decision)).length,
     },
     sections,
+    hidden: hidden.sort((left, right) => left.term.localeCompare(right.term)),
   };
 }

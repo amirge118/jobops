@@ -131,7 +131,9 @@ decide on the job. The personal area sums those checks across all of them into t
 lists — **tools you're missing**, **experience to highlight or gain**, and **keywords recruiters
 and ATS filters screen for** — each with how many jobs asked for it, how many required it, and
 whether you can add it right now (your profile already proves it), need to confirm it, or need to
-learn it. Terms already in your CV drop to the bottom, so a CV edit visibly closes the gap.
+learn it. Terms already in your CV drop to the bottom, so a CV edit visibly closes the gap. Mark
+what you're working on as "in progress" and hide what's noise; the decisions page keeps just the
+one-line estimate of whether your CV passes that job's first screen.
 
 ## A compact, dark dashboard
 

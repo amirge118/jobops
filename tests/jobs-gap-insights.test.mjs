@@ -96,3 +96,12 @@ test('jobs you passed on count as demand but at low weight, below one relevant j
   assert.deepEqual([second.term, second.rank, second.jobs, second.lowWeight], ['IVR', 1, 2, 2]);
   assert.equal(result.totals.lowWeight, 2);
 });
+
+test('hidden terms leave the lists; terms in progress lead their list', () => {
+  const result = aggregateGaps([
+    observation('a', { items: [item({ term: 'Kafka', importance: 'required' }), item({ term: 'IVR', importance: 'required' }), item({ term: 'Go' })] }),
+  ], { statuses: [{ termKey: termKey('IVR'), status: 'hidden' }, { termKey: termKey('go'), status: 'in_progress' }] });
+
+  assert.deepEqual(result.sections.tool.map((row) => [row.term, row.status]), [['Go', 'in_progress'], ['Kafka', null]]);
+  assert.deepEqual(result.hidden, [{ term: 'IVR', category: 'tool', jobs: 1 }]);
+});

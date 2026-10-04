@@ -206,53 +206,24 @@ export function createDashboardServer({
         return;
       }
 
-      if (request.method === 'GET' && url.pathname === '/api/personal-area/items') {
-        const store = createJobStore(config.jobsDbPath);
-        try { sendJson(response, 200, { items: store.listPersonalImprovements() }); }
-        finally { store.close(); }
-        return;
-      }
-
       if (request.method === 'GET' && url.pathname === '/api/personal-area/insights') {
         const resumePath = path.join(config.rootDir, 'profile', '03-current-resume.md');
         const currentResumeText = fs.existsSync(resumePath) ? fs.readFileSync(resumePath, 'utf8') : '';
         const store = createJobStore(config.jobsDbPath);
-        try { sendJson(response, 200, aggregateGaps(store.listGapObservations(), { currentResumeText })); }
+        try {
+          sendJson(response, 200, aggregateGaps(store.listGapObservations(), {
+            currentResumeText, statuses: store.listGapTermStatuses(),
+          }));
+        }
         finally { store.close(); }
         return;
       }
 
-      if (request.method === 'POST' && url.pathname === '/api/personal-area/items') {
-        const body = requireObjectBody(await readJson(request), [
-          'keyword', 'kind', 'importance', 'explanation', 'suggestion',
-          'sourceCompany', 'sourceTitle', 'sourceJobKey',
-        ]);
+      if (request.method === 'POST' && url.pathname === '/api/personal-area/term-status') {
+        const body = requireObjectBody(await readJson(request), ['term', 'status']);
         const store = createJobStore(config.jobsDbPath);
-        try {
-          const { created, item } = store.addPersonalImprovement(body);
-          sendJson(response, created ? 201 : 200, { created, item });
-        } finally { store.close(); }
-        return;
-      }
-
-      if (request.method === 'POST' && url.pathname === '/api/personal-area/items/reorder') {
-        const body = requireObjectBody(await readJson(request), ['orderedIds']);
-        const store = createJobStore(config.jobsDbPath);
-        try { sendJson(response, 200, { items: store.reorderPersonalImprovements(body.orderedIds) }); }
+        try { sendJson(response, 200, { status: store.setGapTermStatus(body.term, body.status ?? null) }); }
         finally { store.close(); }
-        return;
-      }
-
-      const personalImprovementDeleteMatch = request.method === 'DELETE'
-        ? url.pathname.match(/^\/api\/personal-area\/items\/([1-9]\d{0,8})$/)
-        : null;
-      if (personalImprovementDeleteMatch) {
-        const store = createJobStore(config.jobsDbPath);
-        try {
-          const removed = store.removePersonalImprovement(Number(personalImprovementDeleteMatch[1]));
-          if (!removed) { sendJson(response, 404, { error: 'Item was not found' }); return; }
-          sendJson(response, 200, { removed: true });
-        } finally { store.close(); }
         return;
       }
 

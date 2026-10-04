@@ -559,4 +559,13 @@ test('personal-area insights API aggregates stored gap analyses against the curr
   assert.deepEqual(insights.totals, { jobs: 1, strongFit: 1, interested: 0, lowWeight: 0 });
   assert.deepEqual(insights.sections.tool.map((row) => [row.term, row.inResume]), [['Kubernetes', false], ['AWS', true]]);
   assert.deepEqual(insights.sections.experience, []);
+
+  const post = (body) => fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/term-status`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  assert.equal((await post({ term: 'Kubernetes', status: 'hidden' })).status, 200);
+  assert.equal((await post({ term: 'Kubernetes', status: 'done' })).status, 400);
+  const after = await fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/insights`).then((response) => response.json());
+  assert.deepEqual(after.sections.tool.map((row) => row.term), ['AWS']);
+  assert.deepEqual(after.hidden.map((row) => row.term), ['Kubernetes']);
 });

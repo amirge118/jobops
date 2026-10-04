@@ -73,14 +73,15 @@ test('decisions and companies keep explicit user-controlled actions', () => {
   const decisions = readWeb('pages', 'decisions-page.js');
   const companies = readWeb('pages', 'companies-page.js');
 
-  assert.match(decisionsHtml, /<th>חברה, משרה והתאמה<\/th><th>מה חשוב להם ומה לשפר<\/th><th>פעולות<\/th>/);
+  assert.match(decisionsHtml, /<th>חברה, משרה והתאמה<\/th><th>סיכוי לעבור סינון<\/th><th>פעולות<\/th>/);
   assert.doesNotMatch(decisions, /decline-actions|לא בשבילי:'/);
-  assert.match(decisionsHtml, /מה חשוב להם ומה לשפר/);
+  assert.match(decisionsHtml, /href="\/personal-area"/);
   assert.match(decisionsHtml, /פעולות/);
   assert.doesNotMatch(decisionsHtml, /תיאור קצר/);
   assert.doesNotMatch(decisionsHtml, /סיבת ההחלטה/);
-  assert.match(decisions, /renderResumeGap/);
-  assert.match(decisions, /renderEmployerView/);
+  // Per-job gaps live, aggregated, in the personal area; decisions keep only the screen estimate.
+  assert.match(decisions, /renderScreenPass/);
+  assert.doesNotMatch(decisions, /transfer-gap-item|employer-priorities|personal-area\/items/);
   assert.match(decisions, /<details class="fit-evidence">/);
   assert.match(decisions, /השרת דורש הפעלה מחדש/);
   assert.match(decisions, /job-score-fit/);

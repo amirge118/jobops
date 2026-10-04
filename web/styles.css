@@ -382,7 +382,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 
 /* ---- Pills and badges (one shape everywhere) --------------------------- */
 .coverage-pill, .fit-pill, .company-status, .decision-pill, .source-badge,
-.gap-kind, .gap-importance, .priority-weight, .priority-coverage {
+.gap-kind {
   display: inline-flex;
   align-items: center;
   height: 20px;
@@ -396,17 +396,12 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 }
 .coverage-pill[data-state="complete"], .fit-pill.is-suitable, .company-status[data-state="watched"],
 .decision-pill[data-decision="interested"], .decision-pill[data-decision="company_candidate"],
-.source-badge[data-source="whatsapp"], .resume-gap-item[data-kind="safe_addition"] .gap-kind,
-.improvements-table .gap-kind[data-kind="safe_addition"],
-.employer-priorities li[data-coverage="strong"] .priority-coverage { background: var(--accent-soft); color: var(--accent-text); }
+.source-badge[data-source="whatsapp"] { background: var(--accent-soft); color: var(--accent-text); }
 .coverage-pill[data-state="partial"], .coverage-pill[data-state="unknown"], .company-status[data-state="paused"],
-.decision-pill[data-decision="too_senior"], .resume-gap-item[data-kind="experience_gap"] .gap-kind,
-.improvements-table .gap-kind[data-kind="experience_gap"],
-.employer-priorities li[data-coverage="missing"] .priority-coverage { background: var(--gold-soft); color: var(--gold); }
+.decision-pill[data-decision="too_senior"] { background: var(--gold-soft); color: var(--gold); }
 .coverage-pill[data-state="failed"] { background: var(--red-soft); color: var(--red); }
 .source-badge, .gap-kind { background: var(--blue-soft); color: var(--blue); }
 .source-badge[data-source="linkedin"] { background: rgba(110, 168, 254, 0.16); color: #8dbbff; }
-.priority-weight[data-weight="critical"] { background: var(--violet-soft); color: var(--violet); }
 .source-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 
 /* ---- Decisions -------------------------------------------------------- */
@@ -417,9 +412,9 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .job-title { display: block; margin-top: 1px; font-weight: 600; }
 .score { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .decisions-table { min-width: 1000px; table-layout: fixed; }
-.decisions-table th:nth-child(1) { width: 20%; }
-.decisions-table th:nth-child(2) { width: 58%; }
-.decisions-table th:nth-child(3) { width: 22%; }
+.decisions-table th:nth-child(1) { width: 34%; }
+.decisions-table th:nth-child(2) { width: 40%; }
+.decisions-table th:nth-child(3) { width: 26%; }
 .job-identity { min-width: 170px; }
 .job-score-fit { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .job-score-fit .score { color: var(--accent-text); font-size: 18px; line-height: 1; }
@@ -449,21 +444,9 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .job-open { border-color: var(--line-strong); color: var(--ink); }
 
 .resume-gap-cell { padding-block: 8px; }
-.resume-gap-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
-.resume-gap-item { display: flex; flex-direction: column; }
-.resume-gap-item .transfer-gap-item { margin-top: auto; }
-.resume-gap-item small { margin-bottom: 6px; }
-.resume-gap-item { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }
-.resume-gap-item > div { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
-.resume-gap-item strong { display: block; font-size: 13px; }
-.resume-gap-item p { margin: 2px 0; font-size: 12px; line-height: 1.45; }
-.resume-gap-item small { display: block; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .resume-gap-state { display: grid; gap: 2px; padding: 8px 10px; border: 1px dashed var(--line-strong); border-radius: var(--r-sm); color: var(--muted); font-size: 11px; }
 .resume-gap-state strong { color: var(--ink); font-size: 12px; }
-.resume-gap-state.is-clear { border-style: solid; border-color: transparent; background: var(--accent-soft); }
 .resume-gap-state.is-failed { border-style: solid; border-color: transparent; background: var(--red-soft); }
-.transfer-gap-item { width: 100%; margin-top: 6px; }
-.transfer-gap-item.is-transferred { border-color: rgba(60, 198, 138, 0.4); background: var(--accent-soft); color: var(--accent-text); }
 .fit-evidence { width: 100%; max-width: 260px; color: var(--muted); font-size: 11px; }
 .fit-evidence summary { font-size: 11px; }
 .fit-evidence ul { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
@@ -474,41 +457,34 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .fit-uncertainties-title { margin: 6px 0 0; color: var(--ink); font-weight: 500; }
 .fit-evidence .fit-uncertainties { gap: 2px; padding-inline-start: 14px; list-style: disc; }
 .fit-evidence .fit-uncertainties li { display: list-item; }
-.employer-view { display: grid; gap: 6px; margin-bottom: 6px; }
 .screen-pass { display: grid; gap: 1px; padding: 6px 10px; border-radius: var(--r-sm); background: var(--blue-soft); font-size: 11px; }
 .screen-pass strong { font-size: 12px; }
 .screen-pass[data-level="high"] { background: var(--accent-soft); }
 .screen-pass[data-level="low"] { background: var(--red-soft); }
-.employer-priorities { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }
-.employer-priorities-title { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
-.employer-priorities ol { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 20px; margin: 0; padding-inline-start: 16px; }
-.employer-priorities li > div { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.employer-priorities strong { font-size: 12px; }
-.employer-priorities small { display: block; color: var(--muted); font-size: 11px; line-height: 1.4; }
 
 /* ---- Personal area ---------------------------------------------------- */
-.improvements-table { min-width: 940px; table-layout: fixed; }
-.improvements-table th:nth-child(1) { width: 28px; }
-.improvements-table th:nth-child(2) { width: 18%; }
-.improvements-table th:nth-child(3) { width: 48%; }
-.improvements-table th:nth-child(4) { width: 18%; }
 .improvements-count { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
-.improvement-row { cursor: grab; }
-.improvement-row.is-dragging { opacity: 0.4; background: var(--hover); }
-.drag-handle { color: var(--faint); text-align: center; cursor: grab; user-select: none; }
 .improvement-keyword { font-weight: 600; }
 .improvement-detail p { margin: 0 0 2px; font-size: 12px; line-height: 1.45; }
 .improvement-detail small { display: block; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .improvement-source { color: var(--muted); font-size: 12px; }
 .insights-summary h2 { margin: 0; font-size: 16px; }
 .insights-summary p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
-.tracking-heading { padding: 8px 2px 0; }
 .gap-insights-table { min-width: 940px; table-layout: fixed; }
 .gap-insights-table th:nth-child(1) { width: 16%; }
 .gap-insights-table th:nth-child(2) { width: 8%; }
 .gap-insights-table th:nth-child(3) { width: 14%; }
 .gap-insights-table th:nth-child(4) { width: 38%; }
-.gap-insights-table th:nth-child(6) { width: 84px; }
+.gap-insights-table th:nth-child(6) { width: 92px; }
+.term-actions { display: grid; gap: 4px; }
+.term-badge { margin-inline-start: 6px; padding: 1px 6px; border-radius: 999px; background: var(--violet-soft); color: var(--violet); font-size: 10px; font-weight: 600; }
+.gap-insight-row[data-status="in_progress"] { background: rgba(255, 255, 255, 0.02); }
+.hidden-terms { padding: 8px 2px; color: var(--muted); font-size: 12px; }
+.hidden-terms[hidden] { display: none; }
+.hidden-terms summary { cursor: pointer; }
+.hidden-terms ul { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+.hidden-terms li { display: flex; align-items: center; gap: 8px; }
+.hidden-terms li span { color: var(--ink); }
 .gap-insight-jobs strong { font-variant-numeric: tabular-nums; }
 .gap-insight-jobs small { display: block; color: var(--muted); font-size: 11px; }
 .gap-insight-row[data-in-resume="true"] { opacity: 0.6; }

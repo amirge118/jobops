@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 import { canonicalizeJobUrl, companyIdentityKey, normalizeCompanyRole, resumeGapInputHash } from './core.mjs';
+import { termKey } from './gap-insights.mjs';
 import {
   COMPANY_STATUSES,
   CompanyRegistryError,
@@ -194,8 +195,7 @@ function mapCompany(row, sources = []) {
   };
 }
 
-const PERSONAL_IMPROVEMENT_KINDS = new Set(['safe_addition', 'experience_gap', 'needs_confirmation']);
-const PERSONAL_IMPROVEMENT_IMPORTANCE = new Set(['required', 'preferred']);
+export const GAP_TERM_STATUSES = new Set(['in_progress', 'hidden']);
 export const JOB_DECISIONS = new Set(['interested', 'company_candidate', 'company_not_interesting', 'too_senior', 'not_relevant']);
 const FIT_DIMENSION_KEYS = ['cvMatch', 'seniority', 'roleScope', 'location', 'sector'];
 
@@ -219,22 +219,6 @@ function mapJobDecision(row) {
 
 function compactText(value, limit) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
-}
-
-function mapPersonalImprovement(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    keyword: row.keyword,
-    kind: row.kind,
-    importance: row.importance,
-    explanation: row.explanation,
-    suggestion: row.suggestion,
-    sourceCompany: row.source_company,
-    sourceTitle: row.source_title,
-    sourceJobKey: row.source_job_key,
-    createdAt: row.created_at,
-  };
 }
 
 function mapWhatsAppHistoryGroup(row) {
@@ -519,6 +503,8 @@ export function createJobStore(databasePath) {
     CREATE INDEX IF NOT EXISTS company_job_sources_company_idx
       ON company_job_sources(company_id, enabled);
 
+    -- Legacy manual tracking list, replaced by gap_term_statuses. No code
+    -- reads it any more; it is kept only so its rows are never lost.
     CREATE TABLE IF NOT EXISTS personal_improvements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       keyword TEXT NOT NULL,
@@ -543,6 +529,13 @@ export function createJobStore(databasePath) {
     -- personal area can aggregate gaps across jobs after they are decided
     -- and archived. Holds only the model's short gap terms and notes, never
     -- page text.
+    CREATE TABLE IF NOT EXISTS gap_term_statuses (
+      term_key TEXT PRIMARY KEY,
+      term TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('in_progress', 'hidden')),
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS gap_observations (
       job_key TEXT PRIMARY KEY,
       company TEXT,
@@ -3361,58 +3354,27 @@ export function createJobStore(databasePath) {
       return db.prepare('SELECT * FROM linkedin_postings WHERE linkedin_id = ?').get(String(linkedinId)) ?? null;
     },
 
-    listPersonalImprovements() {
-      return db.prepare('SELECT * FROM personal_improvements ORDER BY position ASC, id ASC')
-        .all().map(mapPersonalImprovement);
+    // The user's own state per aggregated gap term: working on it, or hidden
+    // as noise. Keyed by the same normalization the aggregation groups by.
+    listGapTermStatuses() {
+      return db.prepare('SELECT term_key AS termKey, term, status, updated_at AS updatedAt FROM gap_term_statuses').all();
     },
 
-    addPersonalImprovement(input, at = Date.now()) {
-      const keyword = compactText(input?.keyword, 100);
-      const explanation = compactText(input?.explanation, 280);
-      const suggestion = compactText(input?.suggestion, 280);
-      if (!keyword || !explanation || !suggestion) {
-        throw Object.assign(new Error('keyword, explanation and suggestion are required'), { statusCode: 400 });
+    setGapTermStatus(term, status, at = Date.now()) {
+      const key = termKey(term);
+      if (!key) throw Object.assign(new Error('term is required'), { statusCode: 400 });
+      if (status == null) {
+        db.prepare('DELETE FROM gap_term_statuses WHERE term_key = ?').run(key);
+        return null;
       }
-      const kind = PERSONAL_IMPROVEMENT_KINDS.has(input?.kind) ? input.kind : 'needs_confirmation';
-      const importance = PERSONAL_IMPROVEMENT_IMPORTANCE.has(input?.importance) ? input.importance : 'preferred';
-      const sourceCompany = compactText(input?.sourceCompany, 200) || null;
-      const sourceTitle = compactText(input?.sourceTitle, 200) || null;
-      const sourceJobKey = compactText(input?.sourceJobKey, 64) || null;
-
-      const existing = db.prepare(
-        'SELECT * FROM personal_improvements WHERE keyword = ? AND source_job_key IS ?',
-      ).get(keyword, sourceJobKey);
-      if (existing) return { created: false, item: mapPersonalImprovement(existing) };
-
-      const insert = db.transaction(() => {
-        const nextPosition = (db.prepare('SELECT MAX(position) AS maxPosition FROM personal_improvements').get()?.maxPosition ?? -1) + 1;
-        const result = db.prepare(`
-          INSERT INTO personal_improvements (
-            keyword, kind, importance, explanation, suggestion,
-            source_company, source_title, source_job_key, position, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(keyword, kind, importance, explanation, suggestion, sourceCompany, sourceTitle, sourceJobKey, nextPosition, at);
-        return db.prepare('SELECT * FROM personal_improvements WHERE id = ?').get(result.lastInsertRowid);
-      });
-      return { created: true, item: mapPersonalImprovement(insert()) };
-    },
-
-    removePersonalImprovement(id) {
-      const result = db.prepare('DELETE FROM personal_improvements WHERE id = ?').run(Number(id));
-      return result.changes > 0;
-    },
-
-    reorderPersonalImprovements(orderedIds) {
-      const ids = (Array.isArray(orderedIds) ? orderedIds : []).map(Number).filter(Number.isInteger);
-      const current = db.prepare('SELECT id FROM personal_improvements').all().map((row) => row.id);
-      if (ids.length !== current.length || !current.every((id) => ids.includes(id))) {
-        throw Object.assign(new Error('orderedIds must include every existing item exactly once'), { statusCode: 400 });
+      if (!GAP_TERM_STATUSES.has(status)) {
+        throw Object.assign(new Error(`Unknown gap term status: ${status}`), { statusCode: 400 });
       }
-      const update = db.prepare('UPDATE personal_improvements SET position = ? WHERE id = ?');
-      db.transaction(() => {
-        ids.forEach((id, index) => update.run(index, id));
-      })();
-      return this.listPersonalImprovements();
+      db.prepare(`
+        INSERT INTO gap_term_statuses (term_key, term, status, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(term_key) DO UPDATE SET term = excluded.term, status = excluded.status, updated_at = excluded.updated_at
+      `).run(key, compactText(term, 100), status, at);
+      return { termKey: key, term: compactText(term, 100), status, updatedAt: at };
     },
 
     close() {

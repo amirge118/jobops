@@ -13,13 +13,6 @@ const elements = {
   updated: document.querySelector('#last-updated'),
 };
 let jobs = [];
-let transferredKeys = new Set();
-
-const gapLabels = {
-  safe_addition: 'אפשר להוסיף בבטחה',
-  experience_gap: 'פער ניסיון',
-  needs_confirmation: 'דורש אימות',
-};
 
 const declineLabels = {
   company_not_interesting: 'חברה לא מעניינת',
@@ -37,8 +30,6 @@ const screenLabels = {
   low: 'סיכוי נמוך לעבור סינון',
 };
 
-const weightLabels = { critical: 'קריטי', important: 'חשוב', nice: 'יתרון' };
-const coverageLabels = { strong: 'מופיע בקו״ח', partial: 'חלקי בקו״ח', missing: 'חסר בקו״ח' };
 
 const dimensionLabels = {
   cvMatch: 'התאמת קו״ח',
@@ -47,10 +38,6 @@ const dimensionLabels = {
   location: 'מיקום',
   sector: 'תחום',
 };
-
-function gapKey(jobKey, keyword) {
-  return `${jobKey}::${keyword}`;
-}
 
 function renderFitEvidence(fitBreakdown) {
   if (!fitBreakdown) return '';
@@ -63,51 +50,23 @@ function renderFitEvidence(fitBreakdown) {
   return `<details class="fit-evidence"><summary>למה הציון?</summary><ul>${rows}</ul>${uncertainties ? `<p class="fit-uncertainties-title">לא ברור מהמשרה</p><ul class="fit-uncertainties">${uncertainties}</ul>` : ''}</details>`;
 }
 
-function renderEmployerView(resumeGap) {
-  const screen = resumeGap.screenPass
-    ? `<div class="screen-pass" data-level="${escapeHtml(resumeGap.screenPass.level)}"><strong>${escapeHtml(screenLabels[resumeGap.screenPass.level] || 'הערכת סינון')}</strong><span>${escapeHtml(resumeGap.screenPass.reason)}</span></div>`
-    : '';
-  const priorities = resumeGap.employerPriorities || [];
-  const list = priorities.length
-    ? `<div class="employer-priorities"><p class="employer-priorities-title">מה חשוב להם</p><ol>${priorities.map((item) => `<li data-coverage="${escapeHtml(item.coverage)}">
-      <div><strong>${escapeHtml(item.priority)}</strong><span class="priority-weight" data-weight="${escapeHtml(item.weight)}">${escapeHtml(weightLabels[item.weight] || '')}</span><span class="priority-coverage">${escapeHtml(coverageLabels[item.coverage] || '')}</span></div>
-      <small>${escapeHtml(item.note)}</small>
-    </li>`).join('')}</ol></div>`
-    : '';
-  return screen || list ? `<div class="employer-view">${screen}${list}</div>` : '';
-}
-
-function renderResumeGap(resumeGap, job) {
-  if (resumeGap?.status !== 'ready') return renderGapItems(resumeGap, job);
-  return `${renderEmployerView(resumeGap)}${renderGapItems(resumeGap, job)}`;
-}
-
-function renderGapItems(resumeGap, job) {
+// Gaps themselves are aggregated across jobs in the personal area; here only
+// the recruiter-screen estimate for this one job is shown.
+function renderScreenPass(resumeGap) {
   if (!resumeGap) {
-    return '<div class="resume-gap-state is-failed"><strong>השרת דורש הפעלה מחדש</strong><span>הרץ npm run restart:local מה-Terminal כדי לטעון את הניתוח החדש.</span></div>';
+    return '<div class="resume-gap-state is-failed"><strong>השרת דורש הפעלה מחדש</strong><span>הרץ npm run restart:local מה-Terminal.</span></div>';
   }
   if (resumeGap.status === 'unavailable') {
-    return '<div class="resume-gap-state"><strong>חסר קובץ קורות חיים</strong><span>יש לעדכן את profile/03-current-resume.md כדי לקבל המלצות.</span></div>';
+    return '<div class="resume-gap-state"><strong>חסר קובץ קורות חיים</strong><span>יש לעדכן את profile/03-current-resume.md.</span></div>';
   }
   if (resumeGap.status === 'pending') {
-    return '<div class="resume-gap-state"><strong>ממתין לניתוח</strong><span>הפערים ינותחו בסריקה הבאה.</span></div>';
+    return '<div class="resume-gap-state"><strong>ממתין לניתוח</strong><span>ההערכה תחושב בסריקה הבאה.</span></div>';
   }
-  if (resumeGap.status === 'failed') {
-    return `<div class="resume-gap-state is-failed"><strong>הניתוח לא הושלם</strong><span>${escapeHtml(resumeGap.reason || 'אפשר לנסות שוב בסריקה הבאה.')}</span></div>`;
+  if (resumeGap.status === 'failed' || !resumeGap.screenPass) {
+    return '<div class="resume-gap-state is-failed"><strong>אין הערכה</strong><span>אפשר לנסות שוב בסריקה הבאה.</span></div>';
   }
-  if (!resumeGap.items?.length) {
-    return '<div class="resume-gap-state is-clear"><strong>לא נמצא שינוי קריטי</strong><span>אין המלצה בטוחה ובעלת ערך גבוה למשרה הזו.</span></div>';
-  }
-  return `<div class="resume-gap-list">${resumeGap.items.map((item, index) => {
-    const transferred = transferredKeys.has(gapKey(job.jobKey, item.keyword));
-    return `<article class="resume-gap-item" data-kind="${escapeHtml(item.kind)}">
-    <div><span class="gap-kind">${escapeHtml(gapLabels[item.kind] || 'לבדיקה')}</span><span class="gap-importance">${item.importance === 'required' ? 'דרישת חובה' : 'יתרון'}</span></div>
-    <strong>${escapeHtml(item.keyword)}</strong>
-    <p>${escapeHtml(item.explanation)}</p>
-    <small>${escapeHtml(item.suggestion)}</small>
-    <button class="job-action-button transfer-gap-item${transferred ? ' is-transferred' : ''}" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-item-index="${index}" ${transferred ? 'disabled' : ''}>${transferred ? 'הועבר לאזור האישי ✓' : 'העבר לאזור אישי'}</button>
-  </article>`;
-  }).join('')}</div>`;
+  const { level, reason } = resumeGap.screenPass;
+  return `<div class="screen-pass" data-level="${escapeHtml(level)}"><strong>${escapeHtml(screenLabels[level] || 'הערכת סינון')}</strong><span>${escapeHtml(reason)}</span></div>`;
 }
 
 const sourceBadgeLabels = { ats: 'ATS', whatsapp: 'WhatsApp', linkedin: 'LinkedIn' };
@@ -128,7 +87,7 @@ function renderJobs() {
       <div class="job-score-fit"><span class="score">${job.score == null ? '—' : escapeHtml(Number(job.score).toFixed(1))}</span><span class="fit-pill ${job.suitable ? 'is-suitable' : ''}">${escapeHtml(job.fitLabel || 'מתאים')}</span></div>
       ${renderFitEvidence(job.fitBreakdown)}
     </td>
-    <td class="resume-gap-cell">${renderResumeGap(job.resumeGap, job)}</td>
+    <td class="resume-gap-cell">${renderScreenPass(job.resumeGap)}</td>
     <td><div class="job-actions" role="group" aria-label="פעולות למשרה">
       <a class="job-action-button job-open" href="${escapeHtml(job.applyUrl)}" target="_blank" rel="noreferrer">פתח משרה</a>
       <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="interested" title="פותח את המשרה, רושם את ההחלטה ומעביר לארכיון">מעניין אותי</button>
@@ -140,14 +99,8 @@ function renderJobs() {
 
 async function loadJobs() {
   try {
-    const [state, personalArea] = await Promise.all([
-      requestJson('/api/jobs'),
-      requestJson('/api/personal-area/items').catch(() => ({ items: [] })),
-    ]);
+    const state = await requestJson('/api/jobs');
     jobs = state.jobs || [];
-    transferredKeys = new Set((personalArea.items || [])
-      .filter((item) => item.sourceJobKey)
-      .map((item) => gapKey(item.sourceJobKey, item.keyword)));
     syncStatCard(elements.suitable, state.stats.suitable);
     syncStatCard(elements.unopened, state.stats.unopened);
     renderJobs();
@@ -155,21 +108,6 @@ async function loadJobs() {
   } catch (error) {
     setSystemStatus('error', error.message);
   }
-}
-
-async function transferGapItem(job, item) {
-  await postJson('/api/personal-area/items', {
-    keyword: item.keyword,
-    kind: item.kind,
-    importance: item.importance,
-    explanation: item.explanation,
-    suggestion: item.suggestion,
-    sourceCompany: job.company,
-    sourceTitle: job.title,
-    sourceJobKey: job.jobKey,
-  });
-  transferredKeys.add(gapKey(job.jobKey, item.keyword));
-  renderJobs();
 }
 
 async function decideJob(jobKey, decision) {
@@ -196,14 +134,6 @@ elements.body.addEventListener('click', async (event) => {
   button.disabled = true;
   const job = jobs.find((item) => item.jobKey === button.dataset.jobKey);
   try {
-    if (button.classList.contains('transfer-gap-item')) {
-      const item = job?.resumeGap?.items?.[Number(button.dataset.itemIndex)];
-      if (!item) return;
-      await transferGapItem(job, item);
-      elements.feedback.textContent = 'הנושא הועבר לאזור האישי.';
-      elements.feedback.dataset.state = '';
-      return;
-    }
     const { decision } = button.dataset;
     if (!decision) return;
     elements.feedback.dataset.state = '';
