@@ -557,8 +557,9 @@ test('personal-area insights API aggregates stored gap analyses against the curr
   const insights = await fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/insights`).then((response) => response.json());
 
   assert.deepEqual(insights.totals, { jobs: 1, strongFit: 1, interested: 0, lowWeight: 0 });
-  assert.deepEqual(insights.sections.tool.map((row) => [row.term, row.inResume]), [['Kubernetes', false], ['AWS', true]]);
-  assert.deepEqual(insights.sections.experience, []);
+  assert.deepEqual(insights.topics.map((topic) => topic.id), ['scale']);
+  assert.deepEqual(insights.topics[0].rows.map((row) => row.term), ['Kubernetes']);
+  assert.equal(insights.coveredByResume, 1);
 
   const post = (body) => fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/term-status`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -566,6 +567,6 @@ test('personal-area insights API aggregates stored gap analyses against the curr
   assert.equal((await post({ term: 'Kubernetes', status: 'hidden' })).status, 200);
   assert.equal((await post({ term: 'Kubernetes', status: 'done' })).status, 400);
   const after = await fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/insights`).then((response) => response.json());
-  assert.deepEqual(after.sections.tool.map((row) => row.term), ['AWS']);
+  assert.deepEqual(after.topics, []);
   assert.deepEqual(after.hidden.map((row) => row.term), ['Kubernetes']);
 });

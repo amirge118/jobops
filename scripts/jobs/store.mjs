@@ -536,6 +536,17 @@ export function createJobStore(databasePath) {
       updated_at INTEGER NOT NULL
     );
 
+    -- Whether the current resume already covers an aggregated gap term in other
+    -- words, judged by Codex once per resume (coverage_key = resume hash +
+    -- check version). Only short terms are stored, never resume text.
+    CREATE TABLE IF NOT EXISTS gap_term_coverage (
+      coverage_key TEXT NOT NULL,
+      term_key TEXT NOT NULL,
+      covered INTEGER NOT NULL CHECK(covered IN (0, 1)),
+      checked_at INTEGER NOT NULL,
+      PRIMARY KEY (coverage_key, term_key)
+    );
+
     CREATE TABLE IF NOT EXISTS gap_observations (
       job_key TEXT PRIMARY KEY,
       company TEXT,
@@ -1755,7 +1766,7 @@ export function createJobStore(databasePath) {
         const mix = parseJson(call.source_mix, null);
         const shares = mix && Object.values(mix).some((count) => count > 0)
           ? Object.entries(mix).filter(([, count]) => count > 0)
-          : [[['probe', 'company_research'].includes(call.purpose) ? 'system' : 'unclassified', 1]];
+          : [[['probe', 'company_research', 'gap_coverage'].includes(call.purpose) ? 'system' : 'unclassified', 1]];
         const total = shares.reduce((sum, [, count]) => sum + Number(count), 0);
         for (const [source, count] of shares) {
           const row = rowFor(day, source);
@@ -3358,6 +3369,24 @@ export function createJobStore(databasePath) {
     // as noise. Keyed by the same normalization the aggregation groups by.
     listGapTermStatuses() {
       return db.prepare('SELECT term_key AS termKey, term, status, updated_at AS updatedAt FROM gap_term_statuses').all();
+    },
+
+    // Map(termKey → covered) for one resume version.
+    listGapTermCoverage(coverageKey) {
+      return new Map(db.prepare('SELECT term_key AS termKey, covered FROM gap_term_coverage WHERE coverage_key = ?')
+        .all(coverageKey).map((row) => [row.termKey, row.covered === 1]));
+    },
+
+    saveGapTermCoverage(coverageKey, rows, at = Date.now()) {
+      const insert = db.prepare(`
+        INSERT INTO gap_term_coverage (coverage_key, term_key, covered, checked_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(coverage_key, term_key) DO UPDATE SET covered = excluded.covered, checked_at = excluded.checked_at
+      `);
+      db.transaction(() => {
+        // Answers for older resumes can never be read again.
+        db.prepare('DELETE FROM gap_term_coverage WHERE coverage_key != ?').run(coverageKey);
+        for (const row of rows) insert.run(coverageKey, row.termKey, row.covered ? 1 : 0, at);
+      })();
     },
 
     setGapTermStatus(term, status, at = Date.now()) {

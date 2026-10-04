@@ -33,6 +33,10 @@ export function loadJobsConfig(configPath = process.env.JOBOPS_JOBS_CONFIG) {
   return config;
 }
 
+export function resumeHashOf(currentResume) {
+  return createHash('sha256').update(currentResume).digest('hex');
+}
+
 export function readCandidateContext(config) {
   const profilePath = requiredFile(
     path.join(config.rootDir, 'profile', '01-candidate-profile.md'),
@@ -53,6 +57,6 @@ export function readCandidateContext(config) {
     .update('\n--- preferences ---\n')
     .update(preferences)
     .digest('hex');
-  const resumeHash = createHash('sha256').update(currentResume).digest('hex');
+  const resumeHash = resumeHashOf(currentResume);
   return { profile, preferences, profileHash, currentResume, resumeHash, resumeAvailable };
 }

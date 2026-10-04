@@ -12,6 +12,7 @@ import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
 import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
+import { createGapCoverageChecker, refreshGapCoverage } from './jobs/gap-coverage.mjs';
 import { createJobScorer } from './jobs/score-job.mjs';
 import { checkCodexQuota, readCodexRateLimits, setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { createJobStore, sourceKindOf } from './jobs/store.mjs';
@@ -1178,6 +1179,18 @@ async function runJobsLocked(options, config) {
     });
     if (runDetails.resumeGap.failed > 0) {
       console.warn('ניתוח שיפורי קורות החיים נכשל חלקית; המשרות עצמן נשמרו ומוצגות כרגיל.');
+    }
+    // Personal-area cleanup only; a failure here never fails the scan.
+    try {
+      runDetails.gapCoverage = await refreshGapCoverage({
+        store, checker: createGapCoverageChecker({ config }), candidateContext,
+      });
+      if (runDetails.gapCoverage.checked) {
+        console.log(`בדיקת כיסוי פערים: ${runDetails.gapCoverage.covered} מתוך ${runDetails.gapCoverage.checked} נושאים כבר מכוסים בקורות החיים.`);
+      }
+    } catch (error) {
+      runDetails.gapCoverage = { status: 'failed', reason: String(error?.message || error).slice(0, 300) };
+      console.warn(`בדיקת כיסוי פערים נכשלה ותנוסה שוב בסריקה הבאה: ${runDetails.gapCoverage.reason}`);
     }
     runDetails.llmUsage = summarizeRunUsage(store.summarizeCodexUsage({ sinceMs: runStartedAt }).totals);
     printUsageSummary(runDetails.llmUsage);

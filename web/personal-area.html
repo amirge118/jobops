@@ -5,20 +5,10 @@
     <div id="app-shell"></div>
     <div class="shell">
       <main class="page-main">
-        <section class="page-hero"><div><h1>אזור אישי</h1><p>מה חסר לקורות החיים כדי להיות התאמה מושלמת למשרות שכבר מתאימות לך, מסוכם על פני כל המשרות שנותחו.</p></div></section>
-        <section class="page-section insights-summary" aria-labelledby="insights-title"><h2 id="insights-title">מה חסר להתאמה מושלמת</h2><p id="insights-summary">טוען…</p></section>
-        <section class="improvements-section page-section" aria-labelledby="tools-title">
-          <div class="section-heading improvements-heading"><div><h2 id="tools-title">כלים שחסרים לי <span class="improvements-count" data-insight-count="tool"></span></h2><p>טכנולוגיות, שפות ופלטפורמות שמשרות מתאימות מבקשות ולא מופיעות בקורות החיים.</p></div></div>
-          <div class="table-wrap"><table class="gap-insights-table"><thead><tr><th>נושא</th><th>משרות</th><th>מה לעשות</th><th>הסבר והמלצה</th><th>לדוגמה</th><th>פעולות</th></tr></thead><tbody class="gap-insights-body" data-category="tool"></tbody></table><div class="empty-state" data-insight-empty="tool"><strong>לא נמצאו כלים חסרים</strong></div></div>
-        </section>
-        <section class="improvements-section page-section" aria-labelledby="experience-title">
-          <div class="section-heading improvements-heading"><div><h2 id="experience-title">ניסיון שחשוב להבליט או לרכוש <span class="improvements-count" data-insight-count="experience"></span></h2><p>היקף, תחום, סקייל ואחריות שהמעסיקים מחפשים. אם יש לך את זה, להבליט; אם לא, שווה פרויקט או למידה.</p></div></div>
-          <div class="table-wrap"><table class="gap-insights-table"><thead><tr><th>נושא</th><th>משרות</th><th>מה לעשות</th><th>הסבר והמלצה</th><th>לדוגמה</th><th>פעולות</th></tr></thead><tbody class="gap-insights-body" data-category="experience"></tbody></table><div class="empty-state" data-insight-empty="experience"><strong>לא נמצאו פערי ניסיון</strong></div></div>
-        </section>
-        <section class="improvements-section page-section" aria-labelledby="keywords-title">
-          <div class="section-heading improvements-heading"><div><h2 id="keywords-title">מילות מפתח לסינון הראשוני <span class="improvements-count" data-insight-count="keyword"></span></h2><p>ביטויים שמגייסים ומערכות ATS מחפשים, כולל מה שמעסיקים סימנו כחשוב ושחסר או חלש בקורות החיים.</p></div></div>
-          <div class="table-wrap"><table class="gap-insights-table"><thead><tr><th>נושא</th><th>משרות</th><th>מה לעשות</th><th>הסבר והמלצה</th><th>לדוגמה</th><th>פעולות</th></tr></thead><tbody class="gap-insights-body" data-category="keyword"></tbody></table><div class="empty-state" data-insight-empty="keyword"><strong>לא נמצאו מילות מפתח חסרות</strong></div></div>
-        </section>
+        <section class="page-hero"><div><h1>אזור אישי</h1><p>מה חסר לקורות החיים כדי להיות התאמה מושלמת למשרות שכבר מתאימות לך, מקובץ לפי נושא על פני כל המשרות שנותחו.</p></div></section>
+        <section class="page-section insights-summary" aria-labelledby="insights-title"><h2 id="insights-title">מה כדאי ללמוד</h2><p id="insights-summary">טוען…</p><ol id="focus-list" class="focus-list"></ol></section>
+        <section id="quick-fixes" class="page-section quick-fixes" aria-labelledby="quick-fixes-title" hidden><h2 id="quick-fixes-title">תיקונים בקורות החיים שאפשר לעשות עכשיו</h2><p>יש לך את זה לפי הפרופיל, אבל זה לא כתוב בקורות החיים.</p><ul id="quick-fix-list"></ul></section>
+        <section class="page-section" aria-labelledby="topics-title"><div class="section-heading"><div><h2 id="topics-title">כל הפערים לפי נושא</h2><p>המספר ליד כל נושא: בכמה משרות הוא הופיע. בכל נושא מוצגים הבולטים; השאר בהרחבה.</p></div></div><div id="topic-grid" class="topic-grid"></div><details id="minor-topics" class="minor-topics" hidden><summary>פחות רלוונטי ללמידה <span id="minor-count"></span></summary><div id="minor-grid" class="topic-grid"></div></details></section>
         <details id="hidden-terms" class="hidden-terms page-section" hidden><summary>נושאים שהסתרת <span id="hidden-count"></span></summary><ul id="hidden-list"></ul></details>
         <p id="page-feedback" class="company-feedback" role="status" aria-live="polite"></p>
       </main>

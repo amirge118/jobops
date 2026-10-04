@@ -77,9 +77,9 @@ The report stays intentionally minimal and contains only:
 
 The Decisions page is intentionally different from the archival Markdown report. It shows four
 columns only: company/role, combined score and fit label (per-dimension scores and evidence stay
-collapsed under "למה הציון?"), what the employer prioritizes plus the recruiter-screen estimate and
-up to three resume improvements, and uniform decision actions. It does not repeat strengths. Each
-improvement is labeled as a verified safe addition, a real experience gap, or something the
+collapsed under "למה הציון?"), the recruiter-screen estimate plus the job's top three resume gaps
+(the analysis orders them by screening impact), and uniform decision actions. It does not repeat
+strengths. Each gap is labeled as a verified safe addition, a real experience gap, or something the
 candidate must confirm.
 ## Quick start
 
@@ -142,9 +142,21 @@ The dashboard runs only on `127.0.0.1:4177` and redirects `/` to `/scan`; the fo
   company not interesting, too senior, role not relevant); every decision archives the job.
 - `/companies` — inspect the watchlist, resolve a careers URL, and explicitly approve sources.
 - `/personal-area` — "what's missing for a perfect fit": gap terms aggregated across every analyzed
-  suitable job (`GET /api/personal-area/insights`, `scripts/jobs/gap-insights.mjs`) in three ranked
-  tables (tools, experience, screening keywords). Each term can be marked "in progress" (it leads
-  its table) or hidden as noise (`POST /api/personal-area/term-status`, table `gap_term_statuses`,
+  suitable job (`GET /api/personal-area/insights`, `scripts/jobs/gap-insights.mjs`), grouped into
+  subject topics by a fixed term dictionary (`GAP_TOPICS`; first match wins, unmatched terms fall
+  into "other" — zero tokens, no re-analysis). A topic counts each job once and topics rank by job
+  count. The response carries `focus` (up to 3 learnable topics seen in at least 2 jobs, with their
+  most recurring terms), `quickFixes` (profile-backed `safe_addition` terms not yet in the resume),
+  and `topics`; years, niche domains and "other" are `minor` and render collapsed. Terms the
+  current `profile/03-current-resume.md` already contains (normalized substring; whole word for
+  keys under 4 chars) are dropped and only counted in `coveredByResume`, since older analyses ran
+  against older resumes. Coverage in other words is judged by Codex (`scripts/jobs/gap-coverage.mjs`,
+  purpose `gap_coverage`, one call per 100 terms): each scan, after the resume-gap analysis, asks only
+  about displayed terms not yet judged for the current resume, and caches the answers in
+  `gap_term_coverage` keyed by resume hash + `GAP_COVERAGE_VERSION` (answers for older resumes are
+  deleted). An unchanged resume costs no call; a failure is logged and retried next scan, never
+  failing the scan. `npm run jobs:gap-coverage` runs the same check on demand. Each term can be
+  marked "in progress" (it leads its topic) or hidden as noise (`POST /api/personal-area/term-status`, table `gap_term_statuses`,
   keyed by the same normalized term the aggregation groups by). The older manual tracking list
   (`personal_improvements`) is no longer read; its rows were carried over as "in progress" terms.
 - `/decision-stats` — what you did with the jobs you were shown, and where the score disagreed.

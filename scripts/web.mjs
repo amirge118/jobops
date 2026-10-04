@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { loadJobsConfig } from './jobs/config.mjs';
+import { loadJobsConfig, resumeHashOf } from './jobs/config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { createDemoEnvironment, runDemoAction } from './jobs/demo.mjs';
 import { createJobStore, JOB_DECISIONS } from './jobs/store.mjs';
@@ -20,6 +20,7 @@ import { createCompanySourceResolver, probeCompanySource } from './jobs/company-
 import { fetchPageWithBrowser } from './jobs/browser-fetch.mjs';
 import { createDashboardQueries } from './dashboard/queries.mjs';
 import { aggregateGaps } from './jobs/gap-insights.mjs';
+import { coverageKeyOf } from './jobs/gap-coverage.mjs';
 import { serveDashboardAsset } from './dashboard/static.mjs';
 import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { blockersForAction, createReadinessService } from './dashboard/readiness.mjs';
@@ -211,8 +212,10 @@ export function createDashboardServer({
         const currentResumeText = fs.existsSync(resumePath) ? fs.readFileSync(resumePath, 'utf8') : '';
         const store = createJobStore(config.jobsDbPath);
         try {
+          const judged = store.listGapTermCoverage(coverageKeyOf(resumeHashOf(currentResumeText)));
           sendJson(response, 200, aggregateGaps(store.listGapObservations(), {
             currentResumeText, statuses: store.listGapTermStatuses(),
+            coveredTerms: new Set([...judged].filter(([, covered]) => covered).map(([key]) => key)),
           }));
         }
         finally { store.close(); }

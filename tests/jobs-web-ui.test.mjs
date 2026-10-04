@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { openAndArchiveJob } from '../web/shared/job-actions.js';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readWeb = (...parts) => fs.readFileSync(path.join(rootDir, 'web', ...parts), 'utf8');
@@ -79,8 +78,9 @@ test('decisions and companies keep explicit user-controlled actions', () => {
   assert.match(decisionsHtml, /פעולות/);
   assert.doesNotMatch(decisionsHtml, /תיאור קצר/);
   assert.doesNotMatch(decisionsHtml, /סיבת ההחלטה/);
-  // Per-job gaps live, aggregated, in the personal area; decisions keep only the screen estimate.
+  // Each job shows the screen estimate and its top few gaps; the aggregate lives in the personal area.
   assert.match(decisions, /renderScreenPass/);
+  assert.match(decisions, /MAX_JOB_GAPS = 3/);
   assert.doesNotMatch(decisions, /transfer-gap-item|employer-priorities|personal-area\/items/);
   assert.match(decisions, /<details class="fit-evidence">/);
   assert.match(decisions, /השרת דורש הפעלה מחדש/);
@@ -90,7 +90,8 @@ test('decisions and companies keep explicit user-controlled actions', () => {
   assert.doesNotMatch(decisions, /job\.summary/);
   assert.doesNotMatch(decisions, /job\.decisionReason/);
   assert.match(decisions, /העבר חברה למועמדות/);
-  assert.match(decisions, /openAndArchiveJob\(job, \(jobKey\) => decideJob\(jobKey, decision\)\)/);
+  // "Interested" only records the decision; the job was already opened to judge it.
+  assert.doesNotMatch(decisions, /openAndArchiveJob|window\.open/);
   assert.match(decisions, /data-decision="interested"/);
   assert.match(decisions, /data-decision="company_candidate"/);
   assert.match(decisions, /company_not_interesting: 'חברה לא מעניינת'/);
@@ -133,31 +134,6 @@ test('decisions show every source a merged job was found in', () => {
   assert.match(decisions, /linkedin: 'LinkedIn'/);
   assert.doesNotMatch(decisions, /possibleDuplicateOf/);
   assert.match(decisions, /job-title">[^\n]*\$\{renderSourceBadges\(job\)\}/);
-});
-
-test('a blocked popup does not archive the job', async () => {
-  let archived = false;
-  await assert.rejects(
-    openAndArchiveJob(
-      { jobKey: 'job', applyUrl: 'https://jobs.example.com/42' },
-      async () => { archived = true; },
-      () => null,
-    ),
-    /לא הועברה לארכיון/,
-  );
-  assert.equal(archived, false);
-});
-
-test('open plus archive navigates only after the archive succeeds', async () => {
-  const events = [];
-  const tab = { opener: {}, location: { replace: (url) => events.push(`open:${url}`) }, close: () => events.push('close') };
-  await openAndArchiveJob(
-    { jobKey: 'job', applyUrl: 'https://jobs.example.com/42' },
-    async () => { events.push('archive'); },
-    () => tab,
-  );
-  assert.deepEqual(events, ['archive', 'open:https://jobs.example.com/42']);
-  assert.equal(tab.opener, null);
 });
 
 test('each dashboard page owns only its feature and shares the navigation shell', () => {

@@ -1,7 +1,6 @@
 import { postJson, requestJson } from '../shared/api-client.js';
 import { escapeHtml, formatTime, syncStatCard } from '../shared/formatters.js';
 import { setSystemStatus } from '../shared/app-shell.js';
-import { openAndArchiveJob } from '../shared/job-actions.js';
 
 const elements = {
   body: document.querySelector('#jobs-body'),
@@ -50,8 +49,25 @@ function renderFitEvidence(fitBreakdown) {
   return `<details class="fit-evidence"><summary>למה הציון?</summary><ul>${rows}</ul>${uncertainties ? `<p class="fit-uncertainties-title">לא ברור מהמשרה</p><ul class="fit-uncertainties">${uncertainties}</ul>` : ''}</details>`;
 }
 
-// Gaps themselves are aggregated across jobs in the personal area; here only
-// the recruiter-screen estimate for this one job is shown.
+// The analysis orders gaps by screening impact, so the first few are the ones
+// that decide whether this job is worth applying to. The full picture across
+// jobs lives in the personal area.
+const MAX_JOB_GAPS = 3;
+const gapKindLabels = {
+  safe_addition: 'להוסיף לקו״ח',
+  needs_confirmation: 'לאמת',
+  experience_gap: 'פער',
+};
+
+function renderJobGaps(items) {
+  if (!items?.length) return '<p class="job-gaps-clear">לא נמצאו פערים משמעותיים.</p>';
+  return `<ul class="job-gaps">${items.slice(0, MAX_JOB_GAPS).map((item) => `<li title="${escapeHtml(item.suggestion || '')}">
+    <span class="gap-kind" data-kind="${escapeHtml(item.kind)}">${escapeHtml(gapKindLabels[item.kind] || 'לבדיקה')}</span>
+    <strong>${escapeHtml(item.term || item.keyword)}</strong>${item.importance === 'required' ? '<span class="gap-required">חובה</span>' : ''}
+    <span class="job-gap-text">${escapeHtml(item.explanation)}</span>
+  </li>`).join('')}</ul>`;
+}
+
 function renderScreenPass(resumeGap) {
   if (!resumeGap) {
     return '<div class="resume-gap-state is-failed"><strong>השרת דורש הפעלה מחדש</strong><span>הרץ npm run restart:local מה-Terminal.</span></div>';
@@ -66,7 +82,7 @@ function renderScreenPass(resumeGap) {
     return '<div class="resume-gap-state is-failed"><strong>אין הערכה</strong><span>אפשר לנסות שוב בסריקה הבאה.</span></div>';
   }
   const { level, reason } = resumeGap.screenPass;
-  return `<div class="screen-pass" data-level="${escapeHtml(level)}"><strong>${escapeHtml(screenLabels[level] || 'הערכת סינון')}</strong><span>${escapeHtml(reason)}</span></div>`;
+  return `<div class="screen-pass" data-level="${escapeHtml(level)}"><strong>${escapeHtml(screenLabels[level] || 'הערכת סינון')}</strong><span>${escapeHtml(reason)}</span></div>${renderJobGaps(resumeGap.items)}`;
 }
 
 const sourceBadgeLabels = { ats: 'ATS', whatsapp: 'WhatsApp', linkedin: 'LinkedIn' };
@@ -90,7 +106,7 @@ function renderJobs() {
     <td class="resume-gap-cell">${renderScreenPass(job.resumeGap)}</td>
     <td><div class="job-actions" role="group" aria-label="פעולות למשרה">
       <a class="job-action-button job-open" href="${escapeHtml(job.applyUrl)}" target="_blank" rel="noreferrer">פתח משרה</a>
-      <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="interested" title="פותח את המשרה, רושם את ההחלטה ומעביר לארכיון">מעניין אותי</button>
+      <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="interested" title="רושם את ההחלטה ומעביר לארכיון">מעניין אותי</button>
       <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="company_candidate" title="מוסיף את החברה למועמדות למעקב ומעביר לארכיון">העבר חברה למועמדות</button>
       ${Object.entries(declineLabels).map(([decision, label]) => `<button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="${decision}" title="לא בשבילי: ${label}. רושם את ההחלטה ומעביר לארכיון${declineEffects[decision] ? `. ${declineEffects[decision]}` : ''}">${label}</button>`).join('')}
     </div></td>
@@ -132,14 +148,14 @@ elements.body.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-job-key]');
   if (!button) return;
   button.disabled = true;
-  const job = jobs.find((item) => item.jobKey === button.dataset.jobKey);
   try {
     const { decision } = button.dataset;
     if (!decision) return;
     elements.feedback.dataset.state = '';
     if (decision === 'interested') {
-      await openAndArchiveJob(job, (jobKey) => decideJob(jobKey, decision));
-      elements.feedback.innerHTML = 'נרשם כמעניין והמשרה נפתחה בלשונית חדשה. החברה הוצעה למעקב — <a href="/companies">לאישור בעמוד החברות</a>.';
+      // The job was already opened with "פתח משרה" to judge it; no second tab.
+      await decideJob(button.dataset.jobKey, decision);
+      elements.feedback.innerHTML = 'נרשם כמעניין. החברה הוצעה למעקב — <a href="/companies">לאישור בעמוד החברות</a>.';
       return;
     }
     if (decision === 'company_candidate') {

@@ -127,13 +127,19 @@ how many wanted jobs come from companies you watch (and which ones you don't yet
 ## Shows what your CV is missing for a perfect fit
 
 Every suitable job is checked against your exact current CV, and the result is kept after you
-decide on the job. The personal area sums those checks across all of them into three ranked
-lists — **tools you're missing**, **experience to highlight or gain**, and **keywords recruiters
-and ATS filters screen for** — each with how many jobs asked for it, how many required it, and
-whether you can add it right now (your profile already proves it), need to confirm it, or need to
-learn it. Terms already in your CV drop to the bottom, so a CV edit visibly closes the gap. Mark
-what you're working on as "in progress" and hide what's noise; the decisions page keeps just the
-one-line estimate of whether your CV passes that job's first screen.
+decide on the job. The personal area sums those checks across all of them, grouped by subject
+(AI/LLM, languages, data, scale and infrastructure, work practices; years of experience and niche
+domains collapsed at the bottom). It opens with **what's worth learning** — the 2–3 subjects that
+recur across the most jobs and the terms to start from — then **CV fixes you can make now** (your
+profile already proves them, the CV just doesn't say them), then a compact card per subject. Each
+term shows how many jobs asked for it, how many required it, and whether to add, confirm, or learn
+it. Terms your current CV already covers disappear — whether it says them verbatim or in other
+words ("Model Context Protocol (MCP)" covers "MCP Servers"; Codex judges that once per CV change,
+during the next scan or on demand with `npm run jobs:gap-coverage`) — so a CV edit visibly closes
+the gap, even for jobs analyzed against an older CV. Mark what
+you're working on as "in progress" and hide what's noise. On the decisions page each job shows the
+estimate of whether your CV passes its first screen plus its top three gaps, so you can judge the
+fit before applying.
 
 ## A compact, dark dashboard
 
