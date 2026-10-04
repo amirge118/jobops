@@ -191,6 +191,13 @@ function mapCompany(row, sources = []) {
     resolutionStatus: row.resolution_status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    autoResolve: row.auto_status ? {
+      status: row.auto_status,
+      reason: row.auto_reason || null,
+      detail: row.auto_detail || null,
+      checkedAt: row.auto_checked_at ?? null,
+      nextAt: row.auto_next_at ?? null,
+    } : null,
     sources,
   };
 }
@@ -892,6 +899,14 @@ export function createJobStore(databasePath) {
       updated_at INTEGER NOT NULL
     );
   `);
+  // Daily automatic resolution of candidate companies (company-auto-resolve.mjs):
+  // its outcome, the reason when a company cannot be scanned, and when to retry.
+  const companyColumns = db.prepare('PRAGMA table_info(companies)').all().map((column) => column.name);
+  for (const [name, type] of Object.entries({
+    auto_status: 'TEXT', auto_reason: 'TEXT', auto_detail: 'TEXT', auto_checked_at: 'INTEGER', auto_next_at: 'INTEGER',
+  })) {
+    if (!companyColumns.includes(name)) db.exec(`ALTER TABLE companies ADD COLUMN ${name} ${type}`);
+  }
   // Estimated LinkedIn posting time from the card's "N hours ago" label;
   // listed_at alone is only a date.
   if (!db.prepare('PRAGMA table_info(linkedin_postings)').all().some((column) => column.name === 'posted_at')) {
@@ -1282,6 +1297,29 @@ export function createJobStore(databasePath) {
       });
       const company = save();
       return { company, sources: company.sources };
+    },
+
+    // Candidates the daily resolver should look at now: never checked, or
+    // their retry time has come. includeAll ignores the retry time.
+    listCompaniesDueForAutoResolve({ now = Date.now(), includeAll = false } = {}) {
+      const rows = db.prepare(`
+        SELECT id FROM companies
+        WHERE status = 'candidate' AND (? OR auto_next_at IS NULL OR auto_next_at <= ?)
+        ORDER BY created_at ASC
+      `).all(includeAll ? 1 : 0, Number(now));
+      return rows.map((row) => getCompanySnapshot(row.id));
+    },
+
+    recordAutoResolve(id, { status, reason = null, detail = null, at = Date.now(), nextAt = null }) {
+      if (!['auto_watched', 'unscannable'].includes(status)) {
+        throw new CompanyRegistryError('invalid_auto_status', 'Automatic resolution status is invalid');
+      }
+      const result = db.prepare(`
+        UPDATE companies SET auto_status = ?, auto_reason = ?, auto_detail = ?, auto_checked_at = ?, auto_next_at = ?
+        WHERE id = ?
+      `).run(status, reason, detail == null ? null : String(detail).slice(0, 300), Number(at), nextAt == null ? null : Number(nextAt), companyId(id));
+      if (!result.changes) throw new CompanyRegistryError('company_not_found', 'Company was not found');
+      return true;
     },
 
     upsertCompanySource(id, input, at = Date.now()) {

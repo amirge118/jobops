@@ -42,6 +42,7 @@
     "jobs:health": "node scripts/scan-health.mjs",
     "jobs:gap-coverage": "node scripts/gap-coverage.mjs",
     "jobs:import-interested": "node scripts/jobs/import-interested-companies.mjs",
+    "jobs:companies:resolve": "node scripts/jobs/company-auto-resolve.mjs",
     "whatsapp:collector": "node scripts/jobs/whatsapp-collector.mjs",
     "whatsapp:collector:install": "node scripts/jobs/collector-service.mjs install",
     "whatsapp:collector:uninstall": "node scripts/jobs/collector-service.mjs uninstall",

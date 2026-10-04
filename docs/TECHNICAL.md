@@ -549,6 +549,49 @@ not an automatic action or a guaranteed fix. The scanner never resets credential
 The Baileys 6 line is pinned to `6.7.24` so a reinstall cannot silently change linked-device
 behavior.
 
+### Automatic company resolution
+
+`scripts/jobs/company-auto-resolve.mjs` runs daily at 13:20 (LaunchAgent
+`com.amirgefen.jobops.resolve-companies`) over every `candidate` company that was never checked or
+whose retry time has come. Each one ends in exactly one of two places:
+
+1. **Watched**: a source that returned jobs *and* evidently belongs to the company. It is labeled
+   "added automatically" on the companies page.
+2. **Cannot be scanned**: a reason code in `companies.auto_reason` that the companies page explains
+   in plain words, retried after 14 days (`auto_next_at`).
+
+The steps, in order:
+
+- **Research** (one Codex call) only for a candidate never researched, such as one added from an
+  "interested" LinkedIn job that only carries the job's own URL.
+- **Known sources** are re-probed under the identity rule below.
+- **Each careers page** of the company (never job boards such as LinkedIn) is rendered in a
+  headless browser (`company-page-discovery.mjs`). Three things are read from it:
+  - ATS links in the page and in script-built links.
+  - ATS API calls the page makes in the background. A Comeet `careers-api` call with its public
+    token yields the public board through the positions' `url_comeet_hosted_page`.
+  - A repeated same-site job-link shape: at least three links sharing a prefix, in a careers-like
+    section or with role-like texts. It becomes an `official-html` source, tried without and then
+    with browser rendering.
+- **One hop** to an "open positions" page when the first page held none of those.
+
+**Identity rule.** An ATS board belongs only when its own board name or host carries a
+non-generic word of the company name. Job links read off a site also belong when that site's
+host names the company. A board merely embedded in the company's site does not count:
+Lumia Security's careers page embeds its investor Team8's whole Comeet board. Such a board is
+saved, but not watched, under `board_name_mismatch`, so one click can approve it when it is right.
+
+**Reasons:**
+- `job_boards_only`
+- `no_careers_site`
+- `unsupported_platform`: for example Oracle Recruiting, iCIMS, BambooHR.
+- `board_name_mismatch`
+- `aggregator_page`: a page linking three or more boards.
+- `board_unavailable`
+- `no_jobs_found`
+
+`--dry-run` reports without saving, and `--company <name>` checks one company now.
+
 ### Notifications for strong jobs
 
 A scan run queues one WhatsApp message per new suitable job scoring at least

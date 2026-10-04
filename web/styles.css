@@ -556,6 +556,8 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 16px
 .company-status-filters button[aria-pressed="true"], .stats-window button[aria-pressed="true"] { background: var(--raised); color: var(--ink); }
 .companies-table { min-width: 800px; }
 .company-reason { max-width: 340px; }
+.company-status[data-state="unscannable"] { background: var(--red-soft); color: var(--red); }
+.company-auto-badge { display: inline-block; margin-inline-start: 6px; padding: 0 6px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 10px; font-weight: 500; vertical-align: middle; }
 .company-reason strong { display: block; font-size: 12px; }
 .company-reason span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 

@@ -74,3 +74,13 @@ test('every scheduled agent logs its output, so a skipped or failed run leaves a
     assert.match(plist, new RegExp(`<key>StandardErrorPath</key><string>${log}</string>`));
   }
 });
+
+test('candidate companies are resolved once a day, off every scan slot', () => {
+  const companies = SCHEDULES.find((schedule) => schedule.key === 'companies');
+  assert.deepEqual(companies.times, [{ hour: 13, minute: 20 }]);
+  const taken = new Set(SCHEDULES.filter((schedule) => schedule.key !== 'companies')
+    .flatMap((schedule) => (schedule.times || []).map(({ hour, minute }) => `${hour}:${minute}`)));
+  assert.equal(taken.has('13:20'), false);
+  const plist = renderScheduledScanAgent(companies, { nodePath: '/opt/node', rootDir: '/tmp/jobops' });
+  assert.match(plist, /<string>\/tmp\/jobops\/scripts\/jobs\/company-auto-resolve\.mjs<\/string><\/array>/);
+});

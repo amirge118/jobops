@@ -48,6 +48,17 @@ export const SCHEDULES = [
     args: ['--linkedin-only', '--wait-for-lock', '20'],
     times: hourly({ from: 8, to: 22, minute: 30, every: 2 }),
   },
+  // Daily resolution of candidate companies: each one either starts being
+  // watched (a source with jobs that evidently belongs to it) or moves to the
+  // companies page's "cannot be scanned" list with a reason. Renders careers
+  // pages in a headless browser; Codex only researches never-researched ones.
+  {
+    key: 'companies',
+    label: 'com.amirgefen.jobops.resolve-companies',
+    script: ['scripts', 'jobs', 'company-auto-resolve.mjs'],
+    args: [],
+    times: [{ hour: 13, minute: 20 }],
+  },
   // A token-free check every 30 minutes: it processes the locally collected
   // WhatsApp backlog only once enough new jobs are waiting, or once the
   // oldest has waited long enough (see scripts/jobs/whatsapp-trigger.mjs).

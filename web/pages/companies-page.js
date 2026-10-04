@@ -15,7 +15,20 @@ const elements = {
 let companies = [];
 let companyStats = {};
 let activeStatus = 'all';
-const statusLabels = { candidate: 'ממתינה לאישור', watched: 'במעקב', paused: 'מושהית', ignored: 'לא רלוונטית' };
+const statusLabels = { candidate: 'ממתינה לבדיקה', unscannable: 'לא ניתן לסרוק', watched: 'במעקב', paused: 'מושהית', ignored: 'לא רלוונטית' };
+// Why the daily automatic check could not start watching a company, and what
+// (if anything) is left to do. Keys match company-auto-resolve.mjs.
+const unscannableReasons = {
+  job_boards_only: ['החברה מפרסמת רק בלוחות משרות (כמו LinkedIn), בלי אתר קריירה משלה.', 'המשרות שלה כבר מגיעות מחיפוש הלינקדאין והוואטסאפ; אין צורך לעשות דבר.'],
+  no_careers_site: ['לא נמצא אתר קריירה של החברה.', 'אם יש לך קישור לעמוד המשרות שלה, הוסף אותו ב"הגדר ידנית".'],
+  unsupported_platform: ['אתר המשרות רץ על {detail}, שאין לסורק מתאם אליו.', 'עד שיתווסף מתאם, המשרות שלה יגיעו דרך הלינקדאין.'],
+  board_name_mismatch: ['נמצא לוח משרות פעיל, אבל השם שלו לא של החברה — למשל לוח של משקיע או של חברת־אם: {detail}', 'אם הוא באמת שלה, לחץ "אשר והוסף למעקב"; אחרת אפשר להשאיר.'],
+  aggregator_page: ['עמוד הקריירה מציג משרות של כמה חברות (כמו עמוד פורטפוליו).', 'הגדר ידנית את לוח המשרות של החברה עצמה.'],
+  board_unavailable: ['לוח המשרות שנמצא לחברה כבר לא זמין: {detail}', 'ייתכן שהחברה עברה מערכת גיוס; היא תיבדק שוב אוטומטית.'],
+  no_jobs_found: ['באתר הקריירה לא נמצאו משרות או קישורים למשרות: {detail}', 'ייתכן שאין כרגע משרות, או שהן נטענות בדרך שהסורק לא מזהה; אפשר לנסות "הגדר ידנית".'],
+};
+const displayStatus = (company) => (company.status === 'candidate' && company.autoResolve?.status === 'unscannable' ? 'unscannable' : company.status);
+const formatDay = (ms) => new Date(ms).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
 const healthLabels = { healthy: 'תקין', failed: 'נכשל', unknown: 'טרם נבדק' };
 const verificationLabels = {
   unverified: 'טרם נבדק', verified_jobs: 'נמצאו משרות', verified_empty: 'מקור תקין וריק',
@@ -29,7 +42,7 @@ const providerLabels = {
   'zoho-recruit': 'Zoho Recruit', teamme: 'TeamMe',
   unsupported: 'קישור חיצוני',
 };
-const statusOrder = { watched: 0, candidate: 1, paused: 2, ignored: 3 };
+const statusOrder = { watched: 0, candidate: 1, unscannable: 2, paused: 3, ignored: 4 };
 const sourceVerificationLabel = (source) => {
   if (!source) return 'טרם נבדק';
   if (source.verificationStatus && source.verificationStatus !== 'unverified') {
@@ -48,7 +61,15 @@ function showFeedback(message, isError = false) {
   elements.feedback.dataset.state = isError ? 'error' : 'success';
 }
 
+function unscannableReason(auto) {
+  const [what, next] = unscannableReasons[auto.reason] || ['הבדיקה האוטומטית לא מצאה מקור שאפשר לסרוק.', ''];
+  const retry = auto.nextAt ? ` תיבדק שוב אוטומטית ב־${formatDay(auto.nextAt)}.` : '';
+  return `${what.replace('{detail}', auto.detail || '')} ${next}${retry}`.trim();
+}
+
 function stateReason(company, source) {
+  if (displayStatus(company) === 'unscannable') return unscannableReason(company.autoResolve);
+  if (company.status === 'candidate' && !company.autoResolve) return 'תיבדק אוטומטית בבדיקה היומית (13:20): אם יימצא מקור שלה עם משרות היא תיכנס למעקב, ואם לא — תעבור ל"לא ניתן לסרוק" עם הסבר.';
   if (!source) return 'עדיין לא נמצא עמוד קריירה שאפשר לבדוק.';
   if (source.lastErrorReason) return source.lastErrorReason;
   if (source.verificationStatus === 'verified_jobs') return `המקור אומת ונמצאו בו ${Number(source.lastJobCount || 0)} משרות.`;
@@ -68,13 +89,13 @@ function stateReason(company, source) {
 function visibleCompanies() {
   const query = elements.listSearch.value.trim().toLocaleLowerCase('he');
   return companies
-    .filter((company) => activeStatus === 'all' || company.status === activeStatus)
+    .filter((company) => activeStatus === 'all' || displayStatus(company) === activeStatus)
     .filter((company) => {
       if (!query) return true;
       const source = primarySource(company);
       return `${company.name} ${source?.provider || ''}`.toLocaleLowerCase('he').includes(query);
     })
-    .sort((left, right) => (statusOrder[left.status] ?? 9) - (statusOrder[right.status] ?? 9) || left.name.localeCompare(right.name));
+    .sort((left, right) => (statusOrder[displayStatus(left)] ?? 9) - (statusOrder[displayStatus(right)] ?? 9) || left.name.localeCompare(right.name));
 }
 
 // A hand-off for the case the automated research pipeline cannot finish on
@@ -108,9 +129,11 @@ function renderCompanies() {
     const source = primarySource(company);
     const canWatch = source?.enabled && source.provider !== 'unsupported' && company.status !== 'watched';
     const id = Number(company.id);
-    return `<tr><td><strong>${escapeHtml(company.name)}</strong><small>${escapeHtml(company.discoverySource || '')}</small></td>
+    const autoBadge = company.status === 'watched' && company.autoResolve?.status === 'auto_watched'
+      ? `<span class="company-auto-badge" title="${escapeHtml(company.autoResolve.detail || '')}">נוספה אוטומטית</span>` : '';
+    return `<tr><td><strong>${escapeHtml(company.name)}</strong>${autoBadge}<small>${escapeHtml(company.discoverySource || '')}</small></td>
       <td>${source ? `<a href="${escapeHtml(source.careersUrl)}" target="_blank" rel="noreferrer">${escapeHtml(providerLabels[source.provider] || source.provider)}</a>` : 'לא זוהה'}</td>
-      <td><span class="company-status" data-state="${escapeHtml(company.status)}">${escapeHtml(statusLabels[company.status] || company.status)}</span></td>
+      <td><span class="company-status" data-state="${escapeHtml(displayStatus(company))}">${escapeHtml(statusLabels[displayStatus(company)] || company.status)}</span></td>
       <td class="company-reason"><strong>${escapeHtml(sourceVerificationLabel(source))}</strong><span>${escapeHtml(stateReason(company, source))}</span></td>
       <td><div class="company-actions">${canWatch ? `<button type="button" data-company-action="watch" data-company-id="${id}">אשר והוסף למעקב</button>` : ''}${company.status === 'watched' ? `<button type="button" data-company-action="paused" data-company-id="${id}">השהה</button>` : ''}${company.status !== 'ignored' ? `<button type="button" data-company-action="ignored" data-company-id="${id}">לא רלוונטי</button>` : ''}${company.status !== 'watched' ? `<button type="button" data-manual-toggle="${id}">הגדר ידנית</button>` : ''}${company.status !== 'watched' ? `<button type="button" data-browser-probe="${id}">נסה עם דפדפן אמיתי (איטי)</button>` : ''}</div></td></tr>${company.status !== 'watched' ? manualConfigRow(company, source) : ''}`;
   }).join('');

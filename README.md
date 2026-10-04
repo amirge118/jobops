@@ -78,10 +78,14 @@ and no third-party application server are in the loop.
   it beat LinkedIn by a median of ~36 hours), and its public API costs no tokens. Each company
   keeps its own progress, so one failing board never holds the others back; companies that need a
   real browser to render are scanned every 6 hours.
-- ⭐ **Watch the companies you like** — marking a job "interested" adds its company as a
-  candidate on the companies page, one click from being watched. `npm run jobs:import-interested`
-  catches up on past decisions: it researches each company's careers source and starts watching
-  the verified ones.
+- ⭐ **Watch the companies you like, automatically** — marking a job "interested" adds its
+  company as a candidate. Once a day (13:20) every candidate is resolved on its own: Codex research
+  if it was never researched, then a rendered visit to its careers site that reads ATS links, the
+  ATS API calls the page makes in the background, and a repeated job-link pattern on the site
+  itself. A source with jobs that carries the company's own name (or job links on its own site)
+  starts being watched, labeled "added automatically"; everything else moves to a "cannot be
+  scanned" list with the reason in plain words and a retry in 14 days
+  (`npm run jobs:companies:resolve`; `npm run jobs:import-interested` catches up on past decisions).
 - 📲 **A WhatsApp ping for strong jobs** — every new suitable job scoring 4.0+ is sent once to your
   own WhatsApp ("Message yourself") with the score, the posting, and a link to the decisions page
   (`notifications.whatsapp` in `config/jobs.yml`).
@@ -92,6 +96,7 @@ and no third-party application server are in the loop.
 | LinkedIn | every 2 hours, 08:30–22:30 |
 | WhatsApp smart check | every 30 minutes |
 | WhatsApp full scan (history + read receipts) | 10:00 · 15:00 · 20:00 |
+| Candidate companies → watched or "cannot be scanned" | 13:20 |
 
 `npm run jobs:schedule:install` installs them as macOS LaunchAgents; scans never overlap, and each
 one logs to `logs/scheduled/<source>.log`, so a skipped or failed run leaves a trace.
