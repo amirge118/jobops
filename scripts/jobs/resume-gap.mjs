@@ -16,8 +16,10 @@ const ALLOWED_IMPORTANCE = new Set(['required', 'preferred']);
 const ALLOWED_WEIGHT = new Set(['critical', 'important', 'nice']);
 const ALLOWED_COVERAGE = new Set(['strong', 'partial', 'missing']);
 const ALLOWED_SCREEN_LEVEL = new Set(['high', 'medium', 'low']);
+const ALLOWED_CATEGORY = new Set(['tool', 'experience', 'keyword']);
+export const MAX_GAP_ITEMS = 6;
 
-export const RESUME_GAP_VERSION = 'resume-gap-v2-priorities';
+export const RESUME_GAP_VERSION = 'resume-gap-v3-terms';
 
 function compact(value, limit) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
@@ -37,6 +39,9 @@ function normalizeItem(item) {
   if (!keyword || !explanation || !suggestion) return null;
   return {
     keyword,
+    // term groups the same gap across jobs; category says which question it answers.
+    term: compact(item?.term, 40) || keyword.slice(0, 40),
+    category: ALLOWED_CATEGORY.has(item?.category) ? item.category : 'keyword',
     kind,
     importance,
     explanation,
@@ -51,6 +56,7 @@ function normalizePriority(item) {
   if (!priority || !note) return null;
   return {
     priority,
+    term: compact(item?.term, 40) || priority.slice(0, 40),
     weight: ALLOWED_WEIGHT.has(item?.weight) ? item.weight : 'important',
     coverage: ALLOWED_COVERAGE.has(item?.coverage) ? item.coverage : 'partial',
     note,
@@ -74,8 +80,10 @@ Exact current resume (the text that an ATS/recruiter currently sees):
 ${String(currentResume || '').trim()}
 
 Rules:
-- Return a maximum of 3 high-value items per job, ordered by hiring impact.
+- This job is already a good fit. Return everything that stands between this resume and a perfect match, a maximum of 6 items per job, ordered by screening impact.
 - Focus on critical keywords, technologies, scope, and experience that can affect screening.
+- term: the canonical short English name of the gap (max 4 words), spelled the way the industry writes it, so the same gap reads identically across jobs (e.g. "Kubernetes", "Prompt Engineering", "End-to-end ownership").
+- category: tool = a technology, language, framework, cloud service, or platform; experience = scope, domain, scale, ownership, leadership, or years; keyword = a phrase or term recruiters and ATS filters screen for that is not a single tool.
 - Never invent experience, ownership, years, achievements, or technologies.
 - safe_addition: the exact term is absent from the current resume AND verified evidence exists in the candidate profile. Include that evidence.
 - experience_gap: the role requires experience/scope that the profile and resume do not substantiate. Never suggest pretending to have it.
@@ -85,6 +93,7 @@ Rules:
 
 What the employer really cares about (employerPriorities):
 - Read the job page as the hiring manager wrote it and return up to 5 priorities, most important first. Judge importance by emphasis: the role summary, the first requirements, repetition, words like "must"/"strong"/"deep", and the problems the team says it is solving — not by list order alone.
+- term: the canonical short English name of the priority (max 4 words), same spelling rules as item terms.
 - A priority is a capability or experience (e.g. "high-scale distributed systems", "owning services end-to-end"), not a single buzzword unless the page treats it as central.
 - weight: critical = the hire would likely fail screening without it; important = clearly valued; nice = mentioned as a plus.
 - coverage against the exact current resume: strong = clearly visible; partial = present but weak, indirect, or buried; missing = not in the resume. When it is missing from the resume but present in the profile, say so in the note.
@@ -139,7 +148,7 @@ export function createResumeGapAnalyzer({ config = {}, runCodex = runCodexExec }
           if (!result) throw new Error(`Resume analysis response is missing result for ${job.jobKey}`);
           const normalized = {
             jobKey: job.jobKey,
-            items: (Array.isArray(result.items) ? result.items : []).map(normalizeItem).filter(Boolean).slice(0, 3),
+            items: (Array.isArray(result.items) ? result.items : []).map(normalizeItem).filter(Boolean).slice(0, MAX_GAP_ITEMS),
             employerPriorities: (Array.isArray(result.employerPriorities) ? result.employerPriorities : [])
               .map(normalizePriority).filter(Boolean).slice(0, 5),
             screenPass: normalizeScreenPass(result.screenPass),

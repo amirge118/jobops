@@ -18,9 +18,10 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["priority", "weight", "coverage", "note"],
+              "required": ["priority", "term", "weight", "coverage", "note"],
               "properties": {
                 "priority": { "type": "string", "minLength": 1, "maxLength": 100 },
+                "term": { "type": "string", "minLength": 1, "maxLength": 40 },
                 "weight": { "type": "string", "enum": ["critical", "important", "nice"] },
                 "coverage": { "type": "string", "enum": ["strong", "partial", "missing"] },
                 "note": { "type": "string", "minLength": 1, "maxLength": 200 }
@@ -38,13 +39,15 @@
           },
           "items": {
             "type": "array",
-            "maxItems": 3,
+            "maxItems": 6,
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["keyword", "kind", "importance", "explanation", "suggestion", "evidence"],
+              "required": ["keyword", "term", "category", "kind", "importance", "explanation", "suggestion", "evidence"],
               "properties": {
                 "keyword": { "type": "string", "minLength": 1, "maxLength": 100 },
+                "term": { "type": "string", "minLength": 1, "maxLength": 40 },
+                "category": { "type": "string", "enum": ["tool", "experience", "keyword"] },
                 "kind": { "type": "string", "enum": ["safe_addition", "experience_gap", "needs_confirmation"] },
                 "importance": { "type": "string", "enum": ["required", "preferred"] },
                 "explanation": { "type": "string", "minLength": 1, "maxLength": 280 },

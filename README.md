@@ -124,6 +124,15 @@ posting (from each card's "N hours ago"), which source saw the same job first an
 how many wanted jobs come from companies you watch (and which ones you don't yet), and — from
 `data/applications.md` — what happened after "interested".
 
+## Shows what your CV is missing for a perfect fit
+
+Every suitable job is checked against your exact current CV, and the result is kept after you
+decide on the job. The personal area sums those checks across all of them into three ranked
+lists — **tools you're missing**, **experience to highlight or gain**, and **keywords recruiters
+and ATS filters screen for** — each with how many jobs asked for it, how many required it, and
+whether you can add it right now (your profile already proves it), need to confirm it, or need to
+learn it. Terms already in your CV drop to the bottom, so a CV edit visibly closes the gap.
+
 ## A compact, dark dashboard
 
 Five pages — scan, decisions, tracked companies, personal area, statistics — share one dense,

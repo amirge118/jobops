@@ -526,3 +526,37 @@ test('polling APIs keep detailed event timelines behind the diagnostic detail ro
   const detail = await fetch(`${baseUrl}/api/diagnostics/runs/${runId}`).then((response) => response.json());
   assert.equal(detail.detail.events.length, 1);
 });
+
+test('personal-area insights API aggregates stored gap analyses against the current resume', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-insights-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'data', 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    sources: { whatsapp: { groups: [] } },
+  };
+  fs.mkdirSync(path.join(tempDir, 'profile'), { recursive: true });
+  fs.writeFileSync(path.join(tempDir, 'profile', '03-current-resume.md'), 'Backend engineer. AWS, Node.js.');
+  const store = createJobStore(config.jobsDbPath);
+  const sighting = store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend', source: 'ats', seenAt: 100 });
+  store.saveEvaluation(sighting.jobKey, {
+    company: 'Acme', title: 'Backend', summary: 's', score: 4.2, fitLabel: 'מתאים', decisionReason: 'r',
+    suitable: true, applyUrl: sighting.canonicalUrl, activeStatus: 'active',
+    contentHash: 'c', profileHash: 'p', criteriaVersion: 'v1', evaluatedAt: 200,
+  });
+  store.saveResumeGap(sighting.jobKey, { inputHash: 'h', analyzedAt: 300, analysis: { items: [
+    { keyword: 'Kubernetes', term: 'Kubernetes', category: 'tool', kind: 'experience_gap', importance: 'required', explanation: 'e', suggestion: 's', evidence: null },
+    { keyword: 'AWS', term: 'AWS', category: 'tool', kind: 'safe_addition', importance: 'preferred', explanation: 'e', suggestion: 's', evidence: 'x' },
+  ], employerPriorities: [] } });
+  store.close();
+
+  const server = createDashboardServer({ config, readiness: readyService });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const insights = await fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/insights`).then((response) => response.json());
+
+  assert.deepEqual(insights.totals, { jobs: 1, strongFit: 1, interested: 0, lowWeight: 0 });
+  assert.deepEqual(insights.sections.tool.map((row) => [row.term, row.inResume]), [['Kubernetes', false], ['AWS', true]]);
+  assert.deepEqual(insights.sections.experience, []);
+});

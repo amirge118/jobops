@@ -141,7 +141,10 @@ The dashboard runs only on `127.0.0.1:4177` and redirects `/` to `/scan`; the fo
 - `/decisions` — review suitable jobs and record a decision for each (interested, company to track,
   company not interesting, too senior, role not relevant); every decision archives the job.
 - `/companies` — inspect the watchlist, resolve a careers URL, and explicitly approve sources.
-- `/personal-area` — resume improvements transferred from the Decisions page.
+- `/personal-area` — "what's missing for a perfect fit": gap terms aggregated across every analyzed
+  suitable job (`GET /api/personal-area/insights`, `scripts/jobs/gap-insights.mjs`) in three ranked
+  tables (tools, experience, screening keywords), above the manual tracking list fed from the
+  Decisions page or those tables.
 - `/decision-stats` — what you did with the jobs you were shown, and where the score disagreed.
 
 All pages use the same SQLite store. A scan keeps running in the local server process when the
@@ -581,13 +584,22 @@ which re-scores jobs still in the scan window. The suitability threshold is
 `decision.minimumScore` (currently a 3.6 trial, down from 4.0).
 
 Suitable jobs then enter a separate resume-gap pass. Its cache key contains the job-content hash,
-candidate-profile hash, exact-resume hash, and analysis version. The pass returns at most three
-items and may classify a keyword as safe to add only when the private profile contains supporting
+candidate-profile hash, exact-resume hash, and analysis version. The pass returns at most six
+items — everything between the resume and a perfect match, ordered by screening impact — each with
+a canonical English `term` (so the same gap groups across jobs) and a `category`
+(`tool` / `experience` / `keyword`), and may classify a keyword as safe to add only when the private profile contains supporting
 evidence and the exact resume does not already contain it. The same call also returns up to five
 `employerPriorities` (ranked by the posting's own emphasis, each with a `critical`/`important`/`nice`
 weight and `strong`/`partial`/`missing` coverage in the exact resume) and a `screenPass`
 (`high`/`medium`/`low` with the deciding factor), judged only from the resume text. Analysis failures are stored separately:
 they never change the fit decision, hide the job, or fail the source scan.
+
+Each successful analysis is also copied to `gap_observations` (job key, company, title, score,
+resume hash, and the items and priorities — never page text or `screenPass`). Unlike
+`resume_gap_json`, this row survives the decision and archive wipe and follows its job through
+company+role dedup, so the personal area can aggregate gaps over every suitable job ever analyzed.
+Aggregation weights a job at score ≥ 4 as 1.5, adds 1 when the item is required (or the priority is
+critical) and 1 when the job was marked interested; terms found in the current resume sort last.
 
 New active jobs are scored through `codex exec`, authenticated with the local ChatGPT login.
 The child process is forced to the `chatgpt` login method, ignores API-oriented user config,
@@ -771,3 +783,5 @@ original MIT notice are documented in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NO
 4. Add sector/company discovery adapters (portfolio boards and curated exports) that feed the same
    candidate-and-approval flow; never auto-enable discoveries.
 5. Add more ATS providers only when they unlock meaningful target companies.
+6. Track the recruiter-screen estimate (`screenPass`) per resume version in the personal area, to
+   measure whether a CV edit actually raises the share of "high" screens.

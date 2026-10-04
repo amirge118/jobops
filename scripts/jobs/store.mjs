@@ -539,6 +539,20 @@ export function createJobStore(databasePath) {
     CREATE INDEX IF NOT EXISTS personal_improvements_position_idx
       ON personal_improvements(position);
 
+    -- Durable copy of each suitable job's resume-gap analysis, so the
+    -- personal area can aggregate gaps across jobs after they are decided
+    -- and archived. Holds only the model's short gap terms and notes, never
+    -- page text.
+    CREATE TABLE IF NOT EXISTS gap_observations (
+      job_key TEXT PRIMARY KEY,
+      company TEXT,
+      title TEXT,
+      score REAL,
+      resume_hash TEXT,
+      analysis_json TEXT NOT NULL,
+      observed_at INTEGER NOT NULL
+    );
+
     -- What the user did with a job shown on the Decisions page. Written in
     -- the same transaction that archives (and wipes) the job, so this is the
     -- only durable record of the job's content — kept small and local, for
@@ -1045,6 +1059,8 @@ export function createJobStore(databasePath) {
     db.prepare('DELETE FROM job_source_sightings WHERE job_key = ?').run(duplicate.job_key);
     db.prepare('UPDATE OR IGNORE job_decisions SET job_key = ? WHERE job_key = ?').run(repKey, duplicate.job_key);
     db.prepare('DELETE FROM job_decisions WHERE job_key = ?').run(duplicate.job_key);
+    db.prepare('UPDATE OR IGNORE gap_observations SET job_key = ? WHERE job_key = ?').run(repKey, duplicate.job_key);
+    db.prepare('DELETE FROM gap_observations WHERE job_key = ?').run(duplicate.job_key);
     db.prepare(`
       UPDATE jobs SET
         duplicate_of = @repKey,
@@ -2040,7 +2056,7 @@ export function createJobStore(databasePath) {
       `).all(boundedLimit);
     },
 
-    saveResumeGap(jobKey, { inputHash, analysis, analyzedAt = Date.now() }) {
+    saveResumeGap(jobKey, { inputHash, analysis, analyzedAt = Date.now(), resumeHash = null }) {
       const result = db.prepare(`
         UPDATE jobs SET
           resume_gap_json = ?,
@@ -2052,6 +2068,19 @@ export function createJobStore(databasePath) {
         WHERE job_key = ? AND archived_at IS NULL AND suitable = 1
       `).run(JSON.stringify(analysis), inputHash, analyzedAt, analyzedAt, jobKey);
       if (result.changes !== 1) throw new Error(`Cannot save resume analysis for job: ${jobKey}`);
+      db.prepare(`
+        INSERT OR REPLACE INTO gap_observations (job_key, company, title, score, resume_hash, analysis_json, observed_at)
+        SELECT job_key, company, title, score, ?, ?, ? FROM jobs WHERE job_key = ?
+      `).run(resumeHash, JSON.stringify({ items: analysis.items || [], employerPriorities: analysis.employerPriorities || [] }), analyzedAt, jobKey);
+    },
+
+    listGapObservations() {
+      return db.prepare(`
+        SELECT g.job_key AS jobKey, g.company, g.title, g.score, g.resume_hash AS resumeHash,
+          g.analysis_json AS analysisJson, g.observed_at AS observedAt, d.decision
+        FROM gap_observations g LEFT JOIN job_decisions d ON d.job_key = g.job_key
+        ORDER BY g.observed_at DESC
+      `).all().map(({ analysisJson, ...row }) => ({ ...row, analysis: parseJson(analysisJson, { items: [], employerPriorities: [] }) }));
     },
 
     markResumeGapFailure(jobKey, { inputHash, code = 'resume_gap_failed', reason, attemptedAt = Date.now() }) {

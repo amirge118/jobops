@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -18,6 +19,7 @@ import { createCompanyResearcher } from './jobs/company-research.mjs';
 import { createCompanySourceResolver, probeCompanySource } from './jobs/company-source-resolver.mjs';
 import { fetchPageWithBrowser } from './jobs/browser-fetch.mjs';
 import { createDashboardQueries } from './dashboard/queries.mjs';
+import { aggregateGaps } from './jobs/gap-insights.mjs';
 import { serveDashboardAsset } from './dashboard/static.mjs';
 import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { blockersForAction, createReadinessService } from './dashboard/readiness.mjs';
@@ -207,6 +209,15 @@ export function createDashboardServer({
       if (request.method === 'GET' && url.pathname === '/api/personal-area/items') {
         const store = createJobStore(config.jobsDbPath);
         try { sendJson(response, 200, { items: store.listPersonalImprovements() }); }
+        finally { store.close(); }
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/personal-area/insights') {
+        const resumePath = path.join(config.rootDir, 'profile', '03-current-resume.md');
+        const currentResumeText = fs.existsSync(resumePath) ? fs.readFileSync(resumePath, 'utf8') : '';
+        const store = createJobStore(config.jobsDbPath);
+        try { sendJson(response, 200, aggregateGaps(store.listGapObservations(), { currentResumeText })); }
         finally { store.close(); }
         return;
       }

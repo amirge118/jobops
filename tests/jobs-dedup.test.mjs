@@ -151,6 +151,17 @@ test('a fresh verdict replaces a twin decided under an older profile', (context)
   assert.equal(store.getJob(fresh.jobKey).duplicate_of, null);
 });
 
+test('a stored gap analysis follows its job into the twin it merges with', (context) => {
+  const store = newStore(context);
+  const old = whatsAppJob(store, 'https://example.com/jobs/old', 100);
+  const fresh = whatsAppJob(store, 'https://example.com/jobs/new', 200);
+  store.saveEvaluation(old.jobKey, evaluation({ profileHash: 'old-profile' }));
+  store.saveResumeGap(old.jobKey, { inputHash: 'h', analysis: { items: [], employerPriorities: [] }, analyzedAt: 300 });
+  store.saveEvaluation(fresh.jobKey, evaluation({ profileHash: 'p1', evaluatedAt: 2_000 }));
+
+  assert.deepEqual(store.listGapObservations().map((row) => row.jobKey), [fresh.jobKey]);
+});
+
 test('a dead link never hides a live twin', (context) => {
   const store = newStore(context);
   const live = whatsAppJob(store, 'https://example.com/jobs/live', 100);

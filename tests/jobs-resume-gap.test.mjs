@@ -58,7 +58,7 @@ test('resume gap analyzer requests only evidence-backed, actionable gaps', async
       prompt = args.prompt;
       return { results: [{ jobKey: 'job-1', items: [
         {
-          keyword: 'AWS', kind: 'safe_addition', importance: 'required',
+          keyword: 'AWS', term: 'AWS', category: 'tool', kind: 'safe_addition', importance: 'required',
           explanation: 'Required in the role and verified in the profile, but absent from the resume.',
           suggestion: 'Add AWS to the relevant backend experience bullet.',
           evidence: 'Built APIs with Node.js and AWS.',
@@ -87,6 +87,10 @@ test('resume gap analyzer requests only evidence-backed, actionable gaps', async
 
   assert.equal(result.items.length, 2);
   assert.equal(result.items[0].kind, 'safe_addition');
+  assert.deepEqual([result.items[0].term, result.items[0].category], ['AWS', 'tool']);
+  // Missing term/category fall back to the keyword and the screening-phrase bucket.
+  assert.deepEqual([result.items[1].term, result.items[1].category], ['Kubernetes', 'keyword']);
+  assert.equal(result.employerPriorities[0].term, 'Owning Node.js services end-to-end');
   assert.deepEqual(result.employerPriorities.map((item) => [item.weight, item.coverage]), [
     ['critical', 'strong'],
     ['important', 'missing'],
@@ -96,7 +100,9 @@ test('resume gap analyzer requests only evidence-backed, actionable gaps', async
   assert.match(prompt, /only the exact current resume/i);
   assert.match(prompt, /Never invent/i);
   assert.match(prompt, /exact current resume/i);
-  assert.match(prompt, /maximum of 3/i);
+  assert.match(prompt, /maximum of 6/i);
+  assert.match(prompt, /perfect match/i);
+  assert.match(prompt, /category: tool/);
   assert.equal(RESUME_GAP_VERSION.length > 0, true);
 });
 
@@ -180,5 +186,30 @@ test('resume analysis stage persists results without changing the job decision',
   assert.equal(listed.resumeGap.status, 'ready');
   assert.equal(listed.resumeGap.employerPriorities[0].priority, 'Node.js at scale');
   assert.deepEqual(listed.resumeGap.screenPass, { level: 'high', reason: 'Core stack is visible.' });
+
+  // The durable copy outlives the job's decision and archive, which wipe resume_gap_json.
+  const [job] = store.listUnpresentedSuitable();
+  assert.equal(store.decideJob(job.jobKey, 'interested'), true);
+  const [observation] = store.listGapObservations();
+  assert.equal(observation.jobKey, job.jobKey);
+  assert.equal(observation.company, 'Acme');
+  assert.equal(observation.score, 4.4);
+  assert.equal(observation.resumeHash, 'resume-v1');
+  assert.equal(observation.decision, 'interested');
+  assert.equal(observation.analysis.items[0].keyword, 'AWS');
+  assert.equal(observation.analysis.screenPass, undefined);
   store.close();
+});
+
+test('resume gap analyzer keeps at most six items per job', async () => {
+  const items = Array.from({ length: 8 }, (_, index) => ({
+    keyword: `Tool ${index}`, term: `Tool ${index}`, category: 'tool', kind: 'experience_gap',
+    importance: 'preferred', explanation: 'Missing.', suggestion: 'Learn it.', evidence: null,
+  }));
+  const analyzer = createResumeGapAnalyzer({
+    config: { rootDir: '/project', scoring: {} },
+    runCodex: async () => ({ results: [{ jobKey: 'job-1', items, employerPriorities: [], screenPass: null }] }),
+  });
+  const result = await analyzer.analyze({ job: { jobKey: 'job-1', content: 'x' }, profile: 'p', currentResume: 'r' });
+  assert.equal(result.items.length, 6);
 });

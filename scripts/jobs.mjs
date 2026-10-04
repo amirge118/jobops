@@ -863,6 +863,7 @@ export async function analyzeSuitableResumeGaps({
             screenPass: result.screenPass,
           },
           analyzedAt: Date.now(),
+          resumeHash: candidateContext.resumeHash,
         });
         analyzed += 1;
       }
