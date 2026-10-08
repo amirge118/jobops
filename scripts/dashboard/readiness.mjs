@@ -100,6 +100,15 @@ export async function inspectRuntimeReadiness({
           'Codex אינו מחובר כרגע באמצעות חשבון ChatGPT.',
           'הפעל codex login מתוך Terminal רגיל, התחבר באמצעות ChatGPT ובדוק שוב.',
         )
+        // ENOENT from spawn: the codex binary itself is missing (e.g. a
+        // ChatGPT app update moved it), which is not a permission problem.
+        : error?.code === 'ENOENT' && String(error?.syscall || '').startsWith('spawn')
+          ? blocked(
+            'scorer_binary_missing',
+            'מנגנון התאמה',
+            `קובץ ההפעלה של Codex לא נמצא (${error.path}); ייתכן שאפליקציית ChatGPT עודכנה והעבירה אותו.`,
+            'עדכן את MACOS_APP_CODEX_PATHS ב-scripts/jobs/score-job.mjs, או הגדר CODEX_BIN לנתיב הנכון.',
+          )
         : blocked(
           'scorer_permission_denied',
           'מנגנון התאמה',

@@ -82,3 +82,17 @@ test('readiness distinguishes a signed-out scorer from filesystem failure', asyn
   assert.match(readiness.scorer.nextStep, /codex login/);
   assert.equal(readiness.readyFor.ats, false);
 });
+
+test('a missing codex binary is reported as missing, not as a permission problem', async () => {
+  const probe = (error) => inspectRuntimeReadiness({
+    config: { demo: false }, collector: { status: 'connected' }, env: {},
+    probeBrowser: async () => {}, probeCodexState: async () => { throw error; },
+  });
+  const missingBinary = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT', syscall: 'spawn codex', path: 'codex' });
+  const missing = await probe(missingBinary);
+  assert.equal(missing.scorer.code, 'scorer_binary_missing');
+  assert.match(missing.scorer.reason, /\(codex\)/);
+
+  const noCodexDir = Object.assign(new Error('no such file'), { code: 'ENOENT', syscall: 'access', path: '/Users/x/.codex' });
+  assert.equal((await probe(noCodexDir)).scorer.code, 'scorer_permission_denied');
+});

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
-import { createJobScorer, runCodexExec } from '../scripts/jobs/score-job.mjs';
+import { MACOS_APP_CODEX_PATHS, createJobScorer, resolveCodexBinary, runCodexExec } from '../scripts/jobs/score-job.mjs';
 
 function config() {
   return {
@@ -249,4 +249,18 @@ test('codex exec is forced to ChatGPT login and does not inherit API keys', asyn
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
   }
+});
+
+test('the bundled Codex is found in either ChatGPT app layout, newest first', () => {
+  const [current, legacy] = MACOS_APP_CODEX_PATHS;
+  const resolve = (present, overrides = {}) => resolveCodexBinary({ scoring: {} }, {
+    platform: 'darwin', env: {}, exists: (candidate) => present.includes(candidate), ...overrides,
+  });
+  assert.equal(resolve([current, legacy]), current);
+  assert.equal(resolve([legacy]), legacy, 'older app versions keep working');
+  assert.equal(resolve([]), 'codex', 'falls back to codex on PATH');
+  assert.equal(resolve([current], { platform: 'linux' }), 'codex');
+  assert.equal(resolve([current], { env: { CODEX_BIN: '/custom/codex' } }), '/custom/codex');
+  assert.equal(resolveCodexBinary({ scoring: { binary: '/configured/codex' } }, { platform: 'darwin', env: {}, exists: () => true }),
+    '/configured/codex');
 });

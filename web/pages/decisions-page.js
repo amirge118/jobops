@@ -13,14 +13,12 @@ const elements = {
 };
 let jobs = [];
 
-const declineLabels = {
-  company_not_interesting: 'חברה לא מעניינת',
-  too_senior: 'בכיר מדי',
-  not_relevant: 'תפקיד לא רלוונטי',
-};
-
-const declineEffects = {
-  company_not_interesting: 'משרות חדשות מהחברה הזו לא ייבדקו ולא יוצגו מעכשיו',
+// Every "לא הגשתי" reason, with what it tells the system (scripts/jobs/decisions.mjs).
+const declineReasons = {
+  not_interested: { label: 'לא מעניין אותי', title: 'התפקיד מתאים לי, המשרה הספציפית לא. הציון צדק' },
+  not_relevant: { label: 'תפקיד לא רלוונטי', title: 'זה לא סוג התפקיד שלי. נספר כטעות ציון' },
+  too_senior: { label: 'בכיר מדי', title: 'הדרישה מעל הרמה שלי. נספר כטעות ציון בבכירות' },
+  company_not_interesting: { label: 'חברה לא מעניינת', title: 'משרות חדשות מהחברה הזו לא ייבדקו ולא יוצגו מעכשיו' },
 };
 
 const screenLabels = {
@@ -95,8 +93,8 @@ function renderSourceBadges(job) {
 
 function renderJobs() {
   elements.empty.hidden = jobs.length > 0;
-  // Three columns: identity with its score, the employer view (widest), and a
-  // uniform 2x3 grid of actions.
+  // Three columns: identity with its score, the employer view (widest), and
+  // the actions: open + applied, then the "not applied" reasons.
   elements.body.innerHTML = jobs.map((job) => `<tr>
     <td class="job-identity">
       <span class="job-company">${escapeHtml(job.company || 'חברה לא ידועה')}</span><span class="job-title">${escapeHtml(job.title || 'משרה ללא כותרת')}</span>${renderSourceBadges(job)}
@@ -106,9 +104,10 @@ function renderJobs() {
     <td class="resume-gap-cell">${renderScreenPass(job.resumeGap)}</td>
     <td><div class="job-actions" role="group" aria-label="פעולות למשרה">
       <a class="job-action-button job-open" href="${escapeHtml(job.applyUrl)}" target="_blank" rel="noreferrer">פתח משרה</a>
-      <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="interested" title="רושם את ההחלטה ומעביר לארכיון">מעניין אותי</button>
-      <button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="company_candidate" title="מוסיף את החברה למועמדות למעקב ומעביר לארכיון">העבר חברה למועמדות</button>
-      ${Object.entries(declineLabels).map(([decision, label]) => `<button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="${decision}" title="לא בשבילי: ${label}. רושם את ההחלטה ומעביר לארכיון${declineEffects[decision] ? `. ${declineEffects[decision]}` : ''}">${label}</button>`).join('')}
+      <button class="job-action-button decide-job job-applied" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="applied" title="רושם שהגשת, מעדכן את טבלת המעקב, מציע את החברה למעקב ומעביר לארכיון">✓ הגשתי</button>
+      <span class="job-actions-label">לא הגשתי:</span>
+      ${Object.entries(declineReasons).map(([decision, reason]) => `<button class="job-action-button decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="${decision}" title="${escapeHtml(reason.title)}. מעביר לארכיון">${reason.label}</button>`).join('')}
+      <button class="job-follow-company decide-job" type="button" data-job-key="${escapeHtml(job.jobKey)}" data-decision="company_candidate" title="לא מגיש למשרה, אבל מוסיף את החברה למועמדות למעקב ומעביר לארכיון">רק לעקוב אחרי החברה</button>
     </div></td>
   </tr>`).join('');
 }
@@ -127,10 +126,17 @@ async function loadJobs() {
 }
 
 async function decideJob(jobKey, decision) {
-  await postJson(`/api/jobs/${encodeURIComponent(jobKey)}/decision`, { decision });
+  const result = await postJson(`/api/jobs/${encodeURIComponent(jobKey)}/decision`, { decision });
   await loadJobs();
   window.dispatchEvent(new Event('jobops:refresh-summary'));
+  return result;
 }
+
+const trackerMessages = {
+  added: (number) => `נוספה שורה ${number} לטבלת המעקב`,
+  updated: (number) => `שורה ${number} בטבלת המעקב עודכנה ל-Applied`,
+  unchanged: (number) => `שורה ${number} בטבלת המעקב כבר בשלב Applied או מתקדם יותר`,
+};
 
 elements.openJobs.addEventListener('click', async () => {
   elements.openJobs.disabled = true;
@@ -152,10 +158,14 @@ elements.body.addEventListener('click', async (event) => {
     const { decision } = button.dataset;
     if (!decision) return;
     elements.feedback.dataset.state = '';
-    if (decision === 'interested') {
-      // The job was already opened with "פתח משרה" to judge it; no second tab.
-      await decideJob(button.dataset.jobKey, decision);
-      elements.feedback.innerHTML = 'נרשם כמעניין. החברה הוצעה למעקב — <a href="/companies">לאישור בעמוד החברות</a>.';
+    if (decision === 'applied') {
+      // The job was already opened with "פתח משרה"; no second tab.
+      const { tracker } = await decideJob(button.dataset.jobKey, decision);
+      const trackerNote = tracker?.action === 'failed'
+        ? `<strong>טבלת המעקב לא עודכנה</strong> (${escapeHtml(tracker.reason)}); אפשר לעדכן ידנית עם /track.`
+        : `${escapeHtml(trackerMessages[tracker?.action]?.(tracker.number) || '')}.`;
+      elements.feedback.innerHTML = `נרשם שהגשת. ${trackerNote} החברה הוצעה למעקב — <a href="/companies">לאישור בעמוד החברות</a>.`;
+      if (tracker?.action === 'failed') elements.feedback.dataset.state = 'error';
       return;
     }
     if (decision === 'company_candidate') {
@@ -167,7 +177,7 @@ elements.body.addEventListener('click', async (event) => {
       return;
     }
     await decideJob(button.dataset.jobKey, decision);
-    elements.feedback.innerHTML = `נרשם: ${escapeHtml(declineLabels[decision] || '')}. <a href="/decision-stats">לסטטיסטיקה</a>`;
+    elements.feedback.innerHTML = `נרשם: לא הגשתי — ${escapeHtml(declineReasons[decision]?.label || '')}. <a href="/decision-stats">לסטטיסטיקה</a>`;
   } catch (error) {
     elements.feedback.textContent = error.message;
     elements.feedback.dataset.state = 'error';

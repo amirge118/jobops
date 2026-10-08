@@ -116,6 +116,7 @@ npm run jobs:schedule:install          # unattended scans: WhatsApp 10/15/20, AT
 npm run start:local                    # recommended: Collector + dashboard from macOS Terminal
 npm run stop:local                     # stop only this project's dashboard
 npm run restart:local                  # stop stale dashboard and start a clean one
+npm run dashboard:service:install      # run the dashboard as a LaunchAgent (login start, crash restart)
 npm run web                            # open the local dashboard in Chrome
 ```
 
@@ -129,6 +130,15 @@ cd /path/to/jobOps
 npm run start:local
 ```
 
+**Dashboard service.** Started from a terminal, the dashboard lives in that terminal's process
+group, so closing the tab (or the session that owns it) stops it. `npm run dashboard:service:install`
+(`scripts/dashboard/service.mjs`) installs the LaunchAgent `com.amirgefen.jobops.dashboard`: it
+runs `scripts/web.mjs` without `--open`, with `RunAtLoad` and `KeepAlive` (restart after a crash,
+throttled to 10 seconds), and logs to `logs/dashboard.log`. While it is installed,
+`start:local`/`restart:local` reload it through `launchctl bootout`/`bootstrap` (then open the
+browser) and `stop:local` unloads it — a plain signal would only be undone by `KeepAlive`.
+`dashboard:service:uninstall` returns to the in-terminal dashboard.
+
 Use `restart-jobops.command` when the site is stale or a previous server still owns port `4177`.
 Use `stop-jobops.command` when you want to shut down only the dashboard. Both commands verify that
 the listener belongs to this jobOps checkout before signaling it, so they do not terminate unrelated
@@ -138,8 +148,15 @@ the dashboard is stopped.
 The dashboard runs only on `127.0.0.1:4177` and redirects `/` to `/scan`; the focused pages are:
 
 - `/scan` — run a scan, inspect source health, review per-group coverage, and diagnose failures.
-- `/decisions` — review suitable jobs and record a decision for each (interested, company to track,
-  company not interesting, too senior, role not relevant); every decision archives the job.
+- `/decisions` — review suitable jobs and record a decision for each: applied, or not applied with
+  a reason (not interesting, role not relevant, too senior, company not interesting), or follow the
+  company only. Every decision archives the job. What each decision means for statistics,
+  calibration, source value and gap weighting lives in one place, `scripts/jobs/decisions.mjs`
+  (`interested` is kept only for decisions made before "applied" existed). "Applied" also records the
+  application in `data/applications.md` (`scripts/jobs/tracker.mjs`): it updates the row with the
+  same normalized company+role (never moving a status past Applied backwards) or appends the next
+  number with status Applied; a tracker failure is reported in the response, never undoing the
+  decision.
 - `/companies` — inspect the watchlist, resolve a careers URL, and explicitly approve sources.
 - `/personal-area` — "what's missing for a perfect fit": gap terms aggregated across every analyzed
   suitable job (`GET /api/personal-area/insights`, `scripts/jobs/gap-insights.mjs`), grouped into
@@ -177,6 +194,39 @@ decline a linked-device history request; this is reported per group as `history_
 than being presented as an empty group. Pending message bodies older than seven days are erased while
 their minimal deduplication identity is retained.
 
+### Health check
+
+`scripts/jobs/health-check.mjs` runs hourly at :50 from 09:50 to 22:50 (LaunchAgent
+`com.amirgefen.jobops.health-check`, `npm run jobs:health-check`) and makes no Codex calls.
+`store.listHealthFacts()` gathers raw facts; `evaluateHealth()` is pure and turns them into
+findings with thresholds in `HEALTH_THRESHOLDS`. Rules, each meant to catch something that will
+not fix itself:
+
+- an ATS company failing in 3+ runs within 24 hours (one timeout is not a finding);
+- the scheduled ATS run silent for 3+ hours, or LinkedIn for 5+, only inside their schedule hours
+  (and LinkedIn not during a known cooldown);
+- a run still `running` with no heartbeat for 10 minutes;
+- Codex: quota blocked, 3+ failed calls in a row, or a 30%+ failure rate over 5+ calls in 24 hours.
+  Failed calls keep a sanitized `codex_calls.error_reason` (the tail of the message), quoted in
+  the finding;
+- an enabled LinkedIn search that last failed and has not succeeded for 12 hours;
+- the WhatsApp collector not connected, or reconnecting more than 3 times an hour (after 3 hours);
+- WhatsApp messages pending for more than a day; retryable job failures untouched for a day;
+- resume-gap analysis failures (informational only).
+
+Findings live in `health_findings` (one row per finding key while it persists; `resolved_at`
+closes it and a recurrence reopens it). Only findings that *open* in a check, of severity error
+or warn, queue one WhatsApp message through the job-notification outbox (key `health:…`, sent by
+the collector, gated by `notifications.whatsapp.enabled`), so a persisting problem is not re-sent.
+`GET /api/health` returns the open findings for the scan page's "בריאות המערכת" box; `POST`
+re-checks now without an alert.
+
+**WhatsApp history vs. live coverage.** A `--whatsapp-only` run asks WhatsApp for the window's
+history. When that comes back partial but the live collector has been connected to every expected
+group since before the window started (`liveCollectorSince`), the live messages are already in
+the backlog (processed by the backlog run), so the run is not marked incomplete;
+`whatsapp.coveredBy` records `live_collector`.
+
 ### Scheduled scans
 
 A scan can run unattended on a fixed schedule instead of only from the dashboard button. Three
@@ -193,7 +243,7 @@ flood of Chrome tabs while no one is watching. Each agent writes stdout and stde
 `logs/scheduled/<key>.log`, so a skipped run (lock, cooldown, quota) or a crash leaves a trace.
 
 ```bash
-npm run jobs:schedule:install    # install all LaunchAgents (three scans + the WhatsApp trigger)
+npm run jobs:schedule:install    # install all LaunchAgents (scans, company resolution, health check, WhatsApp trigger)
 npm run jobs:schedule:status     # confirm they're loaded and see each schedule
 npm run jobs:schedule:uninstall  # remove all three; the database and config are untouched
 ```
@@ -683,7 +733,10 @@ gap analysis. `/decision-stats` (`GET /api/decision-stats`, built by
 `scripts/jobs/decision-stats.mjs`) summarizes it: counts per decision over 7/30 days and all
 time, positive rate per score band (including the trial band below 4.0) and per source, and
 calibration signals — "too senior" despite a seniority score of 4–5, "not relevant" despite
-role-scope or CV-match of 4–5, and interest in jobs scored below 4.0. Only positive decisions keep
+role-scope or CV-match of 4–5, and interest in jobs scored below 4.0. "Not interesting" and "company
+not interesting" are preferences, not scoring misses: they never enter calibration, and their
+resume gaps keep full weight in the personal area (only not relevant / too senior count at ¼). The
+`decision` CHECK list is widened by rebuilding `job_decisions` on open whenever a key is added. Only positive decisions keep
 a clickable link in the stats view.
 
 **Source value.** Runs keep full details for only the last few scans, and rejected or archived jobs

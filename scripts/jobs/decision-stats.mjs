@@ -2,10 +2,10 @@
 // (store.listJobDecisions). Pure arithmetic over the stored snapshots, so it
 // can be tested without a database and recomputed on every dashboard load.
 
+import { DECISION_KEYS, POSITIVE_DECISIONS as POSITIVE } from './decisions.mjs';
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const DECISION_WINDOWS = { '7d': 7 * DAY_MS, '30d': 30 * DAY_MS, all: Infinity };
-export const DECISION_KEYS = ['interested', 'company_candidate', 'company_not_interesting', 'too_senior', 'not_relevant'];
-const POSITIVE = new Set(['interested', 'company_candidate']);
 // The threshold before the 3.6 trial; jobs scored below it exist only
 // because of the trial, so their outcome is what decides whether to keep it.
 const LEGACY_MINIMUM_SCORE = 4.0;

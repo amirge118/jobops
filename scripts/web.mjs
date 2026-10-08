@@ -21,6 +21,9 @@ import { fetchPageWithBrowser } from './jobs/browser-fetch.mjs';
 import { createDashboardQueries } from './dashboard/queries.mjs';
 import { aggregateGaps } from './jobs/gap-insights.mjs';
 import { coverageKeyOf } from './jobs/gap-coverage.mjs';
+import { WANTED_JOB_DECISIONS } from './jobs/decisions.mjs';
+import { recordApplicationInTracker } from './jobs/tracker.mjs';
+import { runHealthCheck } from './jobs/health-check.mjs';
 import { serveDashboardAsset } from './dashboard/static.mjs';
 import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { blockersForAction, createReadinessService } from './dashboard/readiness.mjs';
@@ -204,6 +207,17 @@ export function createDashboardServer({
 
       if (request.method === 'GET' && url.pathname === '/api/companies') {
         sendJson(response, 200, queries.companies());
+        return;
+      }
+
+      // The scheduled health check's findings; POST re-checks now without a
+      // WhatsApp alert (the person is already looking at the page).
+      if (url.pathname === '/api/health' && ['GET', 'POST'].includes(request.method)) {
+        const store = createJobStore(config.jobsDbPath);
+        try {
+          if (request.method === 'POST') runHealthCheck({ store, config, notify: false });
+          sendJson(response, 200, { checkedAt: store.getHealthCheckedAt(), findings: store.listHealthFindings() });
+        } finally { store.close(); }
         return;
       }
 
@@ -527,9 +541,12 @@ export function createDashboardServer({
           return;
         }
         const store = createJobStore(config.jobsDbPath);
+        let job;
         try {
-          // Before archiving: the job must still be active to resolve its company.
-          if (body.decision === 'interested') store.suggestCompanyForJob(decisionMatch[1]);
+          // Before archiving: the job must still be active to resolve its company,
+          // and archiving wipes the details the tracker row needs.
+          job = store.getJob(decisionMatch[1]);
+          if (WANTED_JOB_DECISIONS.has(body.decision)) store.suggestCompanyForJob(decisionMatch[1]);
           if (!store.decideJob(decisionMatch[1], body.decision)) {
             sendJson(response, 404, { error: 'המשרה לא נמצאה או שכבר הועברה לארכיון' });
             return;
@@ -537,7 +554,20 @@ export function createDashboardServer({
         } finally {
           store.close();
         }
-        sendJson(response, 200, { archived: true, decision: body.decision });
+        // The decision is already saved; a tracker failure is reported, not fatal.
+        let tracker = null;
+        if (body.decision === 'applied') {
+          try {
+            // The demo shares the real rootDir; its tracker lives in the demo's temp dir.
+            tracker = recordApplicationInTracker(config.demo ? path.dirname(config.jobsDbPath) : config.rootDir, {
+              company: job.company, title: job.title, score: job.score, applyUrl: job.apply_url,
+              date: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jerusalem' }),
+            });
+          } catch (error) {
+            tracker = { action: 'failed', reason: String(error?.message || error).slice(0, 200) };
+          }
+        }
+        sendJson(response, 200, { archived: true, decision: body.decision, tracker });
         return;
       }
 
@@ -582,13 +612,15 @@ export async function startDashboard(argv = process.argv.slice(2)) {
   const url = `http://${HOST}:${options.port}`;
   console.log(`jobOps dashboard: ${url}`);
 
-  if (options.open) {
-    const child = spawn('/usr/bin/open', ['-a', config.browser?.application || 'Google Chrome', url], {
-      stdio: 'ignore',
-    });
-    child.once('error', (error) => console.error(`לא ניתן לפתוח את הדשבורד: ${error.message}`));
-  }
+  if (options.open) openDashboardInBrowser(url, config);
   return { server, url };
+}
+
+export function openDashboardInBrowser(url, config = loadJobsConfig()) {
+  const child = spawn('/usr/bin/open', ['-a', config.browser?.application || 'Google Chrome', url], {
+    stdio: 'ignore',
+  });
+  child.once('error', (error) => console.error(`לא ניתן לפתוח את הדשבורד: ${error.message}`));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

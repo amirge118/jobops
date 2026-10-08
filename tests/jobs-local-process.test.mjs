@@ -6,6 +6,7 @@ import {
   parseListeningPids,
   stopDashboard,
 } from '../scripts/local-dashboard-process.mjs';
+import { DASHBOARD_LABEL, renderDashboardAgent } from '../scripts/dashboard/service.mjs';
 
 test('local dashboard PID parsing is bounded and deduplicated', () => {
   assert.deepEqual(parseListeningPids('123\n456\n123\nnot-a-pid\n'), [123, 456]);
@@ -93,4 +94,16 @@ test('stop command escalates only a verified dashboard that ignores TERM', async
 
   assert.deepEqual(signals, [[321, 'SIGTERM'], [321, 'SIGKILL']]);
   assert.deepEqual(result, { status: 'stopped', pids: [321], forced: [321] });
+});
+
+test('the dashboard service starts web.mjs at login without opening a browser, and revives it after a crash', () => {
+  const plist = renderDashboardAgent({ nodePath: '/usr/local/bin/node', rootDir: '/Users/me/jobOps' });
+  assert.match(plist, new RegExp(`<key>Label</key><string>${DASHBOARD_LABEL}</string>`));
+  assert.match(plist, /<array><string>\/usr\/local\/bin\/node<\/string><string>\/Users\/me\/jobOps\/scripts\/web\.mjs<\/string><\/array>/);
+  assert.doesNotMatch(plist, /--open/);
+  assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
+  assert.match(plist, /<key>KeepAlive<\/key>\s*<dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+  assert.match(plist, /<key>StandardErrorPath<\/key><string>\/Users\/me\/jobOps\/logs\/dashboard\.log<\/string>/);
+  // stop:local must still recognize the service's process as the jobOps dashboard.
+  assert.equal(isJobOpsDashboardProcess({ command: '/usr/local/bin/node /Users/me/jobOps/scripts/web.mjs', cwd: '/Users/me/jobOps' }, '/Users/me/jobOps'), true);
 });

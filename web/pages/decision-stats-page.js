@@ -25,12 +25,15 @@ const elements = {
   speedUnwatched: document.querySelector('#speed-unwatched'),
 };
 
+// "מעניין (לפני הגשתי)" holds decisions from before the applied button existed.
 const decisionLabels = {
-  interested: 'מעניין אותי',
-  company_candidate: 'חברה למעקב',
-  company_not_interesting: 'חברה לא מעניינת',
-  too_senior: 'בכיר מדי',
+  applied: 'הגשתי',
+  interested: 'מעניין (לפני "הגשתי")',
+  company_candidate: 'רק לעקוב אחרי החברה',
+  not_interested: 'לא מעניין אותי',
   not_relevant: 'תפקיד לא רלוונטי',
+  too_senior: 'בכיר מדי',
+  company_not_interesting: 'חברה לא מעניינת',
 };
 const sourceLabels = { whatsapp: 'WhatsApp', ats: 'ATS', linkedin: 'LinkedIn', unknown: 'לא ידוע' };
 const bandLabels = { trial: 'טווח הניסיון (מתחת ל-4.0)', fit: 'מתאים', exact: 'בול מתאים' };
@@ -167,7 +170,7 @@ function renderSpeed(speed) {
       linkedinLag.medianHours > 4 ? 'warn' : 'ok',
     ),
     calibrationCard(
-      'מה קרה אחרי "מעניין אותי"',
+      'מה קרה אחרי "הגשתי" / "מעניין"',
       `${applied}/${outcomes.positive}`,
       outcomeState === 'warn' ? `רק ${outcomes.tracked} מהן מופיעות ב-data/applications.md. עדכן הגשות ותשובות (/track) כדי לדעת איזה מקור מביא ראיונות.`
         : `הוגשו ${outcomes.byStatus.applied}, תשובה ${outcomes.byStatus.responded}, ראיון ${outcomes.byStatus.interview}, הצעה ${outcomes.byStatus.offer}.`,

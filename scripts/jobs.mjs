@@ -253,7 +253,19 @@ export function sourceScanStatRows(details, secondsBySource = {}) {
   return rows;
 }
 
-export function summarizeSourceResults(sourceResults) {
+// When the history request comes back partial but the live collector has
+// been connected to every group since before the window started, the live
+// messages already reached the backlog (processed by the backlog run, which
+// ignores the window). Partial history is then not missing coverage, and
+// reporting the run as incomplete would only be noise.
+export function liveCollectorSince(store) {
+  const collector = store.getCollectorStatusSummary();
+  const allGroups = Number(collector?.groups_expected || 0) > 0
+    && Number(collector.groups_found || 0) === Number(collector.groups_expected);
+  return collector?.status === 'connected' && allGroups ? Number(collector.started_at) : null;
+}
+
+export function summarizeSourceResults(sourceResults, { windowFrom = null, liveSince = null } = {}) {
   const ats = sourceResults.find((result) => result.source === 'ats');
   const linkedin = sourceResults.find((result) => result.source === 'linkedin');
   const whatsapp = sourceResults.find((result) => result.source === 'whatsapp');
@@ -296,9 +308,10 @@ export function summarizeSourceResults(sourceResults) {
     (total, group) => total + group.coverage.delivered,
     0,
   );
-  const whatsappCoverageStatus = groups.length > 0 && groups.every(
+  const coveredByLive = liveSince != null && windowFrom != null && liveSince <= windowFrom;
+  const whatsappCoverageStatus = groups.length > 0 && (coveredByLive || groups.every(
     (group) => group.coverage.status === 'complete',
-  ) ? 'complete' : 'incomplete';
+  )) ? 'complete' : 'incomplete';
   const whatsappDiagnostics = {
     historyEvents: Number(whatsapp?.diagnostics?.historyEvents || 0),
     historyNotifications: Number(whatsapp?.diagnostics?.historyNotifications || 0),
@@ -337,6 +350,7 @@ export function summarizeSourceResults(sourceResults) {
       },
       diagnostics: whatsappDiagnostics,
       coverageStatus: whatsappCoverageStatus,
+      coveredBy: coveredByLive ? 'live_collector' : null,
       warning: whatsappCoverageStatus !== 'complete'
         ? 'WhatsApp history לא סיפק כיסוי מוכח לכל הקבוצות; אין להסיק ממספר ההודעות שכל החלון נסרק.'
         : null,
@@ -1045,11 +1059,12 @@ async function runJobsLocked(options, config) {
 
     const sourceResults = [];
     const sourceSeconds = {};
+    const coverageContext = { windowFrom: window.from, liveSince: liveCollectorSince(store) };
     let sourceStartedAt = Date.now();
     const saveSource = (result) => {
       sourceSeconds[result.source] = (Date.now() - sourceStartedAt) / 1_000;
       sourceResults.push(result);
-      runDetails = summarizeSourceResults(sourceResults);
+      runDetails = summarizeSourceResults(sourceResults, coverageContext);
       if (!runId) return;
       // Persist each source before waiting for the next one, so an interruption
       // during WhatsApp cannot erase an already completed ATS collection.
@@ -1136,7 +1151,7 @@ async function runJobsLocked(options, config) {
       }));
     }
 
-    runDetails = summarizeSourceResults(sourceResults);
+    runDetails = summarizeSourceResults(sourceResults, coverageContext);
     if (options.retryOnly) console.log('ניסיון חוזר: מעבד רק קישורים שנכשלו או טרם קיבלו החלטה; המקורות לא נסרקים מחדש.');
     printSourceSummary(runDetails);
     printLinkedInSummary(runDetails.linkedin);

@@ -53,6 +53,11 @@
           </section>
         </div>
 
+        <section id="health-panel" class="health-panel" data-state="ok" aria-labelledby="health-title">
+          <div class="health-heading"><h2 id="health-title">בריאות המערכת</h2><p id="health-summary" class="readiness-summary">טוען…</p><button id="recheck-health" class="button button-secondary button-small" type="button">בדוק עכשיו</button></div>
+          <ul id="health-findings" class="health-findings"></ul>
+        </section>
+
         <section id="scan-result-panel" class="scan-result-panel" data-state="empty" aria-labelledby="result-title">
           <div class="result-heading"><div><span class="panel-kicker">סריקה אחרונה</span><h2 id="result-title">עדיין לא בוצעה סריקה</h2></div><span id="result-time"></span></div>
           <p id="result-summary" class="result-summary">לאחר סריקה תוצג כאן תשובה קצרה וברורה.</p>
@@ -115,5 +120,6 @@
     </div>
     <script type="module" src="/shared/app-shell.js"></script>
     <script type="module" src="/pages/scan-page.js"></script>
+    <script type="module" src="/pages/health-section.js"></script>
   </body>
 </html>

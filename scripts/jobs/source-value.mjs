@@ -4,10 +4,11 @@
 //   2. ATS company productivity: which watched companies ever produce a fit;
 //   3. exclusivity: fits only one source found, and how many days earlier.
 
+import { POSITIVE_DECISIONS as POSITIVE } from './decisions.mjs';
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const SOURCE_VALUE_WINDOW_DAYS = 30;
 export const SOURCE_KINDS = ['ats', 'whatsapp', 'linkedin'];
-const POSITIVE = new Set(['interested', 'company_candidate']);
 const TOP_COMPANIES = 10;
 
 function median(values) {

@@ -47,7 +47,7 @@ test('topics follow the subject, with narrow topics winning over broad ones', ()
     'Prompt Engineering': 'ai', RAG: 'ai', 'Vector Databases': 'ai', 'Vertex AI': 'ai', 'ML/LLM Lifecycle': 'ai',
     SQL: 'data', Databricks: 'data', 'ETL/ELT': 'data', Kafka: 'data',
     'Low Latency': 'scale', Concurrency: 'scale', Terraform: 'scale', AWS: 'scale',
-    Go: 'languages', 'C#/.NET': 'languages', 'Spring Boot': 'languages', 'Full-Stack Development': 'languages',
+    Go: 'languages', Scala: 'languages', 'Large-Scale Infrastructure': 'scale', Scalability: 'scale', 'C#/.NET': 'languages', 'Spring Boot': 'languages', 'Full-Stack Development': 'languages',
     'Go-to-Market': 'practices', Agile: 'practices', 'End-to-End Ownership': 'practices',
     '6+ Years': 'years', 'IVR': 'domain', 'National Cyber Defense': 'domain',
     'Something Unheard Of': 'other',
@@ -152,6 +152,18 @@ test('jobs you passed on count as demand but at low weight, below one relevant j
   assert.deepEqual([first.term, first.rank], ['Go', 1]);
   assert.deepEqual([second.term, second.rank, second.jobs, second.lowWeight], ['IVR', 1, 2, 2]);
   assert.equal(result.totals.lowWeight, 2);
+});
+
+test('passing on a fitting role keeps full weight; only a wrong role counts faintly', () => {
+  const result = aggregateGaps([
+    observation('a', { decision: 'not_interested', items: [item({ term: 'Go' })] }),
+    observation('b', { decision: 'company_not_interesting', items: [item({ term: 'Rust' })] }),
+    observation('c', { decision: 'not_relevant', items: [item({ term: 'Scala' })] }),
+    observation('d', { decision: 'applied', items: [item({ term: 'Kotlin' })] }),
+  ]);
+  assert.deepEqual(rowsOf(result, 'languages').map((row) => [row.term, row.rank, row.lowWeight, row.interested]),
+    [['Kotlin', 2, 0, 1], ['Go', 1, 0, 0], ['Rust', 1, 0, 0], ['Scala', 0.3, 1, 0]]);
+  assert.deepEqual([result.totals.interested, result.totals.lowWeight], [1, 1]);
 });
 
 test('hidden terms leave the lists; terms in progress lead their list', () => {

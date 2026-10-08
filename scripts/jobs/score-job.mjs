@@ -16,13 +16,19 @@ const DEFAULT_SCHEMA_PATH = path.join(MODULE_DIR, 'job-score.schema.json');
 // comes to this cap — data to decide later, with actual numbers instead of
 // a guess, whether it is safe to lower.
 export const JOB_PAGE_TEXT_CAP_CHARS = 8_000;
-const MACOS_APP_CODEX = '/Applications/ChatGPT.app/Contents/Resources/codex';
+// The Codex CLI bundled with the ChatGPT macOS app. Its location moved
+// between app versions (a ChatGPT update in October 2026 moved it under
+// codex-cli/bin), so every known layout is tried, newest first.
+export const MACOS_APP_CODEX_PATHS = Object.freeze([
+  '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex',
+  '/Applications/ChatGPT.app/Contents/Resources/codex',
+]);
 
-export function resolveCodexBinary(config) {
-  if (process.env.CODEX_BIN) return process.env.CODEX_BIN;
+export function resolveCodexBinary(config, { platform = process.platform, exists = fs.existsSync, env = process.env } = {}) {
+  if (env.CODEX_BIN) return env.CODEX_BIN;
   if (config.scoring?.binary) return config.scoring.binary;
-  if (process.platform === 'darwin' && fs.existsSync(MACOS_APP_CODEX)) return MACOS_APP_CODEX;
-  return 'codex';
+  const bundled = platform === 'darwin' ? MACOS_APP_CODEX_PATHS.find((candidate) => exists(candidate)) : null;
+  return bundled || 'codex';
 }
 
 const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
@@ -139,7 +145,7 @@ export async function runCodexExec({
     const limited = isUsageLimitMessage(error?.message);
     if (limited) noteUsageLimit(parseUsageLimitReset(error.message, now()));
     report({ ok: false, usage: null, errorCode: limited ? 'codex_usage_limit' : /timed out/i.test(error?.message) ? 'timeout' : 'failed',
-      limitUntil: limited ? inMemoryBlockedUntil(now()) || null : null });
+      errorReason: safeFailureReason(error), limitUntil: limited ? inMemoryBlockedUntil(now()) || null : null });
     throw error;
   });
 
@@ -148,7 +154,7 @@ export async function runCodexExec({
     const limited = isUsageLimitMessage(parsed.error);
     if (limited) noteUsageLimit(parseUsageLimitReset(parsed.error, now()));
     report({ ok: false, usage: parsed.usage, errorCode: limited ? 'codex_usage_limit' : 'failed',
-      limitUntil: limited ? inMemoryBlockedUntil(now()) || null : null });
+      errorReason: safeFailureReason(parsed.error), limitUntil: limited ? inMemoryBlockedUntil(now()) || null : null });
     throw new Error(`codex exec failed: ${parsed.error.slice(-1200)}`);
   }
   try {
@@ -156,7 +162,7 @@ export async function runCodexExec({
     report({ ok: true, usage: parsed.usage, errorCode: null });
     return answer;
   } catch (error) {
-    report({ ok: false, usage: parsed.usage, errorCode: 'invalid_json' });
+    report({ ok: false, usage: parsed.usage, errorCode: 'invalid_json', errorReason: safeFailureReason(error) });
     throw new Error(`codex exec returned invalid JSON: ${error.message}`);
   }
 }

@@ -14,8 +14,8 @@ import { loadJobsConfig } from './config.mjs';
 import { createJobStore } from './store.mjs';
 import { createCompanyResearcher } from './company-research.mjs';
 import { normalizeCompanyIdentity } from './company-registry.mjs';
+import { POSITIVE_DECISIONS as POSITIVE } from './decisions.mjs';
 
-const POSITIVE = new Set(['interested', 'company_candidate']);
 const VERIFIED = new Set(['verified_jobs', 'verified_empty']);
 
 function identity(name) {

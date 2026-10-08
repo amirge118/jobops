@@ -59,6 +59,16 @@ export const SCHEDULES = [
     args: [],
     times: [{ hour: 13, minute: 20 }],
   },
+  // Token-free health check (scripts/jobs/health-check.mjs) at :50, after the
+  // hourly ATS run: stores what needs attention for the scan page and sends a
+  // WhatsApp alert only for problems that are new since the last check.
+  {
+    key: 'health',
+    label: 'com.amirgefen.jobops.health-check',
+    script: ['scripts', 'health-check.mjs'],
+    args: [],
+    times: hourly({ from: 9, to: 22, minute: 50 }),
+  },
   // A token-free check every 30 minutes: it processes the locally collected
   // WhatsApp backlog only once enough new jobs are waiting, or once the
   // oldest has waited long enough (see scripts/jobs/whatsapp-trigger.mjs).

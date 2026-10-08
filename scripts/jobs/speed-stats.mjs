@@ -3,9 +3,9 @@
 // tested without a database and recomputed on every dashboard load.
 
 import { normalizeCompanyIdentity } from './company-registry.mjs';
+import { POSITIVE_DECISIONS as POSITIVE } from './decisions.mjs';
 
 const HOUR_MS = 60 * 60 * 1_000;
-const POSITIVE = new Set(['interested', 'company_candidate']);
 const SOURCES = ['ats', 'linkedin', 'whatsapp'];
 // Canonical tracker statuses (templates/states.yml) that mean "applied or later".
 const OUTCOME_STATUSES = ['applied', 'responded', 'interview', 'offer', 'rejected'];

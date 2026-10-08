@@ -4,7 +4,9 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { startDashboard } from './web.mjs';
+import { openDashboardInBrowser, startDashboard } from './web.mjs';
+import { dashboardServiceInstalled, startDashboardService } from './dashboard/service.mjs';
+import { DASHBOARD_PORT } from './local-dashboard-process.mjs';
 import { loadJobsConfig } from './jobs/config.mjs';
 import { createJobStore } from './jobs/store.mjs';
 
@@ -50,6 +52,15 @@ export async function startLocal() {
     }
   } else {
     console.log('WhatsApp Collector is connected.');
+  }
+  // Installed as a service: launchd owns the process, so it survives the
+  // terminal tab closing; otherwise it runs in this process as before.
+  if (dashboardServiceInstalled()) {
+    await startDashboardService();
+    const url = `http://127.0.0.1:${DASHBOARD_PORT}`;
+    console.log(`jobOps dashboard (service): ${url}`);
+    openDashboardInBrowser(url);
+    return { url };
   }
   return startDashboard(['--open']);
 }

@@ -3,11 +3,13 @@
 // the profile already proves, and every gap grouped by subject.
 // Pure: no store or file access, so it is tested directly.
 
+import { SCORE_MISS_DECISIONS, WANTED_JOB_DECISIONS } from './decisions.mjs';
+
 export const GAP_CATEGORIES = ['tool', 'experience', 'keyword'];
 const STRONG_FIT_SCORE = 4;
-// Jobs you passed on still count as demand, but only faintly, so their gaps
-// cannot push the top of the lists.
-const LOW_WEIGHT_DECISIONS = new Set(['not_relevant', 'too_senior', 'company_not_interesting']);
+// Jobs whose role itself was wrong for you (not relevant, too senior) still
+// count as demand, but only faintly, so their gaps cannot push the top of the
+// lists. Passing on a fitting role for other reasons keeps full weight.
 const LOW_WEIGHT_FACTOR = 0.25;
 const MAX_EXAMPLES = 3;
 const FOCUS_MIN_JOBS = 2;
@@ -31,7 +33,7 @@ export const GAP_TOPICS = [
   { id: 'data', label: 'נתונים ובסיסי נתונים', learnable: true, minor: false,
     pattern: /sql|oracle|postgres|mongo|redis|elastic|database|\bdata\b|\betl\b|\belt\b|spark|databricks|warehous|star schema|kafka|rabbitmq|snowflake|bigquery|\bdbt\b|airflow/ },
   { id: 'scale', label: 'סקייל, ביצועים ותשתיות', learnable: true, minor: false,
-    pattern: /scal|throughput|latency|concurren|multithread|real-time|infrastructure|platform|terraform|ansible|kubernetes|\bk8s\b|docker|network|\bhttp|memory|distributed|cloud|\baws\b|\bgcp\b|azure|debugging|observability|performance|microservice|devops|ci\/?cd/ },
+    pattern: /scal(?:e|ab|ing)|throughput|latency|concurren|multithread|real-time|infrastructure|platform|terraform|ansible|kubernetes|\bk8s\b|docker|network|\bhttp|memory|distributed|cloud|\baws\b|\bgcp\b|azure|debugging|observability|performance|microservice|devops|ci\/?cd/ },
   // Mostly a matter of how the resume words things, not something to study.
   { id: 'practices', label: 'שיטות עבודה ואימפקט', learnable: false, minor: false,
     pattern: /agile|scrum|ownership|business|impact|collaborat|\blead|mentor|consult|go-to-market|monetiz|pricing|revenue|testing|architecture|product|stakeholder|communication/ },
@@ -101,10 +103,10 @@ export function aggregateGaps(observations, { currentResumeText = '', statuses =
     return row;
   };
   const touchJob = (row, observation, weight) => {
-    const lowWeight = LOW_WEIGHT_DECISIONS.has(observation.decision);
+    const lowWeight = SCORE_MISS_DECISIONS.has(observation.decision);
     const effective = lowWeight ? weight * LOW_WEIGHT_FACTOR : weight;
     row.jobWeights.set(observation.jobKey, Math.max(row.jobWeights.get(observation.jobKey) || 0, effective));
-    if (observation.decision === 'interested') row.interested.add(observation.jobKey);
+    if (WANTED_JOB_DECISIONS.has(observation.decision)) row.interested.add(observation.jobKey);
     if (lowWeight) row.lowWeight.add(observation.jobKey);
     if (observation.company && !row.companies.includes(observation.company) && row.companies.length < MAX_EXAMPLES) {
       row.companies.push(observation.company);
@@ -115,7 +117,7 @@ export function aggregateGaps(observations, { currentResumeText = '', statuses =
   const sorted = [...observations].sort((left, right) => Number(right.observedAt || 0) - Number(left.observedAt || 0));
   for (const observation of sorted) {
     const base = (Number(observation.score) >= STRONG_FIT_SCORE ? 1.5 : 1)
-      + (observation.decision === 'interested' ? 1 : 0);
+      + (WANTED_JOB_DECISIONS.has(observation.decision) ? 1 : 0);
     for (const item of observation.analysis?.items || []) {
       const row = rowFor(item.term || item.keyword);
       if (!row) continue;
@@ -238,8 +240,8 @@ export function aggregateGaps(observations, { currentResumeText = '', statuses =
     totals: {
       jobs: observations.length,
       strongFit: observations.filter((observation) => Number(observation.score) >= STRONG_FIT_SCORE).length,
-      interested: observations.filter((observation) => observation.decision === 'interested').length,
-      lowWeight: observations.filter((observation) => LOW_WEIGHT_DECISIONS.has(observation.decision)).length,
+      interested: observations.filter((observation) => WANTED_JOB_DECISIONS.has(observation.decision)).length,
+      lowWeight: observations.filter((observation) => SCORE_MISS_DECISIONS.has(observation.decision)).length,
     },
     coveredByResume,
     focus,

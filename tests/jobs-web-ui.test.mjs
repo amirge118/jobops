@@ -89,13 +89,16 @@ test('decisions and companies keep explicit user-controlled actions', () => {
   assert.doesNotMatch(decisions, /renderFitDetails/);
   assert.doesNotMatch(decisions, /job\.summary/);
   assert.doesNotMatch(decisions, /job\.decisionReason/);
-  assert.match(decisions, /העבר חברה למועמדות/);
-  // "Interested" only records the decision; the job was already opened to judge it.
+  // "Applied" only records the decision; the job was already opened to judge it.
   assert.doesNotMatch(decisions, /openAndArchiveJob|window\.open/);
-  assert.match(decisions, /data-decision="interested"/);
-  assert.match(decisions, /data-decision="company_candidate"/);
-  assert.match(decisions, /company_not_interesting: 'חברה לא מעניינת'/);
-  assert.match(decisions, /too_senior: 'בכיר מדי'/);
+  assert.match(decisions, /data-decision="applied"[^>]*>✓ הגשתי</);
+  assert.doesNotMatch(decisions, /data-decision="interested"/, 'interested was replaced by applied');
+  assert.match(decisions, /לא הגשתי:/);
+  for (const [decision, label] of [['not_interested', 'לא מעניין אותי'], ['not_relevant', 'תפקיד לא רלוונטי'],
+    ['too_senior', 'בכיר מדי'], ['company_not_interesting', 'חברה לא מעניינת']]) {
+    assert.match(decisions, new RegExp(`${decision}: \\{ label: '${label}'`));
+  }
+  assert.match(decisions, /data-decision="company_candidate"[^>]*>רק לעקוב אחרי החברה</);
   assert.match(decisions, /\/api\/jobs\/\$\{encodeURIComponent\(jobKey\)\}\/decision/);
   assert.doesNotMatch(decisions, /\/archive`/);
   assert.doesNotMatch(decisions, />ארכיון</);

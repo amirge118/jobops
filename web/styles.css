@@ -277,6 +277,19 @@ details > summary:hover { color: var(--ink); }
 .summary-grid article[data-empty="true"] strong { color: var(--faint); }
 
 .readiness-panel { padding: 10px 14px; }
+.health-panel { padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--r-md); }
+.health-panel[data-state="warn"] { border-color: rgba(227, 179, 65, 0.35); }
+.health-panel[data-state="error"] { border-color: rgba(240, 123, 107, 0.4); }
+.health-panel .health-heading h2 { flex: 0 0 auto; margin: 0; font-size: 13px; }
+.health-panel .readiness-summary { flex: 1; margin: 0; }
+.health-findings { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.health-findings:not(:empty) { margin-top: 8px; }
+.health-findings li { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: var(--r-sm); background: var(--raised); font-size: 12px; }
+.health-findings li div { display: grid; gap: 1px; }
+.health-findings small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.health-severity { flex: 0 0 auto; padding: 0 7px; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 11px; line-height: 20px; }
+.health-findings li[data-severity="error"] .health-severity { background: var(--red-soft); color: var(--red); }
+.health-findings li[data-severity="warn"] .health-severity { background: var(--gold-soft); color: var(--gold); }
 .readiness-panel .health-heading h2 { flex: 0 0 auto; font-size: 13px; }
 .readiness-summary { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .readiness-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
@@ -394,7 +407,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   white-space: nowrap;
 }
 .coverage-pill[data-state="complete"], .fit-pill.is-suitable, .company-status[data-state="watched"],
-.decision-pill[data-decision="interested"], .decision-pill[data-decision="company_candidate"],
+.decision-pill[data-decision="applied"], .decision-pill[data-decision="interested"], .decision-pill[data-decision="company_candidate"],
 .source-badge[data-source="whatsapp"] { background: var(--accent-soft); color: var(--accent-text); }
 .coverage-pill[data-state="partial"], .coverage-pill[data-state="unknown"], .company-status[data-state="paused"],
 .decision-pill[data-decision="too_senior"] { background: var(--gold-soft); color: var(--gold); }
@@ -418,8 +431,13 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .job-score-fit { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .job-score-fit .score { color: var(--accent-text); font-size: 18px; line-height: 1; }
 .job-identity .fit-evidence { margin-top: 6px; }
-.job-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 6px; min-width: 220px; }
+.job-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; min-width: 220px; }
 .job-actions .job-action-button { min-height: 30px; }
+.job-actions .job-applied { border-color: transparent; background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.job-actions .job-applied:hover:not(:disabled) { background: var(--accent-soft); filter: brightness(1.15); }
+.job-actions-label { grid-column: 1 / -1; margin-top: 2px; color: var(--muted); font-size: 11px; }
+.job-follow-company { grid-column: 1 / -1; justify-self: start; padding: 0; border: 0; background: none; color: var(--accent-text); font: inherit; font-size: 11px; text-decoration: underline; cursor: pointer; }
+.job-follow-company:disabled { cursor: not-allowed; opacity: 0.45; }
 .company-actions { display: flex; flex-wrap: wrap; gap: 4px; min-width: 180px; }
 .job-action-button, .company-actions button {
   display: inline-flex;
@@ -569,7 +587,7 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 16px
 .decision-bar span { font-weight: 500; }
 .decision-bar-track { height: 6px; overflow: hidden; border-radius: 999px; background: var(--raised); }
 .decision-bar-track i { display: block; height: 100%; border-radius: inherit; background: var(--faint); }
-.decision-bar[data-decision="interested"] i, .decision-bar[data-decision="company_candidate"] i { background: var(--accent); }
+.decision-bar[data-decision="applied"] i, .decision-bar[data-decision="interested"] i, .decision-bar[data-decision="company_candidate"] i { background: var(--accent); }
 .decision-bar[data-decision="too_senior"] i { background: var(--gold); }
 .decision-bar small, .stats-muted { color: var(--muted); font-variant-numeric: tabular-nums; }
 .calibration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 0 16px 4px; }

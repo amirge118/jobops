@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 
 import { canonicalizeJobUrl, companyIdentityKey, normalizeCompanyRole, resumeGapInputHash } from './core.mjs';
 import { termKey } from './gap-insights.mjs';
+import { DECISION_KEYS } from './decisions.mjs';
 import {
   COMPANY_STATUSES,
   CompanyRegistryError,
@@ -203,7 +204,30 @@ function mapCompany(row, sources = []) {
 }
 
 export const GAP_TERM_STATUSES = new Set(['in_progress', 'hidden']);
-export const JOB_DECISIONS = new Set(['interested', 'company_candidate', 'company_not_interesting', 'too_senior', 'not_relevant']);
+export const JOB_DECISIONS = new Set(DECISION_KEYS);
+
+const JOB_DECISION_COLUMNS = 'job_key, decision, decided_at, company, title, apply_url, score, fit_label, '
+  + 'fit_json, source_kinds_json, screen_pass, criteria_version, first_seen_at';
+
+// job_decisions is rebuilt (below) whenever this CHECK list grows.
+function jobDecisionsTableSql(name) {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+      job_key TEXT PRIMARY KEY,
+      decision TEXT NOT NULL
+        CHECK(decision IN (${DECISION_KEYS.map((key) => `'${key}'`).join(', ')})),
+      decided_at INTEGER NOT NULL,
+      company TEXT,
+      title TEXT,
+      apply_url TEXT,
+      score REAL,
+      fit_label TEXT,
+      fit_json TEXT,
+      source_kinds_json TEXT NOT NULL DEFAULT '[]',
+      screen_pass TEXT,
+      criteria_version TEXT,
+      first_seen_at INTEGER
+    );`;
+}
 const FIT_DIMENSION_KEYS = ['cvMatch', 'seniority', 'roleScope', 'location', 'sector'];
 
 function mapJobDecision(row) {
@@ -568,22 +592,7 @@ export function createJobStore(databasePath) {
     -- the same transaction that archives (and wipes) the job, so this is the
     -- only durable record of the job's content — kept small and local, for
     -- statistics and score calibration, never for re-scoring.
-    CREATE TABLE IF NOT EXISTS job_decisions (
-      job_key TEXT PRIMARY KEY,
-      decision TEXT NOT NULL
-        CHECK(decision IN ('interested', 'company_candidate', 'company_not_interesting', 'too_senior', 'not_relevant')),
-      decided_at INTEGER NOT NULL,
-      company TEXT,
-      title TEXT,
-      apply_url TEXT,
-      score REAL,
-      fit_label TEXT,
-      fit_json TEXT,
-      source_kinds_json TEXT NOT NULL DEFAULT '[]',
-      screen_pass TEXT,
-      criteria_version TEXT,
-      first_seen_at INTEGER
-    );
+    ${jobDecisionsTableSql('job_decisions')}
 
     CREATE INDEX IF NOT EXISTS job_decisions_decided_idx ON job_decisions(decided_at);
 
@@ -639,6 +648,21 @@ export function createJobStore(databasePath) {
 
     CREATE INDEX IF NOT EXISTS source_scan_stats_scanned_idx ON source_scan_stats(scanned_at);
   `);
+
+  // SQLite cannot widen a CHECK list in place: copy into a table that allows
+  // every current decision (e.g. 'applied', 'not_interested').
+  const jobDecisionsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'job_decisions'").get()?.sql || '';
+  if (!DECISION_KEYS.every((key) => jobDecisionsSql.includes(`'${key}'`))) {
+    db.transaction(() => {
+      db.exec(`
+        ALTER TABLE job_decisions RENAME TO job_decisions_legacy;
+        ${jobDecisionsTableSql('job_decisions')}
+        INSERT INTO job_decisions (${JOB_DECISION_COLUMNS}) SELECT ${JOB_DECISION_COLUMNS} FROM job_decisions_legacy;
+        DROP TABLE job_decisions_legacy;
+        CREATE INDEX IF NOT EXISTS job_decisions_decided_idx ON job_decisions(decided_at);
+      `);
+    })();
+  }
 
   let companySourceColumns = db.prepare('PRAGMA table_info(company_job_sources)').all();
   const companySourceAdditions = {
@@ -839,6 +863,20 @@ export function createJobStore(databasePath) {
     -- Messages for the person about a strong new job. A scan run only queues
     -- them; the WhatsApp collector, which owns the only connection, sends
     -- them. One row per job, so a job is never announced twice.
+    -- What the scheduled health check (scripts/jobs/health-check.mjs) found.
+    -- A finding stays one row while it persists; resolved_at closes it, and a
+    -- later recurrence reopens it with a new first_seen_at.
+    CREATE TABLE IF NOT EXISTS health_findings (
+      finding_key   TEXT PRIMARY KEY,
+      area          TEXT NOT NULL,
+      severity      TEXT NOT NULL CHECK(severity IN ('error', 'warn', 'info')),
+      title         TEXT NOT NULL,
+      detail        TEXT,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at  INTEGER NOT NULL,
+      resolved_at   INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS notification_outbox (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       job_key     TEXT NOT NULL UNIQUE,
@@ -913,9 +951,12 @@ export function createJobStore(databasePath) {
     db.exec('ALTER TABLE linkedin_postings ADD COLUMN posted_at INTEGER');
   }
 
-  if (!db.prepare('PRAGMA table_info(codex_calls)').all().some((column) => column.name === 'source_mix')) {
-    try { db.exec('ALTER TABLE codex_calls ADD COLUMN source_mix TEXT'); }
-    catch (error) { if (!/duplicate column name:\s*source_mix/i.test(String(error?.message || ''))) throw error; }
+  // error_reason: the tail of a failed call's message (sanitized, as scoring
+  // failures are), so a failure can be explained after the fact.
+  for (const column of ['source_mix', 'error_reason']) {
+    if (db.prepare('PRAGMA table_info(codex_calls)').all().some((existing) => existing.name === column)) continue;
+    try { db.exec(`ALTER TABLE codex_calls ADD COLUMN ${column} TEXT`); }
+    catch (error) { if (!new RegExp(`duplicate column name:\\s*${column}`, 'i').test(String(error?.message || ''))) throw error; }
   }
 
   // LinkedIn URLs used to be keyed with their slug/subdomain/tracking params.
@@ -1752,8 +1793,8 @@ export function createJobStore(databasePath) {
       const int = (value) => (value != null && Number.isFinite(Number(value)) ? Math.round(Number(value)) : null);
       db.prepare(`
         INSERT INTO codex_calls (run_id, purpose, model, reasoning_effort, items, input_tokens, cached_input_tokens,
-          output_tokens, reasoning_tokens, duration_ms, ok, error_code, created_at, source_mix)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          output_tokens, reasoning_tokens, duration_ms, ok, error_code, created_at, source_mix, error_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         int(entry.runId), String(entry.purpose || 'other').slice(0, 32), entry.model ? String(entry.model).slice(0, 64) : null,
         entry.reasoningEffort ? String(entry.reasoningEffort).slice(0, 16) : null, int(entry.items),
@@ -1761,6 +1802,7 @@ export function createJobStore(databasePath) {
         entry.usage ? int(usage.outputTokens) : null, entry.usage ? int(usage.reasoningTokens) : null,
         int(entry.durationMs), entry.ok ? 1 : 0, entry.errorCode ? String(entry.errorCode).slice(0, 64) : null, at,
         normalizeSourceMix(entry.sourceMix),
+        entry.ok || !entry.errorReason ? null : String(entry.errorReason).slice(0, 300),
       );
       if (entry.ok) this.noteLlmSuccess(at);
       else if (entry.errorCode === 'codex_usage_limit' && entry.limitUntil) {
@@ -2976,6 +3018,106 @@ export function createJobStore(databasePath) {
         status: row.status,
         details: parseJson(row.details_json, null),
       }));
+    },
+
+    // Raw facts for the health check; the rules live in health-check.mjs.
+    listHealthFacts({ now = Date.now(), sinceMs = 24 * 60 * 60 * 1000 } = {}) {
+      const since = Number(now) - Number(sinceMs);
+      const lastRunOf = (source) => db.prepare(`
+        SELECT id, status, started_at AS startedAt, finished_at AS finishedAt FROM runs
+        WHERE finished_at IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(runs.sources) WHERE value = ?)
+        ORDER BY started_at DESC LIMIT 1
+      `).get(source) ?? null;
+      return {
+        now: Number(now),
+        companyFailures: db.prepare(`
+          SELECT scope_key AS company, COUNT(DISTINCT run_id) AS runs, MAX(created_at) AS lastAt,
+            (SELECT json_extract(e2.details_json, '$.code') FROM run_events e2
+              WHERE e2.scope = 'company' AND e2.scope_key = e.scope_key AND e2.status = 'failed'
+              ORDER BY e2.created_at DESC LIMIT 1) AS code
+          FROM run_events e
+          WHERE source = 'ats' AND scope = 'company' AND status = 'failed' AND created_at >= ?
+          GROUP BY scope_key
+        `).all(since),
+        lastRuns: Object.fromEntries(['ats', 'linkedin', 'whatsapp-backlog'].map((source) => [source, lastRunOf(source)])),
+        stuckRuns: db.prepare(`
+          SELECT id, sources, stage, heartbeat_at AS heartbeatAt, started_at AS startedAt FROM runs
+          WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) < ?
+        `).all(Number(now) - 10 * 60 * 1000),
+        codexCalls: db.prepare(`
+          SELECT ok, error_code AS errorCode, error_reason AS errorReason, purpose, created_at AS createdAt
+          FROM codex_calls WHERE created_at >= ? ORDER BY created_at DESC
+        `).all(since),
+        llmBlockedUntil: db.prepare('SELECT blocked_until AS blockedUntil FROM llm_state WHERE id = 1').get()?.blockedUntil ?? null,
+        linkedinBlockedUntil: db.prepare('SELECT blocked_until AS blockedUntil FROM linkedin_state WHERE id = 1').get()?.blockedUntil ?? null,
+        linkedinSearches: db.prepare(`
+          SELECT s.search_key AS key, p.last_status AS lastStatus, p.last_reason AS lastReason,
+            p.last_success_at AS lastSuccessAt, p.last_attempt_at AS lastAttemptAt
+          FROM linkedin_searches s
+          LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.last_attempt_at = (
+            SELECT MAX(last_attempt_at) FROM linkedin_search_progress WHERE search_id = s.id)
+          WHERE s.enabled = 1
+        `).all(),
+        collector: this.getCollectorStatusSummary(),
+        oldestPendingMessageAt: db.prepare(`
+          SELECT MIN(wa_timestamp) AS at FROM processed_messages WHERE status = 'pending' AND message_text IS NOT NULL
+        `).get()?.at ?? null,
+        failedJobs: db.prepare(`
+          SELECT last_error_code AS code, COUNT(*) AS count, MIN(last_attempted_at) AS oldestAttemptAt FROM jobs
+          WHERE archived_at IS NULL AND last_error_code IS NOT NULL GROUP BY last_error_code
+        `).all(),
+        resumeGapFailures: db.prepare(`
+          SELECT COUNT(*) AS count FROM jobs WHERE archived_at IS NULL AND resume_gap_error_code IS NOT NULL
+        `).get().count,
+      };
+    },
+
+    listHealthFindings({ includeResolved = false } = {}) {
+      return db.prepare(`
+        SELECT finding_key AS key, area, severity, title, detail, first_seen_at AS firstSeenAt,
+          last_seen_at AS lastSeenAt, resolved_at AS resolvedAt
+        FROM health_findings ${includeResolved ? '' : 'WHERE resolved_at IS NULL'}
+        ORDER BY CASE severity WHEN 'error' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, first_seen_at
+      `).all();
+    },
+
+    // Upserts the current findings and resolves the ones no longer found.
+    // Returns the findings that are new (opened or reopened) in this check.
+    saveHealthFindings(findings, at = Date.now()) {
+      const opened = [];
+      db.transaction(() => {
+        const active = new Map(db.prepare('SELECT finding_key AS key FROM health_findings WHERE resolved_at IS NULL').all()
+          .map((row) => [row.key, true]));
+        for (const finding of findings) {
+          if (!active.has(finding.key)) opened.push({ ...finding, firstSeenAt: at });
+          db.prepare(`
+            INSERT INTO health_findings (finding_key, area, severity, title, detail, first_seen_at, last_seen_at, resolved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(finding_key) DO UPDATE SET area = excluded.area, severity = excluded.severity, title = excluded.title,
+              detail = excluded.detail, last_seen_at = excluded.last_seen_at,
+              first_seen_at = CASE WHEN health_findings.resolved_at IS NULL THEN health_findings.first_seen_at ELSE excluded.first_seen_at END,
+              resolved_at = NULL
+          `).run(finding.key, finding.area, finding.severity, String(finding.title).slice(0, 200),
+            finding.detail == null ? null : String(finding.detail).slice(0, 500), at, at);
+          active.delete(finding.key);
+        }
+        for (const key of active.keys()) {
+          db.prepare('UPDATE health_findings SET resolved_at = ? WHERE finding_key = ?').run(at, key);
+        }
+        db.prepare('DELETE FROM health_findings WHERE resolved_at IS NOT NULL AND resolved_at < ?').run(at - 30 * 24 * 60 * 60 * 1000);
+        this.setCheckpoint('health_checked_at', at);
+      })();
+      return opened;
+    },
+
+    getHealthCheckedAt() {
+      return this.getCheckpoint('health_checked_at');
+    },
+
+    // Health alerts share the job-notification outbox (the collector sends
+    // it); the key keeps one alert per finding occurrence.
+    enqueueHealthNotification({ key, text, at = Date.now() }) {
+      return this.enqueueJobNotification({ jobKey: `health:${key}`, text, at });
     },
 
     getLastRunSummary() {

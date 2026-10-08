@@ -336,7 +336,7 @@ test('dashboard API records a decision, archives the job, and rejects unknown de
 
   const decidedResponse = await post(`/api/jobs/${sighting.jobKey}/decision`, { decision: 'too_senior' });
   assert.equal(decidedResponse.status, 200);
-  assert.deepEqual(await decidedResponse.json(), { archived: true, decision: 'too_senior' });
+  assert.deepEqual(await decidedResponse.json(), { archived: true, decision: 'too_senior', tracker: null });
   assert.equal((await (await fetch(`${baseUrl}/api/jobs`)).json()).jobs.length, 0);
 
   const stats = await (await fetch(`${baseUrl}/api/decision-stats`)).json();
@@ -350,6 +350,56 @@ test('dashboard API records a decision, archives the job, and rejects unknown de
   assert.equal(missingResponse.status, 404);
   assert.equal((await fetch(`${baseUrl}/api/jobs/${sighting.jobKey}/archive`, { method: 'POST' })).status, 404,
     'the plain archive route was replaced by recorded decisions');
+});
+
+test('"applied" records the decision and adds the job to the tracker once', async (context) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-dashboard-applied-'));
+  context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const config = {
+    rootDir: tempDir,
+    jobsDbPath: path.join(tempDir, 'data', 'jobs.db'),
+    scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
+    decision: { minimumScore: 4, exactMatchScore: 4.5 },
+    sources: { whatsapp: { groups: [] } },
+  };
+  const store = createJobStore(config.jobsDbPath);
+  const addJob = (url, title) => {
+    const sighting = store.recordSighting({ url, company: 'Example', title, source: 'ats' });
+    store.saveEvaluation(sighting.jobKey, {
+      company: 'Example', title, summary: 's', score: 4.25, fitLabel: 'מתאים', decisionReason: 'r', suitable: true,
+      applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: url, profileHash: 'p', criteriaVersion: 'v1',
+      evaluatedAt: Date.now(),
+    });
+    return sighting.jobKey;
+  };
+  const first = addJob('https://example.com/jobs/1', 'Backend Engineer');
+  const second = addJob('https://example.com/jobs/2', 'Data Engineer');
+  store.close();
+  fs.writeFileSync(path.join(tempDir, 'data', 'applications.md'), [
+    '# Applications Tracker', '',
+    '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |',
+    '|---|------|---------|------|-------|--------|-----|--------|-------|',
+    '| 007 | 2026-08-01 | Example | Data Engineer | 4.0/5 | Evaluated | ❌ | [007](reports/007.md) | Earlier look. |',
+    '',
+  ].join('\n'));
+
+  const server = createDashboardServer({ config });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => server.close());
+  const decide = (jobKey) => fetch(`http://127.0.0.1:${server.address().port}/api/jobs/${jobKey}/decision`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: 'applied' }),
+  }).then((response) => response.json());
+
+  assert.deepEqual((await decide(first)).tracker, { action: 'added', number: '008' });
+  assert.deepEqual((await decide(second)).tracker, { action: 'updated', number: '007' });
+  const rows = fs.readFileSync(path.join(tempDir, 'data', 'applications.md'), 'utf8').split('\n').filter((line) => /^\| \d/.test(line));
+  assert.equal(rows.length, 2, 'one row per company+role');
+  assert.match(rows[0], /^\| 007 \| 2026-08-01 \| Example \| Data Engineer \| 4\.0\/5 \| Applied \| .* Earlier look\. Applied \d{4}-\d{2}-\d{2} \(dashboard\)\. \|$/);
+  assert.match(rows[1], /^\| 008 \| \d{4}-\d{2}-\d{2} \| Example \| Backend Engineer \| 4\.3\/5 \| Applied \| ❌ \| — \| Applied .* https:\/\/example\.com\/jobs\/1 \|$/);
+
+  const store2 = createJobStore(config.jobsDbPath);
+  context.after(() => store2.close());
+  assert.deepEqual(store2.listJobDecisions().map((item) => item.decision), ['applied', 'applied']);
 });
 
 test('dashboard reports a failure breakdown with retryable flags and can bulk-archive the unretryable ones', async (context) => {

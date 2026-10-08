@@ -46,9 +46,11 @@ and no third-party application server are in the loop.
   tracked source with one click, no manual config editing.
 - 🖥️ **A real dashboard, not just a CLI** — scan, review matches, and manage tracked companies
   from a local web UI at `127.0.0.1:4177`.
-- 📊 **Learns from your choices** — every match gets a one-click decision (interested, company to
-  track, company not interesting, too senior, not relevant); a statistics page shows what you did
-  and flags where the score disagreed with you, to tune the anchors and the threshold.
+- 📊 **Learns from your choices** — every match gets a one-click decision: **applied** (also adds
+  or updates its row in `data/applications.md`), or one of four reasons you did not apply — *not
+  interesting* (the role fits, this job doesn't), *role not relevant*, *too senior*, *company not
+  interesting* — or just *follow the company*. Only "not relevant" and "too senior" count as the
+  score being wrong; the statistics page flags those to tune the anchors and the threshold.
 - 📈 **Measures whether each source is worth it** — per source: what it found, what scoring it
   cost, what fit, which ATS companies actually produce matches, and which fits only one source
   found (and how many days earlier).
@@ -78,7 +80,7 @@ and no third-party application server are in the loop.
   it beat LinkedIn by a median of ~36 hours), and its public API costs no tokens. Each company
   keeps its own progress, so one failing board never holds the others back; companies that need a
   real browser to render are scanned every 6 hours.
-- ⭐ **Watch the companies you like, automatically** — marking a job "interested" adds its
+- ⭐ **Watch the companies you like, automatically** — marking a job "applied" adds its
   company as a candidate. Once a day (13:20) every candidate is resolved on its own: Codex research
   if it was never researched, then a rendered visit to its careers site that reads ATS links, the
   ATS API calls the page makes in the background, and a repeated job-link pattern on the site
@@ -97,6 +99,7 @@ and no third-party application server are in the loop.
 | WhatsApp smart check | every 30 minutes |
 | WhatsApp full scan (history + read receipts) | 10:00 · 15:00 · 20:00 |
 | Candidate companies → watched or "cannot be scanned" | 13:20 |
+| Health check (token-free; alerts on new problems) | every hour, 09:50–22:50 |
 
 `npm run jobs:schedule:install` installs them as macOS LaunchAgents; scans never overlap, and each
 one logs to `logs/scheduled/<source>.log`, so a skipped or failed run leaves a trace.
@@ -117,6 +120,14 @@ limit, not money.
   every scheduled run until then, and shows it on the dashboard. Nothing is lost: each source
   resumes from its last success (never more than `maxLookbackDays` back), and unscored jobs are retried automatically.
 
+- 🩺 **Watches itself** — an hourly, token-free health check flags only what needs attention:
+  a company failing scan after scan, a scheduled scan that stopped running, a run stuck without a
+  heartbeat, a Codex failure streak (with the error's own reason) or exhausted quota, a LinkedIn
+  search failing for half a day, a disconnected or flapping WhatsApp collector, messages waiting a
+  day, failed jobs nobody retried. One-off failures that the next run recovers from stay quiet.
+  Findings show in the "בריאות המערכת" box on the scan page ("בדוק עכשיו" re-checks), and a
+  problem that is *new* sends one WhatsApp message to yourself (`npm run jobs:health-check`).
+
 When something did fail, `/scan-health` audits the latest run of every source plus the scan
 page's failure list (`npm run jobs:health` prints the read-only digest it works from), traces each
 failure to its cause, and separates what to fix from what to accept.
@@ -127,7 +138,7 @@ The statistics page shows where time is lost between a job going live and your d
 hours from finding a job to deciding on it per source, how long LinkedIn takes to surface a
 posting (from each card's "N hours ago"), which source saw the same job first and by how much,
 how many wanted jobs come from companies you watch (and which ones you don't yet), and — from
-`data/applications.md` — what happened after "interested".
+`data/applications.md` — what happened after "applied".
 
 ## Shows what your CV is missing for a perfect fit
 
@@ -150,7 +161,7 @@ fit before applying.
 
 Five pages — scan, decisions, tracked companies, personal area, statistics — share one dense,
 dark design: a slim top bar, 13px type, one accent color, and every decision one click away
-(open, interested, move the company to tracking, or one of three reasons to pass).
+(open, applied, one of four reasons you did not apply, or follow the company).
 
 ## Try it in 60 seconds
 
@@ -171,7 +182,11 @@ npx playwright install chromium
 npm run setup         # create private profile, preferences, and current-resume files
 codex login           # sign in with ChatGPT — no API key needed
 npm run start:local   # WhatsApp collector + dashboard
+npm run dashboard:service:install  # optional: keep the dashboard running in the background
 ```
+
+With the dashboard service installed, the dashboard starts at login, comes back after a crash,
+and no longer depends on the terminal that started it.
 
 Then open `http://127.0.0.1:4177` and configure your sources in `config/jobs.yml` and
 `portals.yml`.
