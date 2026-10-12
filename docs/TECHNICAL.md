@@ -211,6 +211,10 @@ not fix itself:
   the finding;
 - an enabled LinkedIn search that last failed and has not succeeded for 12 hours;
 - the WhatsApp collector not connected, or reconnecting more than 3 times an hour (after 3 hours);
+- the collector connected but no configured-group message stored for 12 hours, counted from the
+  later of the newest `processed_messages.wa_timestamp` and the collector run's start (so a fresh
+  pairing gets the full grace period). WhatsApp can keep a linked device connected and answering
+  group metadata while delivering no messages to it; re-pairing is the fix;
 - WhatsApp messages pending for more than a day; retryable job failures untouched for a day;
 - resume-gap analysis failures (informational only).
 

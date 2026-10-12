@@ -3062,6 +3062,7 @@ export function createJobStore(databasePath) {
         oldestPendingMessageAt: db.prepare(`
           SELECT MIN(wa_timestamp) AS at FROM processed_messages WHERE status = 'pending' AND message_text IS NOT NULL
         `).get()?.at ?? null,
+        lastGroupMessageAt: db.prepare('SELECT MAX(wa_timestamp) AS at FROM processed_messages').get()?.at ?? null,
         failedJobs: db.prepare(`
           SELECT last_error_code AS code, COUNT(*) AS count, MIN(last_attempted_at) AS oldestAttemptAt FROM jobs
           WHERE archived_at IS NULL AND last_error_code IS NOT NULL GROUP BY last_error_code

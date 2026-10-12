@@ -26,6 +26,7 @@ function facts(overrides = {}) {
     linkedinSearches: [{ key: 'backend', lastStatus: 'complete', lastSuccessAt: AFTERNOON - HOUR }],
     collector: { status: 'connected', started_at: AFTERNOON - 10 * HOUR, reconnects: 2 },
     oldestPendingMessageAt: null,
+    lastGroupMessageAt: AFTERNOON - HOUR,
     failedJobs: [],
     resumeGapFailures: 0,
     ...overrides,
@@ -73,6 +74,20 @@ test('WhatsApp: a dead collector is an error; frequent reconnects a warning', ()
   assert.deepEqual(keys(evaluateHealth(facts({ collector: null }))), ['whatsapp:collector']);
   const flapping = { status: 'connected', started_at: AFTERNOON - 10 * HOUR, reconnects: 40 };
   assert.deepEqual(keys(evaluateHealth(facts({ collector: flapping }))), ['whatsapp:reconnects']);
+});
+
+test('WhatsApp: connected but no group message for 12 hours is an error, counted from the later of message and run start', () => {
+  const longRun = { status: 'connected', started_at: AFTERNOON - 72 * HOUR, reconnects: 10 };
+  const silent = evaluateHealth(facts({ collector: longRun, lastGroupMessageAt: AFTERNOON - 13 * HOUR }));
+  assert.deepEqual(keys(silent), ['whatsapp:silent']);
+  assert.equal(silent[0].severity, 'error');
+  assert.deepEqual(keys(evaluateHealth(facts({ collector: longRun, lastGroupMessageAt: null }))), ['whatsapp:silent']);
+  assert.deepEqual(keys(evaluateHealth(facts({ collector: longRun, lastGroupMessageAt: AFTERNOON - 11 * HOUR }))), []);
+  // A fresh pairing gets the full grace period even after a long silence.
+  const fresh = { status: 'connected', started_at: AFTERNOON - 2 * HOUR, reconnects: 0 };
+  assert.deepEqual(keys(evaluateHealth(facts({ collector: fresh, lastGroupMessageAt: AFTERNOON - 90 * HOUR }))), []);
+  // A disconnected collector is already its own finding.
+  assert.deepEqual(keys(evaluateHealth(facts({ collector: { status: 'stopped' }, lastGroupMessageAt: null }))), ['whatsapp:collector']);
 });
 
 test('only retryable job failures left alone for a day count as stuck', () => {

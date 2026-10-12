@@ -123,8 +123,10 @@ limit, not money.
 - 🩺 **Watches itself** — an hourly, token-free health check flags only what needs attention:
   a company failing scan after scan, a scheduled scan that stopped running, a run stuck without a
   heartbeat, a Codex failure streak (with the error's own reason) or exhausted quota, a LinkedIn
-  search failing for half a day, a disconnected or flapping WhatsApp collector, messages waiting a
-  day, failed jobs nobody retried. One-off failures that the next run recovers from stay quiet.
+  search failing for half a day, a disconnected or flapping WhatsApp collector, one that stays
+  connected but receives no group message for 12 hours (WhatsApp stopped delivering; re-pair),
+  messages waiting a day, failed jobs nobody retried. One-off failures that the next run recovers
+  from stay quiet.
   Findings show in the "בריאות המערכת" box on the scan page ("בדוק עכשיו" re-checks), and a
   problem that is *new* sends one WhatsApp message to yourself (`npm run jobs:health-check`).
 

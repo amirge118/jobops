@@ -102,6 +102,13 @@ state remain in SQLite solely for deduplication and receipt tracking.
 - `pairing_required`: run the Collector in a terminal and scan a new QR.
 - `connection_replaced`: another process used the same linked-device session. Stop old scanners and
   keep only one Collector.
+- `whatsapp:silent` (health finding): connected and groups verified, but no group message for 12
+  hours. Seen 2026-10-08→12: WhatsApp stopped delivering group messages to the linked device while
+  only replaying undecryptable private-chat messages (`Key used already or never filled`) and
+  closing the stream every ~50 minutes with `Stream Errored (ack)`. Fix: stop the service, move
+  `auth/browser` aside, unlink the old device on the phone, and pair again in a foreground terminal;
+  the post-pairing history sync refills the missed days. `JOBOPS_WA_LOG_LEVEL=warn` shows Baileys'
+  own errors when diagnosing.
 - `decrypt_failed`: session keys could not decrypt an incoming event. Repeated occurrences may
   require a controlled re-pair; never delete `auth/` automatically.
 - `interrupted`: the recorded process disappeared without a terminal event, for example after power

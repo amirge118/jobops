@@ -18,6 +18,9 @@ export const HEALTH_THRESHOLDS = Object.freeze({
   codexFailureRate: 0.3,
   codexConsecutiveFailures: 3,
   collectorReconnectsPerHour: 3,
+  // The groups post ~200 messages a day; this long with none while connected
+  // means WhatsApp stopped delivering to the linked device (re-pair it).
+  groupSilenceHours: 12,
   backlogWaitHours: 24,
   retryStuckHours: 24,
 });
@@ -103,6 +106,14 @@ export function evaluateHealth(facts, thresholds = HEALTH_THRESHOLDS) {
     if (hours >= 3 && perHour > thresholds.collectorReconnectsPerHour) {
       add('whatsapp:reconnects', 'whatsapp', 'warn', 'החיבור ל-WhatsApp מתנתק לעתים קרובות',
         `${collector.reconnects} התחברויות מחדש ב-${Math.round(hours)} שעות. הודעות עלולות להתעכב.`);
+    }
+    // Connected but deaf: the run start counts as "heard" so a fresh pairing
+    // gets the full grace period.
+    const heardAt = Math.max(Number(facts.lastGroupMessageAt || 0), Number(collector.started_at || 0));
+    if (now - heardAt > thresholds.groupSilenceHours * HOUR) {
+      add('whatsapp:silent', 'whatsapp', 'error', 'אוסף ה-WhatsApp מחובר אבל לא מקבל הודעות מהקבוצות',
+        `${facts.lastGroupMessageAt ? `ההודעה האחרונה מקבוצה התקבלה ב-${timeText(facts.lastGroupMessageAt)}` : 'אין הודעות מהקבוצות'}. `
+        + 'WhatsApp כנראה הפסיק למסור הודעות למכשיר המקושר: צמד מחדש (docs/whatsapp-collector-runbook.md).');
     }
   }
 
