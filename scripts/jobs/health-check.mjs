@@ -100,20 +100,24 @@ export function evaluateHealth(facts, thresholds = HEALTH_THRESHOLDS) {
   if (!collector || ['interrupted', 'unconfirmed', 'stopped', 'failed', 'pairing_required'].includes(collector.status)) {
     add('whatsapp:collector', 'whatsapp', 'error', 'אוסף ה-WhatsApp לא מחובר',
       collector ? `מצב: ${collector.status}. הודעות מהקבוצות לא נאספות. הרץ npm run restart:local.` : 'האוסף מעולם לא רץ.');
-  } else if (collector.status === 'connected') {
-    const hours = Math.max(1, (now - Number(collector.started_at)) / HOUR);
-    const perHour = Number(collector.reconnects || 0) / hours;
-    if (hours >= 3 && perHour > thresholds.collectorReconnectsPerHour) {
-      add('whatsapp:reconnects', 'whatsapp', 'warn', 'החיבור ל-WhatsApp מתנתק לעתים קרובות',
-        `${collector.reconnects} התחברויות מחדש ב-${Math.round(hours)} שעות. הודעות עלולות להתעכב.`);
+  } else {
+    if (collector.status === 'connected') {
+      const hours = Math.max(1, (now - Number(collector.started_at)) / HOUR);
+      const perHour = Number(collector.reconnects || 0) / hours;
+      if (hours >= 3 && perHour > thresholds.collectorReconnectsPerHour) {
+        add('whatsapp:reconnects', 'whatsapp', 'warn', 'החיבור ל-WhatsApp מתנתק לעתים קרובות',
+          `${collector.reconnects} התחברויות מחדש ב-${Math.round(hours)} שעות. הודעות עלולות להתעכב.`);
+      }
     }
-    // Connected but deaf: the run start counts as "heard" so a fresh pairing
-    // gets the full grace period.
+    // Alive but deaf, whether connected or stuck reconnecting (2026-10-14→17
+    // it retried for three days as 'reconnecting'). The run start counts as
+    // "heard" so a fresh pairing gets the full grace period.
     const heardAt = Math.max(Number(facts.lastGroupMessageAt || 0), Number(collector.started_at || 0));
     if (now - heardAt > thresholds.groupSilenceHours * HOUR) {
-      add('whatsapp:silent', 'whatsapp', 'error', 'אוסף ה-WhatsApp מחובר אבל לא מקבל הודעות מהקבוצות',
-        `${facts.lastGroupMessageAt ? `ההודעה האחרונה מקבוצה התקבלה ב-${timeText(facts.lastGroupMessageAt)}` : 'אין הודעות מהקבוצות'}. `
-        + 'WhatsApp כנראה הפסיק למסור הודעות למכשיר המקושר: צמד מחדש (docs/whatsapp-collector-runbook.md).');
+      add('whatsapp:silent', 'whatsapp', 'error', 'אוסף ה-WhatsApp פעיל אבל לא מקבל הודעות מהקבוצות',
+        `${facts.lastGroupMessageAt ? `ההודעה האחרונה מקבוצה התקבלה ב-${timeText(facts.lastGroupMessageAt)}` : 'אין הודעות מהקבוצות'}`
+        + ` (מצב: ${collector.status}). WhatsApp כנראה הפסיק למסור הודעות למכשיר המקושר או לא מאפשר לו להתחבר: `
+        + 'צמד מחדש (docs/whatsapp-collector-runbook.md).');
     }
   }
 

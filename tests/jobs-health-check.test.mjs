@@ -86,6 +86,9 @@ test('WhatsApp: connected but no group message for 12 hours is an error, counted
   // A fresh pairing gets the full grace period even after a long silence.
   const fresh = { status: 'connected', started_at: AFTERNOON - 2 * HOUR, reconnects: 0 };
   assert.deepEqual(keys(evaluateHealth(facts({ collector: fresh, lastGroupMessageAt: AFTERNOON - 90 * HOUR }))), []);
+  // Stuck reconnecting for days is just as deaf (2026-10-14→17).
+  const retrying = { status: 'reconnecting', started_at: AFTERNOON - 72 * HOUR, reconnects: 300 };
+  assert.deepEqual(keys(evaluateHealth(facts({ collector: retrying, lastGroupMessageAt: AFTERNOON - 50 * HOUR }))), ['whatsapp:silent']);
   // A disconnected collector is already its own finding.
   assert.deepEqual(keys(evaluateHealth(facts({ collector: { status: 'stopped' }, lastGroupMessageAt: null }))), ['whatsapp:collector']);
 });
