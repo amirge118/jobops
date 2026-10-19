@@ -521,7 +521,11 @@ export function createJobPageFetcher({
             identity: { company: posting.company || null, title: posting.title || null },
           };
         } else {
-          const classification = classifySearchResponse({ ...response, cards: [] });
+          // A 200 page is a block only when LinkedIn redirected to sign-in.
+          // Its text cannot tell: every public posting page links "Sign in" /
+          // "Join now", so one posting without a description used to halt the
+          // whole run as 'blocked' (2026-10-19, posting 4474056095).
+          const classification = classifySearchResponse({ ...response, cards: [], ...(response.status === 200 ? { html: '' } : {}) });
           const blocked = ['blocked', 'rate_limited'].includes(classification.status);
           if (blocked) {
             linkedin.haltedBy = classification.status;

@@ -391,3 +391,26 @@ test('LinkedIn reads stop at the per-run cap and a changed page is not called ac
   assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/1111111111')).code, 'linkedin_structure_changed');
   assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222')).code, 'linkedin_deferred');
 });
+
+test('a LinkedIn posting page without a description fails alone and does not halt the run', async () => {
+  const requested = [];
+  const blocks = [];
+  const guestPage = '<html><body><a href="/login">Sign in</a> <a href="/signup">Join now</a><h1>Promoted role</h1></body></html>';
+  const fetcher = createJobPageFetcher({
+    store: memoryStore(),
+    cacheTtlMs: 0,
+    sleep: async () => {},
+    onLinkedInBlock: (status) => blocks.push(status),
+    fetchImpl: async (url) => {
+      requested.push(url);
+      return requested.length === 1
+        ? new Response(guestPage, { status: 200 })
+        : new Response(`<div class="show-more-less-html__markup">${'Build services. '.repeat(30)}</div>`, { status: 200 });
+    },
+  });
+
+  assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/1111111111')).code, 'linkedin_structure_changed');
+  assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222')).status, 'active', 'the next posting is still read');
+  assert.deepEqual(blocks, []);
+  assert.equal(requested.length, 2);
+});
