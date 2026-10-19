@@ -222,6 +222,11 @@ Findings live in `health_findings` (one row per finding key while it persists; `
 closes it and a recurrence reopens it). Only findings that *open* in a check, of severity error
 or warn, queue one WhatsApp message through the job-notification outbox (key `health:…`, sent by
 the collector, gated by `notifications.whatsapp.enabled`), so a persisting problem is not re-sent.
+Because the collector delivers those messages, an alert cannot arrive while it is not connected
+(2026-10-14→18 every one waited unsent). The scheduled CLI therefore also shows newly opened
+findings as a macOS notification whenever the collector status is not `connected`
+(`notifyMacOS`: `osascript` with the text passed as arguments, never inside the script; skipped with
+`--no-notify`, off macOS, and from the dashboard's "בדוק עכשיו").
 `GET /api/health` returns the open findings for the scan page's "בריאות המערכת" box; `POST`
 re-checks now without an alert.
 

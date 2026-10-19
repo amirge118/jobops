@@ -128,7 +128,8 @@ limit, not money.
   messages waiting a day, failed jobs nobody retried. One-off failures that the next run recovers
   from stay quiet.
   Findings show in the "בריאות המערכת" box on the scan page ("בדוק עכשיו" re-checks), and a
-  problem that is *new* sends one WhatsApp message to yourself (`npm run jobs:health-check`).
+  problem that is *new* sends one WhatsApp message to yourself (`npm run jobs:health-check`). While
+  the WhatsApp collector is down and cannot send it, the Mac shows the alert as a notification.
 
 When something did fail, `/scan-health` audits the latest run of every source plus the scan
 page's failure list (`npm run jobs:health` prints the read-only digest it works from), traces each

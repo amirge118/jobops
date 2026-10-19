@@ -148,6 +148,40 @@ test('no alert when notifications are off or the finding is only informational',
   assert.deepEqual(store.listPendingNotifications({ now: NIGHT }), []);
 });
 
+test('a new finding also shows on the Mac while the collector cannot send WhatsApp', (context) => {
+  const store = tempStore(context);
+  const shown = [];
+  const desktopNotify = (title, body) => { shown.push([title, body]); return true; };
+  // The empty store has no collector: it cannot deliver the WhatsApp alert.
+  const first = runHealthCheck({ store, config: notifying, now: NIGHT, desktopNotify });
+  assert.equal(first.desktop, true);
+  assert.deepEqual(shown, [['⚠️ jobOps', 'אוסף ה-WhatsApp לא מחובר']]);
+  // A persisting finding is not shown again; --no-notify shows nothing.
+  assert.equal(runHealthCheck({ store, config: notifying, now: NIGHT + HOUR, desktopNotify }).desktop, false);
+  store.saveHealthFindings([], NIGHT + 2 * HOUR);
+  assert.equal(runHealthCheck({ store, config: notifying, now: NIGHT + 3 * HOUR, notify: false, desktopNotify }).desktop, false);
+  assert.equal(shown.length, 1);
+  // A failing notifier never fails the check.
+  store.saveHealthFindings([], NIGHT + 4 * HOUR);
+  const broken = runHealthCheck({ store, config: notifying, now: NIGHT + 5 * HOUR, desktopNotify: () => { throw new Error('no GUI'); } });
+  assert.equal(broken.desktop, false);
+  assert.equal(broken.alerted, true);
+});
+
+test('no Mac notification while the collector is connected and WhatsApp can deliver', () => {
+  const shown = [];
+  const store = {
+    listHealthFacts: () => ({ now: AFTERNOON, ...facts({ codexCalls: [{ ok: 0 }, { ok: 0 }, { ok: 0 }] }) }),
+    saveHealthFindings: (findings) => findings,
+    enqueueHealthNotification: () => true,
+  };
+  const result = runHealthCheck({ store, config: notifying, now: AFTERNOON, desktopNotify: (...args) => shown.push(args) });
+  assert.deepEqual(keys(result.findings), ['codex:consecutive']);
+  assert.equal(result.alerted, true);
+  assert.equal(result.desktop, false);
+  assert.deepEqual(shown, []);
+});
+
 test('a failed Codex call keeps its reason for later diagnosis', (context) => {
   const store = tempStore(context);
   store.recordCodexCall({ purpose: 'scoring', ok: false, errorCode: 'failed', errorReason: 'stream disconnected before completion', at: NIGHT });

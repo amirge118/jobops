@@ -3,6 +3,8 @@
 // recover from are deliberately not findings. evaluateHealth is pure (facts
 // in, findings out); runHealthCheck stores them and alerts on new ones.
 
+import { execFileSync } from 'node:child_process';
+
 import { NON_RETRYABLE_FAILURE_CODES } from '../liveness-browser.mjs';
 import { notificationSettings } from './notifications.mjs';
 
@@ -150,10 +152,27 @@ export function formatHealthAlert(findings, { dashboardUrl }) {
   ].join('\n');
 }
 
+// A macOS notification. The text travels as osascript arguments, never inside
+// the script source, so no title or detail can break out of the AppleScript.
+export function notifyMacOS(title, body) {
+  if (process.platform !== 'darwin') return false;
+  execFileSync('osascript', [
+    '-e', 'on run argv',
+    '-e', 'display notification (item 2 of argv) with title (item 1 of argv)',
+    '-e', 'end run',
+    String(title).slice(0, 100), String(body).slice(0, 400),
+  ], { timeout: 10_000, stdio: 'ignore' });
+  return true;
+}
+
 // Stores the findings and queues one WhatsApp alert for those that are new
 // and worth interrupting for (error / warn). Info findings only show on the page.
-export function runHealthCheck({ store, config, now = Date.now(), notify = true }) {
-  const findings = evaluateHealth(store.listHealthFacts({ now }));
+// WhatsApp alerts are sent by the collector, so while it is not connected
+// they cannot arrive (2026-10-14→18 every one waited unsent); desktopNotify
+// (notifyMacOS from the CLI) shows them on the Mac as well.
+export function runHealthCheck({ store, config, now = Date.now(), notify = true, desktopNotify = null }) {
+  const facts = store.listHealthFacts({ now });
+  const findings = evaluateHealth(facts);
   const opened = store.saveHealthFindings(findings, now);
   const alerting = opened.filter((finding) => finding.severity !== 'info');
   const settings = notificationSettings(config);
@@ -165,5 +184,11 @@ export function runHealthCheck({ store, config, now = Date.now(), notify = true 
       at: now,
     });
   }
-  return { findings, opened, alerted };
+  let desktop = false;
+  if (notify && desktopNotify && alerting.length && facts.collector?.status !== 'connected') {
+    try {
+      desktop = Boolean(desktopNotify('⚠️ jobOps', alerting.map((finding) => finding.title).join(' · ')));
+    } catch { /* a failed desktop notification must not fail the check */ }
+  }
+  return { findings, opened, alerted, desktop };
 }
