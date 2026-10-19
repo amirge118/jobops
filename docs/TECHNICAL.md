@@ -605,8 +605,14 @@ alongside recovery requests, delivered messages, and job outcomes. Zero delivery
 empty inbox. If recovery still fails, keep the phone online, check Linked devices, and try again
 after a new message arrives in that group. Re-pairing is a possible later troubleshooting step,
 not an automatic action or a guaranteed fix. The scanner never resets credentials automatically.
-The Baileys 6 line is pinned to `6.7.24` so a reinstall cannot silently change linked-device
-behavior.
+Baileys is pinned to an exact version (`7.0.0-rc14` since 2026-10-19) so a reinstall cannot
+silently change linked-device behavior. The 6.7 line (npm tag `legacy`) could not decrypt
+LID-addressed messages (`No matching sessions found`), left them unanswered so WhatsApp stopped
+delivering the offline queue, and made the phone show "syncing with Google Chrome (Ubuntu)" for
+every resend request. The collector also passes `shouldIgnoreJid`, so everything outside the
+configured groups and the own account is acked and dropped before decryption. Never stop Baileys
+from answering a message it cannot decrypt: the retry receipt is the server's acknowledgement, and
+without it the whole offline queue stalls (seen 2026-10-19 09:44–12:44).
 
 ### Automatic company resolution
 

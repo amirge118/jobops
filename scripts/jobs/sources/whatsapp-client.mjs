@@ -60,7 +60,26 @@ export function shouldRetryWhatsAppConnection(statusCode, error = null) {
     statusCode === DisconnectReason.restartRequired;
 }
 
-export function createWhatsAppSocketOptions({ auth, logger: socketLogger }) {
+// The Collector needs only the configured groups. Everything else is acked
+// and dropped before decryption, because a message Baileys cannot decrypt
+// makes it ask the sending device to resend, and every such request wakes the
+// person's phone ("syncing with Google Chrome (Ubuntu)"). Own JIDs stay: the
+// phone's protocol messages (history sync, app-state keys) come from them.
+// Without the own identity yet (first pairing) private chats are kept.
+export function createWhatsAppIgnoreJid({ trackedGroupJids, ownJids = [] }) {
+  const user = (jid) => String(jid).split('@')[0].split(':')[0];
+  const own = new Set(ownJids.filter(Boolean).map(user));
+  return (jid) => {
+    const value = String(jid || '');
+    if (!value.includes('@') || value.startsWith('@')) return false;
+    if (value.endsWith('@g.us')) return !trackedGroupJids.has(value);
+    if (value.endsWith('@broadcast') || value.endsWith('@newsletter')) return true;
+    if (value.endsWith('@s.whatsapp.net') || value.endsWith('@lid')) return own.size > 0 && !own.has(user(value));
+    return false;
+  };
+}
+
+export function createWhatsAppSocketOptions({ auth, logger: socketLogger, configuredGroupJids = null }) {
   return {
     auth,
     logger: socketLogger,
@@ -70,6 +89,12 @@ export function createWhatsAppSocketOptions({ auth, logger: socketLogger }) {
     browser: Browsers.ubuntu('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: true,
+    ...(configuredGroupJids ? {
+      shouldIgnoreJid: createWhatsAppIgnoreJid({
+        trackedGroupJids: configuredGroupJids,
+        ownJids: [auth?.creds?.me?.id, auth?.creds?.me?.lid],
+      }),
+    } : {}),
   };
 }
 
@@ -142,7 +167,7 @@ export async function connectWhatsApp(authPath, {
       const socketGeneration = ++generation;
       const { version } = await fetchLatestBaileysVersion();
       const sock = makeWASocket({
-        ...createWhatsAppSocketOptions({ auth: state, logger }),
+        ...createWhatsAppSocketOptions({ auth: state, logger, configuredGroupJids }),
         version,
       });
 

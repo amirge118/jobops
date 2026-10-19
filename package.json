@@ -69,7 +69,7 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "6.7.24",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "better-sqlite3": "^11.7.0",
     "js-yaml": "^5.3.0",
     "pino": "^9.5.0",

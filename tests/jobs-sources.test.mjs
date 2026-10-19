@@ -14,6 +14,7 @@ import {
   verifyConfiguredGroups,
 } from '../scripts/jobs/sources/whatsapp.mjs';
 import {
+  createWhatsAppIgnoreJid,
   createWhatsAppSocketOptions,
   decideHistoryWait,
   shouldRetryWhatsAppConnection,
@@ -266,6 +267,29 @@ test('WhatsApp socket requests history as a supported web client', () => {
   assert.equal(options.browser[1], 'Chrome');
   assert.equal(options.syncFullHistory, true);
   assert.equal(options.markOnlineOnConnect, false);
+});
+
+test('the socket drops every chat except the tracked groups and the own account', () => {
+  const tracked = new Set(['111@g.us']);
+  const ignore = createWhatsAppIgnoreJid({ trackedGroupJids: tracked, ownJids: ['972501234567:12@s.whatsapp.net', '88888:12@lid'] });
+  assert.equal(ignore('111@g.us'), false);
+  assert.equal(ignore('222@g.us'), true);
+  assert.equal(ignore('972509999999@s.whatsapp.net'), true);
+  assert.equal(ignore('77777@lid'), true);
+  assert.equal(ignore('status@broadcast'), true);
+  assert.equal(ignore('123@newsletter'), true);
+  // The phone's protocol messages and server stanzas are never dropped.
+  assert.equal(ignore('972501234567:0@s.whatsapp.net'), false);
+  assert.equal(ignore('88888@lid'), false);
+  assert.equal(ignore('@s.whatsapp.net'), false);
+  assert.equal(ignore(undefined), false);
+  // Before the first pairing the own identity is unknown: keep private chats.
+  assert.equal(createWhatsAppIgnoreJid({ trackedGroupJids: tracked })('972509999999@s.whatsapp.net'), false);
+
+  const options = createWhatsAppSocketOptions({ auth: { creds: { me: { id: '972501234567:12@s.whatsapp.net' } }, keys: {} }, logger: {}, configuredGroupJids: tracked });
+  assert.equal(options.shouldIgnoreJid('222@g.us'), true);
+  assert.equal(options.shouldIgnoreJid('972501234567:0@s.whatsapp.net'), false);
+  assert.equal(createWhatsAppSocketOptions({ auth: { creds: {}, keys: {} }, logger: {} }).shouldIgnoreJid, undefined);
 });
 
 test('local WhatsApp backlog is processed newest-first without opening a socket', () => {
