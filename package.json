@@ -37,6 +37,7 @@
     "jobs:import-whatsapp-links": "node scripts/jobs/import-whatsapp-links.mjs",
     "jobs:linkedin": "node scripts/jobs.mjs --linkedin-only",
     "jobs:linkedin-probe": "node scripts/jobs/linkedin-probe.mjs",
+    "jobs:linkedin-canary": "node scripts/jobs/linkedin-canary.mjs",
     "jobs:whatsapp-trigger": "node scripts/jobs/whatsapp-trigger.mjs",
     "jobs:dedup": "node scripts/jobs/dedup.mjs",
     "jobs:health": "node scripts/scan-health.mjs",

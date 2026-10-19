@@ -356,6 +356,7 @@ source: dedup in SQLite, page verification, Codex scoring, and resume-gap analys
 npm run jobs:linkedin                             # LinkedIn only, automatic windows
 npm run jobs -- --linkedin-only --linkedin-hours 12  # LinkedIn only, a manual 12-hour window
 npm run jobs:linkedin-probe                       # bounded read-only health check of the endpoint
+npm run jobs:linkedin-canary                      # one posting request, logged (see docs/linkedin-reliability-plan.md)
 ```
 
 **Searches.** `sources.linkedin.searches` in `config/jobs.yml` is the only place searches are
@@ -823,6 +824,7 @@ scripts/jobs/company-source-resolver.mjs  researched URL discovery, safe probing
 scripts/jobs/sources/linkedin.mjs  LinkedIn guest search, parsing, failure classification, collection
 scripts/jobs/linkedin-window.mjs   per-search coverage windows and advancement rules
 scripts/jobs/linkedin-probe.mjs    bounded read-only LinkedIn feasibility probe
+scripts/jobs/linkedin-canary.mjs   one-request / paced-series LinkedIn canary → data/linkedin-canary.jsonl
 scripts/providers/       ATS and official career-source adapters
 scripts/web.mjs          local dashboard entry point and API composition
 scripts/dashboard/       dashboard actions, focused queries, and safe static routing
