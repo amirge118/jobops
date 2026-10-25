@@ -172,14 +172,20 @@ export function createDashboardQueries(config, action) {
     };
   };
 
+  // LinkedIn postings waiting for the hourly cap or a cooldown are not
+  // failures: the queue reader reads them on its own, and "retry" would only
+  // add requests to LinkedIn. They are reported apart as `waiting`.
+  const WAITING_CODES = new Set(['linkedin_deferred', 'linkedin_cooldown']);
   const failures = (store) => {
-    const breakdown = store.getFailureBreakdown().map((row) => ({
+    const rows = store.getFailureBreakdown();
+    const breakdown = rows.filter((row) => !WAITING_CODES.has(row.code)).map((row) => ({
       ...row,
       retryable: !NON_RETRYABLE_FAILURE_CODES.has(row.code),
     }));
     const retryableTotal = breakdown.filter((row) => row.retryable).reduce((sum, row) => sum + row.count, 0);
     const nonRetryableTotal = breakdown.filter((row) => !row.retryable).reduce((sum, row) => sum + row.count, 0);
-    return { breakdown, retryableTotal, nonRetryableTotal };
+    const waiting = { linkedin: rows.filter((row) => WAITING_CODES.has(row.code)).reduce((sum, row) => sum + row.count, 0) };
+    return { breakdown, retryableTotal, nonRetryableTotal, waiting };
   };
 
   const snapshot = () => withStore((store) => ({

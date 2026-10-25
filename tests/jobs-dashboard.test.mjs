@@ -417,6 +417,10 @@ test('dashboard reports a failure breakdown with retryable flags and can bulk-ar
   const timedOut = store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ats' });
   store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.' });
   store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.' });
+  for (const [id, code] of [['4400000001', 'linkedin_deferred'], ['4400000002', 'linkedin_cooldown']]) {
+    const queued = store.recordSighting({ url: `https://www.linkedin.com/jobs/view/${id}`, source: 'WhatsApp: G' });
+    store.markEvaluationFailure(queued.jobKey, { code, reason: 'waiting' });
+  }
   store.close();
 
   const server = createDashboardServer({ config });
@@ -425,6 +429,8 @@ test('dashboard reports a failure breakdown with retryable flags and can bulk-ar
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
   const scan = await fetch(`${baseUrl}/api/scan`).then((response) => response.json());
+  // Queued LinkedIn postings are waiting, not failing.
+  assert.deepEqual(scan.failures.waiting, { linkedin: 2 });
   assert.deepEqual(scan.failures.breakdown, [
     { code: 'bot_challenge', count: 1, retryable: false },
     { code: 'timeout', count: 1, retryable: true },

@@ -17,6 +17,7 @@ const elements = {
   resultSummary: document.querySelector('#result-summary'), resultTime: document.querySelector('#result-time'),
   diagnosisIssues: document.querySelector('#diagnosis-issues'), sourceDetails: document.querySelector('#source-details'),
   failureOverview: document.querySelector('#failure-overview'), failureBreakdownBody: document.querySelector('#failure-breakdown-body'),
+  linkedinWaiting: document.querySelector('#linkedin-waiting'),
   archiveFailed: document.querySelector('#archive-failed'),
   runAuditBody: document.querySelector('#run-audit-body'), runAuditEmpty: document.querySelector('#run-audit-empty'),
   activity: document.querySelector('#activity-card'), activityKicker: document.querySelector('#activity-kicker'),
@@ -426,6 +427,9 @@ function renderRunAudit(lastRun) {
 function renderFailureOverview(failures) {
   failuresState = failures || { breakdown: [], retryableTotal: 0, nonRetryableTotal: 0 };
   const { breakdown, retryableTotal, nonRetryableTotal } = failuresState;
+  const waitingLinkedIn = failuresState.waiting?.linkedin || 0;
+  elements.linkedinWaiting.hidden = waitingLinkedIn === 0;
+  elements.linkedinWaiting.textContent = `${waitingLinkedIn} משרות LinkedIn ממתינות לקריאה. הן נקראות אוטומטית כל 30 דקות, לפי התקרה לשעה — אין צורך לנסות שוב.`;
   elements.failureOverview.hidden = breakdown.length === 0;
   elements.retryFailed.textContent = `נסה שוב כשלים ניתנים לתיקון (${retryableTotal})`;
   elements.archiveFailed.textContent = `רוקן כשלים שלא ניתן לתקן (${nonRetryableTotal})`;
