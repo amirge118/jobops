@@ -68,6 +68,13 @@ test('Codex: a one-off failure is quiet; a failing streak and a block are errors
   assert.deepEqual(keys(streak), ['codex:consecutive']);
   assert.match(streak[0].detail, /stream disconnected/);
   assert.deepEqual(keys(evaluateHealth(facts({ llmBlockedUntil: AFTERNOON + HOUR }))), ['codex:blocked']);
+
+  // A high failure rate is a problem only while failures continue.
+  const failingEarlier = Array.from({ length: 8 }, () => ({ ok: 0 }));
+  const recovered = [...Array.from({ length: 5 }, () => ({ ok: 1 })), ...failingEarlier];
+  assert.deepEqual(evaluateHealth(facts({ codexCalls: recovered })), []);
+  const stillFailing = [{ ok: 1 }, { ok: 0 }, { ok: 1 }, { ok: 1 }, { ok: 1 }, ...failingEarlier];
+  assert.deepEqual(keys(evaluateHealth(facts({ codexCalls: stillFailing }))), ['codex:rate']);
 });
 
 test('WhatsApp: a dead collector is an error; frequent reconnects a warning', () => {

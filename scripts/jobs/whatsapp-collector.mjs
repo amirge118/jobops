@@ -17,6 +17,39 @@ import { createJobStore } from './store.mjs';
 const RECEIPT_BATCH_SIZE = 100;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
+// The backoff counts failures in a row, not every reconnect since start:
+// WhatsApp ends a healthy connection about every 50 minutes (Stream Errored
+// (ack)), and counting those made every reconnect wait the 30s maximum after
+// a few hours. A connection that stayed up STABLE_CONNECTION_MS resets the
+// count; one that drops right after connecting keeps backing off, so a flapping
+// connection never retries every second.
+export const STABLE_CONNECTION_MS = 60_000;
+
+export function nextFailureStreak(streak, connectedForMs) {
+  return connectedForMs != null && connectedForMs >= STABLE_CONNECTION_MS ? 1 : streak + 1;
+}
+
+// What WhatsApp said when it closed the stream, minus anything personal. A
+// <stream:error> carries its reason as the first child (Baileys names the
+// error after that child's tag, e.g. "ack"); its id/class/type say which
+// stanza the server was waiting on. Ids are opaque stanza ids; JIDs and long
+// digit runs (phone numbers) are never kept. Lets the recurring 50-minute
+// "Stream Errored (ack)" be traced to the stanza that causes it.
+export function streamErrorSummary(error) {
+  if (!error) return null;
+  const node = error.data && typeof error.data === 'object' ? error.data : null;
+  const attrs = node?.attrs && typeof node.attrs === 'object' ? node.attrs : {};
+  const child = Array.isArray(node?.content) ? node.content.find((item) => item && typeof item === 'object' && item.tag) : null;
+  const childAttrs = child?.attrs && typeof child.attrs === 'object' ? child.attrs : {};
+  const pick = (value) => (typeof value === 'string' && /^[\w.:-]{1,40}$/.test(value) && !/\d{6,}/.test(value) ? value : undefined);
+  return {
+    message: String(error.message || '').replace(/\d{6,}/g, '[n]').slice(0, 160),
+    tag: pick(node?.tag),
+    code: pick(attrs.code),
+    reason: child ? { tag: pick(child.tag), id: pick(childAttrs.id), class: pick(childAttrs.class), type: pick(childAttrs.type) } : undefined,
+  };
+}
+
 export function reconnectDelay(attempt, { baseMs = 1_000, maxMs = 30_000, random = Math.random } = {}) {
   const exponential = Math.min(maxMs, baseMs * (2 ** Math.max(0, attempt - 1)));
   return Math.round(exponential * (0.8 + Math.max(0, Math.min(1, random())) * 0.4));
@@ -174,6 +207,8 @@ export async function runWhatsAppCollector({
   const stopPromise = new Promise((resolve) => { stopResolve = resolve; });
   let receiptQueue = Promise.resolve();
   let reconnects = 0;
+  let failureStreak = 0;
+  let lastConnectedAt = null;
   let connectionActive = false;
   let lastHeartbeatTick = now();
 
@@ -242,6 +277,9 @@ export async function runWhatsAppCollector({
           onIngressError(error) {
             closeResolve({ error });
           },
+          onDecryptFailures(failures) {
+            store.recordCollectorEvent(runId, { stage: 'decrypt-failure', status: 'warning', count: failures.length, details: { failures } });
+          },
           onMessages(messages, sock) {
             const batch = queueIncomingMessages({ messages, configuredGroupJids: groupJids, store, sinceMs: 0 });
             const retention = discardExpiredWhatsAppBacklog({
@@ -305,6 +343,7 @@ export async function runWhatsAppCollector({
         activeSock = connected;
         connectionActive = true;
         const connectedAt = now();
+        lastConnectedAt = connectedAt;
         record('connected', 'connected', { update: { connectedAt } });
 
         const verification = await verifyConfiguredGroups(config, connected);
@@ -345,7 +384,7 @@ export async function runWhatsAppCollector({
         const retryable = shouldRetryWhatsAppConnection(statusCode, lastDisconnect?.error);
         store.recordCollectorEvent(runId, {
           stage: 'connection-closed', status: retryable ? 'warning' : 'failed',
-          details: { ...failure, ...(statusCode ? { statusCode } : {}), retryable },
+          details: { ...failure, ...(statusCode ? { statusCode } : {}), retryable, stream: streamErrorSummary(lastDisconnect?.error) },
         });
 
         if (statusCode === DisconnectReason.loggedOut) {
@@ -377,12 +416,14 @@ export async function runWhatsAppCollector({
       }
 
       reconnects += 1;
+      failureStreak = nextFailureStreak(failureStreak, lastConnectedAt == null ? null : now() - lastConnectedAt);
+      lastConnectedAt = null;
       store.updateCollectorRun(runId, { reconnects: 1 });
-      const delayMs = reconnectDelay(reconnects, {
+      const delayMs = reconnectDelay(failureStreak, {
         baseMs: Number(collectorConfig.reconnectBaseMs || 1_000),
         maxMs: Number(collectorConfig.reconnectMaxMs || 30_000),
       });
-      store.recordCollectorEvent(runId, { stage: 'reconnect-wait', status: 'started', details: { attempt: reconnects, delayMs } });
+      store.recordCollectorEvent(runId, { stage: 'reconnect-wait', status: 'started', details: { attempt: reconnects, failureStreak, delayMs } });
       await Promise.race([sleep(delayMs), stopPromise]);
     }
 

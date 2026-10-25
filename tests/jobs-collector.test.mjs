@@ -10,7 +10,7 @@ import { renderLaunchAgent } from '../scripts/jobs/collector-service.mjs';
 import { acquireSingleInstance } from '../scripts/jobs/single-instance.mjs';
 import { scanWhatsApp } from '../scripts/jobs/sources/whatsapp.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
-import { hasContinuityGap, processNextHistoryRequest, reconnectDelay, runWhatsAppCollector } from '../scripts/jobs/whatsapp-collector.mjs';
+import { STABLE_CONNECTION_MS, hasContinuityGap, streamErrorSummary, nextFailureStreak, processNextHistoryRequest, reconnectDelay, runWhatsAppCollector } from '../scripts/jobs/whatsapp-collector.mjs';
 
 const group = { name: 'Group A', jid: 'group-a@g.us' };
 const configFor = (dir) => ({
@@ -235,4 +235,31 @@ test('collector reports a history group as failed when WhatsApp returns no histo
   assert.equal(result.status, 'failed');
   assert.equal(result.groups[0].status, 'failed');
   assert.equal(result.groups[0].reason, 'history_no_response');
+});
+
+test('the reconnect backoff restarts after a stable connection, but keeps growing while it flaps', () => {
+  // WhatsApp ends a healthy connection about every 50 minutes: each time, the
+  // next reconnect starts from the base delay again instead of the 30s maximum.
+  let streak = 0;
+  for (let drop = 0; drop < 30; drop += 1) streak = nextFailureStreak(streak, 50 * 60_000);
+  assert.equal(streak, 1);
+  assert.equal(reconnectDelay(streak, { baseMs: 1_000, maxMs: 30_000, random: () => 0.5 }), 1_000);
+
+  // Never connected, or dropped right after connecting: back off as before.
+  assert.equal(nextFailureStreak(3, null), 4);
+  assert.equal(nextFailureStreak(3, STABLE_CONNECTION_MS - 1), 4);
+  assert.equal(nextFailureStreak(3, STABLE_CONNECTION_MS), 1);
+});
+
+test('a stream error is summarized by its reason stanza, without JIDs or phone numbers', () => {
+  const error = Object.assign(new Error('Stream Errored (ack) from 972501234567@s.whatsapp.net'), {
+    data: { tag: 'stream:error', attrs: {}, content: [
+      { tag: 'ack', attrs: { id: '3EB0ABCDEF', class: 'notification', type: 'w:gp2', from: '972501234567@s.whatsapp.net' } },
+    ] },
+  });
+  assert.deepEqual(streamErrorSummary(error), {
+    message: 'Stream Errored (ack) from [n]@s.whatsapp.net', tag: 'stream:error', code: undefined,
+    reason: { tag: 'ack', id: '3EB0ABCDEF', class: 'notification', type: 'w:gp2' },
+  });
+  assert.equal(streamErrorSummary(null), null);
 });

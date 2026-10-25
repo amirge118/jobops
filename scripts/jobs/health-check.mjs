@@ -19,6 +19,7 @@ export const HEALTH_THRESHOLDS = Object.freeze({
   codexMinCalls: 5,
   codexFailureRate: 0.3,
   codexConsecutiveFailures: 3,
+  codexRecentCalls: 5, // a failure rate counts only while one of these latest calls still fails
   collectorReconnectsPerHour: 3,
   // The groups post ~200 messages a day; this long with none while connected
   // means WhatsApp stopped delivering to the linked device (re-pair it).
@@ -95,7 +96,9 @@ export function evaluateHealth(facts, thresholds = HEALTH_THRESHOLDS) {
     add('codex:blocked', 'codex', 'error', 'מכסת Codex נגמרה', `ניקוד משרות מושהה עד ${timeText(facts.llmBlockedUntil)}.`);
   } else if (consecutive >= thresholds.codexConsecutiveFailures) {
     add('codex:consecutive', 'codex', 'error', `${consecutive} קריאות Codex אחרונות נכשלו ברצף`, `משרות חדשות לא מנוקדות.${reasonText}`);
-  } else if (calls.length >= thresholds.codexMinCalls && failed.length / calls.length >= thresholds.codexFailureRate) {
+  } else if (calls.length >= thresholds.codexMinCalls && failed.length / calls.length >= thresholds.codexFailureRate
+    // Failures that recent successes already followed are history, not a problem.
+    && calls.slice(0, thresholds.codexRecentCalls).some((call) => !call.ok)) {
     add('codex:rate', 'codex', 'warn', `${failed.length} מתוך ${calls.length} קריאות Codex נכשלו ב-24 שעות`, `שיעור כישלון גבוה.${reasonText}`);
   }
 

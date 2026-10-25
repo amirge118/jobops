@@ -97,12 +97,18 @@ decision:
 
 scoring:
   provider: "codex"
-  # Every codex exec call pays ~14k input tokens of Codex's own instructions
-  # before any job text, so larger batches are much cheaper per job.
+  # Every codex exec call pays ~7k input tokens of Codex's own instructions
+  # (measured 2026-10-09, lean flags) plus ~3k of profile and rules before any
+  # job text, so larger batches are much cheaper per job.
   batchSize: 10
   # Per codex call (~10s per job measured on gpt-reserve); a batch that exceeds
   # it fails as a whole and is retried next scan.
   timeoutSeconds: 300
+  # Scheduled runs wait until this many jobs need scoring, or the oldest has
+  # waited maxWaitHours: each Codex call pays a fixed ~11k tokens before any
+  # job. Dashboard scans and retries always score immediately.
+  minBatch: 8
+  maxWaitHours: 2
   # Model for every Codex call (scoring, resume analysis, company research).
   # jobOps runs codex exec with --ignore-user-config, so without this line
   # Codex's own default (priciest) model is used, not your personal CLI model.

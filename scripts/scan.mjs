@@ -189,6 +189,10 @@ export function loadTitleFilterPositive(portalsPath) {
 //   - `block` matches → reject
 //   - `allow` empty → pass (already cleared block)
 //   - `allow` non-empty → must match at least one keyword
+// The title is checked too, for `always_allow` and `block` only: many boards
+// leave the location field empty and put the place in the title ("Senior
+// Engineer - APAC Singapore"), which used to reach Codex scoring unfiltered
+// (2026-10-09: ~40 of 151 rejected ATS jobs in 14 days).
 
 // Normalize a keyword list from portals.yml: tolerates a bare string
 // (wrapped to a 1-item array), null/undefined (→ []), and non-string
@@ -211,10 +215,13 @@ export function buildLocationFilter(locationFilter) {
   const allow = normalizeKeywordList(locationFilter.allow);
   const block = normalizeKeywordList(locationFilter.block);
 
-  return (location) => {
-    if (typeof location !== 'string' || location.trim() === '') return true;
-    const lower = location.toLowerCase();
-    if (alwaysAllow.length > 0 && alwaysAllow.some(k => lower.includes(k))) return true;
+  return (location, title = '') => {
+    const lower = typeof location === 'string' ? location.toLowerCase() : '';
+    const lowerTitle = typeof title === 'string' ? title.toLowerCase() : '';
+    // The home region in either field wins over any block, as before.
+    if (alwaysAllow.some(k => lower.includes(k) || lowerTitle.includes(k))) return true;
+    if (block.some(k => lowerTitle.includes(k))) return false;
+    if (lower.trim() === '') return true;
     if (block.length > 0 && block.some(k => lower.includes(k))) return false;
     if (allow.length === 0) return true;
     return allow.some(k => lower.includes(k));
@@ -615,7 +622,7 @@ export async function runPortalScan(args = [], { additionalCompanies = [], maxAg
           totalFilteredTitle++;
           continue;
         }
-        if (!locationFilter(job.location)) {
+        if (!locationFilter(job.location, job.title)) {
           totalFilteredLocation++;
           continue;
         }

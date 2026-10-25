@@ -34,6 +34,26 @@ location_filter:
     - "Poland"
     - "Portugal"
     - "Ukraine"
+    # Also matched against the job title (boards that leave the location
+    # field empty name it there). Added 2026-10-09 from rejected ATS jobs.
+    # Not "EMEA": Israel is part of it.
+    - "Singapore"
+    - "Sydney"
+    - "Melbourne"
+    - "Australia"
+    - "Seattle"
+    - "Amsterdam"
+    - "Netherlands"
+    - "Seoul"
+    - "Korea"
+    - "Japan"
+    - "Tokyo"
+    - "Germany"
+    - "Berlin"
+    - "Canada"
+    - "Toronto"
+    - "APAC"
+    - "Americas"
 
 # -- Recency filter (optional) --
 # Uncomment to only keep postings within N hours of their posting date (Greenhouse/

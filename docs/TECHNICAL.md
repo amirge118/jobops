@@ -206,7 +206,8 @@ not fix itself:
 - the scheduled ATS run silent for 3+ hours, or LinkedIn for 5+, only inside their schedule hours
   (and LinkedIn not during a known cooldown);
 - a run still `running` with no heartbeat for 10 minutes;
-- Codex: quota blocked, 3+ failed calls in a row, or a 30%+ failure rate over 5+ calls in 24 hours.
+- Codex: quota blocked, 3+ failed calls in a row, or a 30%+ failure rate over 5+ calls in 24 hours
+  while one of the latest 5 calls still fails (failures that later successes followed are history).
   Failed calls keep a sanitized `codex_calls.error_reason` (the tail of the message), quoted in
   the finding;
 - an enabled LinkedIn search that last failed and has not succeeded for 12 hours;
@@ -310,6 +311,29 @@ wake instead, coalescing every slot missed during sleep into a single run. Each 
 from its own progress, so that one run covers the whole gap. A Mac that sleeps through the
 working day still delays jobs until it wakes, so keep it awake (or on power) during the hours you
 want jobs to arrive quickly.
+
+#### Scoring batches and the fixed cost per call
+
+Measured 2026-10-09 with the bundled Codex 0.159 on `gpt-reserve`: a one-line prompt costs
+**7,007 input tokens** with the lean flags (`LEAN_DISABLED_FEATURES` + the short instructions file);
+disabling a dozen further enabled features changed nothing. The scoring prompt (trimmed profile,
+preferences, rules) adds ~3k, so every call pays ~10k before any job, and each extra job adds
+~0.7k in and ~0.3k out. Over 14 days, a 1-job call cost ~12.3k tokens per job, 2–3 jobs ~5.9k,
+4–7 ~3.7k, 8–14 ~2.3k; 65% of calls scored 1–3 jobs because ATS (hourly) and LinkedIn (every two
+hours) each scored whatever they had just found.
+
+`scoringDeferral` (scripts/jobs.mjs) therefore lets an unattended run leave its jobs pending, with
+no error code, while fewer than `scoring.minBatch` (8) need scoring and the oldest was first seen
+less than `scoring.maxWaitHours` (2) ago. The pending queue (`listPendingEvaluation`) brings them
+back on the next run of their source, and the 24-hour page cache means no page is fetched twice
+(no extra LinkedIn request). Runs started from the dashboard (`JOBOPS_ACTION_ID`) and retries
+never defer. A deferred job counts as `deferred`, not failed.
+
+The ATS location filter (`buildLocationFilter` in scripts/scan.mjs) also matches the job title
+against `always_allow` and `block`: boards that leave the location empty name the place in the
+title. Replayed over 14 days, the added `block` places would have kept 22 of 151 rejected ATS
+jobs from Codex and blocked no job that was ever suitable or wanted. Staff/Principal titles were
+deliberately not filtered: four of them were marked interested.
 
 #### Smart WhatsApp trigger (every 30 minutes)
 

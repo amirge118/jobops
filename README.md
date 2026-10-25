@@ -120,6 +120,12 @@ limit, not money.
   that says which source is worth its cost.
 - 💸 **A cheaper model by default** — `scoring.model` picks the model for every call (currently
   Codex's fast and affordable tier); a stronger model can be kept for resume analysis only.
+- 📦 **Scores in batches** — every Codex call pays ~10k fixed tokens (Codex's own instructions plus
+  your profile) before any job, so one job alone costs ~12k tokens and a batch of 8 about 2.3k per
+  job. Scheduled runs therefore wait until 8 jobs need scoring or the oldest has waited 2 hours
+  (`scoring.minBatch`, `scoring.maxWaitHours`); a scan or retry you start from the dashboard always
+  scores right away. Jobs whose title names a place abroad (boards that leave the location field
+  empty) are filtered by `location_filter.block` before they ever reach Codex.
 - 🛑 **No quota, no run** — before each run jobOps checks whether the account still has Codex
   quota. If the limit was hit, it reads the reset time from Codex ("try again at 1:43 PM"), skips
   every scheduled run until then, and shows it on the dashboard. Nothing is lost: each source

@@ -19,6 +19,7 @@ import {
   decideHistoryWait,
   shouldRetryWhatsAppConnection,
   suppressKnownLibsignalNoise,
+  summarizeDecryptFailures,
 } from '../scripts/jobs/sources/whatsapp-client.mjs';
 import { fetchGroupMessagesSince } from '../scripts/jobs/sources/whatsapp-history.mjs';
 
@@ -524,4 +525,24 @@ test('loadTitleFilterNegative tolerates a missing or malformed file instead of t
   const malformed = path.join(dir, 'portals.yml');
   fs.writeFileSync(malformed, 'not: [valid, yaml,');
   assert.deepEqual(loadTitleFilterNegative(malformed), []);
+});
+
+test('decryption failures are summarized by chat kind, without JIDs, ids, text or phone numbers', () => {
+  const own = '972501234567:12@s.whatsapp.net';
+  const tracked = new Set(['111@g.us']);
+  const stub = (remoteJid, fromMe, error) => ({ key: { remoteJid, fromMe, id: '3A08176CDFC8D16CC633' }, messageStubType: 2, messageStubParameters: [error] });
+  const summary = summarizeDecryptFailures([
+    stub('972501234567@s.whatsapp.net', true, 'No session record for 972501234567'),
+    stub('111@g.us', false, 'Bad MAC'),
+    stub('222@g.us', false, 'Key used already or never filled'),
+    stub('972509999999@s.whatsapp.net', false, 'Bad MAC'),
+    { key: { remoteJid: '111@g.us', id: 'X' }, message: { conversation: 'hi' } },
+  ], { ownJid: own, trackedGroupJids: tracked });
+  assert.deepEqual(summary, [
+    { chat: 'self', fromMe: true, error: 'No session record for [n]', resendRequested: true },
+    { chat: 'tracked-group', fromMe: false, error: 'Bad MAC', resendRequested: true },
+    { chat: 'other-group', fromMe: false, error: 'Key used already or never filled', resendRequested: false },
+    { chat: 'private', fromMe: false, error: 'Bad MAC', resendRequested: true },
+  ]);
+  assert.doesNotMatch(JSON.stringify(summary), /9725|3A08|@/);
 });

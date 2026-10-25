@@ -592,7 +592,25 @@ function reportPaths(reportsDir, generatedAt) {
   };
 }
 
-export async function evaluateCandidates({ candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {} }) {
+// Every Codex call pays a fixed ~11k input tokens (instructions + profile)
+// before any job, so a call scoring one job costs ~12k tokens per job and a
+// batch of 8+ about 2.3k (measured 2026-10-09 over 14 days). A scheduled run
+// that has only a few jobs to score therefore leaves them pending, with no
+// error, until enough accumulate or the oldest has waited maxWaitHours; the
+// pending queue (listPendingEvaluation) and the 24h page cache bring them
+// back on the next run of their source without re-fetching. Runs someone is
+// waiting on (dashboard actions, retries) never defer.
+export function scoringDeferral({ count, oldestFirstSeenAt, now = Date.now(), config }) {
+  const minBatch = Math.max(1, Number(config.scoring?.minBatch) || 1);
+  const maxWaitMs = Math.max(0, Number(config.scoring?.maxWaitHours ?? 2)) * 60 * 60 * 1000;
+  const waitedMs = now - Number(oldestFirstSeenAt ?? now);
+  const defer = count > 0 && count < minBatch && waitedMs < maxWaitMs;
+  return { defer, minBatch, maxWaitHours: maxWaitMs / 3_600_000 };
+}
+
+export async function evaluateCandidates({
+  candidates, config, store, fetcher, scorer, onFailure = () => {}, onStage = () => {}, allowDeferScoring = false, now = Date.now,
+}) {
   const outcomes = new Map();
   const pendingScores = [];
   let processingStage = 'page-fetch';
@@ -870,6 +888,16 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     });
     outcomes.set(result.jobKey, { status: result.suitable ? 'suitable' : 'not-suitable' });
   };
+
+  if (allowDeferScoring) {
+    const firstSeen = pendingScores.map(({ candidate }) => Number(store.getJob(candidate.jobKey)?.first_seen_at ?? now()));
+    const deferral = scoringDeferral({ count: pendingScores.length, oldestFirstSeenAt: Math.min(...firstSeen), now: now(), config });
+    if (deferral.defer) {
+      for (const { candidate } of pendingScores) outcomes.set(candidate.jobKey, { status: 'deferred' });
+      console.log(`ניקוד נדחה: ${pendingScores.length} משרות ממתינות (מנקדים מ-${deferral.minBatch}, או כשהוותיקה ממתינה ${deferral.maxWaitHours} שעות) — כדי לחסוך את העלות הקבועה של קריאת Codex.`);
+      return outcomes;
+    }
+  }
 
   processingStage = 'scoring';
   onStage(processingStage);
@@ -1265,6 +1293,8 @@ async function runJobsLocked(options, config) {
     const scorer = createJobScorer(config, { candidateContext });
     let failureSamples = 0;
     const outcomes = await evaluateCandidates({ candidates, config, store, fetcher, scorer,
+      // Only unattended runs batch; a run started from the dashboard or a retry scores now.
+      allowDeferScoring: (!options.retryOnly || options.linkedinQueue) && !process.env.JOBOPS_ACTION_ID,
       onStage: (stage) => lifecycle?.stage(stage),
       onFailure: (candidate, failure, stage) => {
         if (!runId || failureSamples >= 200) return;

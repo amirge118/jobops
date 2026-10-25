@@ -4,6 +4,7 @@ import {
   DisconnectReason,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
+  jidNormalizedUser,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
@@ -116,6 +117,26 @@ export function decideHistoryWait({
   return 'wait';
 }
 
+// A message Baileys could not decrypt arrives as a CIPHERTEXT stub. Unless the
+// keys are simply missing, Baileys then asks the sending device to resend it,
+// which can wake that device (e.g. the person's own iPhone, which shows
+// "syncing with ... Ubuntu Google Chrome"). Summarized without JIDs, ids or
+// text, to correlate those notifications with decryption failures.
+const CIPHERTEXT_STUB = 2;
+const MISSING_KEYS = 'Key used already or never filled';
+
+export function summarizeDecryptFailures(messages = [], { ownJid = null, trackedGroupJids = null } = {}) {
+  const own = ownJid ? jidNormalizedUser(ownJid) : null;
+  return messages.filter((message) => message?.messageStubType === CIPHERTEXT_STUB).map((message) => {
+    const jid = String(message.key?.remoteJid || '');
+    const chat = jid.endsWith('@g.us')
+      ? (trackedGroupJids?.has(jid) ? 'tracked-group' : 'other-group')
+      : own && jidNormalizedUser(jid) === own ? 'self' : /@(s\.whatsapp\.net|lid)$/.test(jid) ? 'private' : 'other';
+    const error = String(message.messageStubParameters?.[0] || 'unknown').replace(/\d{6,}/g, '[n]').slice(0, 80);
+    return { chat, fromMe: Boolean(message.key?.fromMe), error, resendRequested: error !== MISSING_KEYS };
+  });
+}
+
 export async function connectWhatsApp(authPath, {
   historyWarmupMs = HISTORY_INITIAL_WAIT_MS,
   historyMaxWaitMs = HISTORY_MAX_WAIT_MS,
@@ -125,6 +146,7 @@ export async function connectWhatsApp(authPath, {
   onIngressError = null,
   onConnectionUpdate = null,
   onQr = null,
+  onDecryptFailures = null,
   configuredGroupJids = null,
   waitForHistory = true,
 } = {}) {
@@ -253,7 +275,15 @@ export async function connectWhatsApp(authPath, {
         collect(messages, 'history', { sessionId: peerDataRequestSessionId });
         collectChats(chats);
       });
-      sock.ev.on('messages.upsert', ({ messages }) => collect(messages, 'upsert'));
+      sock.ev.on('messages.upsert', ({ messages }) => {
+        // Before scoping to the configured groups: the failures that wake the
+        // phone can come from any chat.
+        const failures = summarizeDecryptFailures(messages, { ownJid: sock.user?.id, trackedGroupJids: configuredGroupJids });
+        if (failures.length) {
+          try { onDecryptFailures?.(failures); } catch { /* diagnostics must never break collection */ }
+        }
+        collect(messages, 'upsert');
+      });
       sock.ev.on('chats.upsert', collectChats);
       sock.ev.on('chats.update', collectChats);
 
