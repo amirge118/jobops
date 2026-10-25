@@ -69,6 +69,16 @@ export const SCHEDULES = [
     args: [],
     times: hourly({ from: 9, to: 22, minute: 50 }),
   },
+  // The LinkedIn queue reader: every 30 minutes, the newest queued LinkedIn
+  // postings (at most one run's read budget, paced by the LinkedIn limits),
+  // so the queue drains even when no new WhatsApp jobs arrive. Waiting up to
+  // 10 minutes for the scan lock turns a collision into a short delay.
+  {
+    key: 'linkedin-queue',
+    label: 'com.amirgefen.jobops.linkedin-queue',
+    args: ['--linkedin-queue', '--wait-for-lock', '10'],
+    intervalSeconds: 1800,
+  },
   // A token-free check every 30 minutes: it processes the locally collected
   // WhatsApp backlog only once enough new jobs are waiting, or once the
   // oldest has waited long enough (see scripts/jobs/whatsapp-trigger.mjs).

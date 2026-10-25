@@ -84,3 +84,10 @@ test('candidate companies are resolved once a day, off every scan slot', () => {
   const plist = renderScheduledScanAgent(companies, { nodePath: '/opt/node', rootDir: '/tmp/jobops' });
   assert.match(plist, /<string>\/tmp\/jobops\/scripts\/jobs\/company-auto-resolve\.mjs<\/string><\/array>/);
 });
+
+test('the LinkedIn queue reader runs every 30 minutes and waits briefly for the scan lock', () => {
+  const queue = SCHEDULES.find((schedule) => schedule.key === 'linkedin-queue');
+  assert.deepEqual(queue.args, ['--linkedin-queue', '--wait-for-lock', '10']);
+  assert.equal(queue.intervalSeconds, 1800);
+  assert.match(renderScheduledScanAgent(queue), /<key>StartInterval<\/key><integer>1800<\/integer>/);
+});

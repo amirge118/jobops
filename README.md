@@ -72,10 +72,11 @@ and no third-party application server are in the loop.
   pages shared on WhatsApp wait 15 minutes after any LinkedIn activity. Waiting jobs stay
   pending, are not counted as failures, and are read on the next run
   (`sources.linkedin.cooldown.afterBlockMinutes` / `afterActivityMinutes` in `config/jobs.yml`).
-  Being reworked: bursts of reads get refused within a few requests, while a request every 60 s is
-  answered. `npm run jobs:linkedin-canary` measures the accepted pacing one logged request at a
-  time; the plan toward one globally paced LinkedIn reader is in
-  [docs/linkedin-reliability-plan.md](docs/linkedin-reliability-plan.md).
+  Every LinkedIn request from every run counts toward one hourly cap (10 by default, shared through
+  the database), requests are minutes apart, and a queue reader picks up waiting LinkedIn postings
+  every 30 minutes, newest first, with whatever the cap leaves after searches and new links.
+  `npm run jobs:linkedin-canary` measures what LinkedIn accepts one logged request at a time; the
+  evidence and next steps are in [docs/linkedin-reliability-plan.md](docs/linkedin-reliability-plan.md).
 - 💬 **WhatsApp, processed when it is worth it** — the collector stores group messages locally
   for free. A token-free check every 30 minutes counts the *new jobs* waiting (unique, unseen
   links — one job shared in four groups counts once) and processes them once at least 8 are

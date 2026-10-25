@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { loadJobsConfig, readCandidateContext } from './jobs/config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
-import { deduplicateJobs, resumeGapInputHash } from './jobs/core.mjs';
+import { deduplicateJobs, linkedinJobId, resumeGapInputHash } from './jobs/core.mjs';
 import { createJobPageFetcher } from './jobs/fetch-page.mjs';
 import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
@@ -19,7 +19,7 @@ import { createJobStore, sourceKindOf } from './jobs/store.mjs';
 import { queueJobNotifications } from './jobs/notifications.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
-import { scanLinkedIn } from './jobs/sources/linkedin.mjs';
+import { createLinkedInGate, DEFAULT_LINKEDIN_LIMITS, scanLinkedIn } from './jobs/sources/linkedin.mjs';
 import { createRunLifecycle, describeFailure, hasFailureReason, safeTargetUrl } from './jobs/diagnostics.mjs';
 import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
@@ -48,6 +48,9 @@ export function parseArgs(argv) {
   if (argv.includes('--retry-only') && onlyFlags.length) {
     throw new Error('--retry-only cannot be combined with source-only flags');
   }
+  if (argv.includes('--linkedin-queue') && (onlyFlags.length || argv.includes('--whatsapp-backlog') || argv.includes('--retry-only'))) {
+    throw new Error('--linkedin-queue runs alone');
+  }
   if (argv.includes('--whatsapp-backlog') && (onlyFlags.length || argv.includes('--retry-only'))) {
     throw new Error('--whatsapp-backlog cannot be combined with source-only or retry flags');
   }
@@ -64,7 +67,9 @@ export function parseArgs(argv) {
     waitForLockMinutes: numericFlag(argv, '--wait-for-lock', { max: 120 }),
     open: argv.includes('--open'),
     dryRun: argv.includes('--dry-run'),
-    retryOnly: argv.includes('--retry-only'),
+    // The LinkedIn queue reader is a retry run limited to queued LinkedIn postings.
+    retryOnly: argv.includes('--retry-only') || argv.includes('--linkedin-queue'),
+    linkedinQueue: argv.includes('--linkedin-queue'),
     whatsappBacklog: argv.includes('--whatsapp-backlog'),
   };
 }
@@ -106,6 +111,26 @@ export function filterPendingCandidatesForSources(candidates, sources, { linkedi
       (sources.includes('ats') && source.startsWith('ATS:')) ||
       ((sources.includes('whatsapp') || sources.includes('whatsapp-backlog')) && source.startsWith('WhatsApp:'));
   });
+}
+
+export function parseLinkHint(value) {
+  try {
+    const hint = JSON.parse(value || 'null');
+    return hint && typeof hint === 'object' && ['slug', 'bold', 'text'].includes(hint.source) ? hint : null;
+  } catch {
+    return null;
+  }
+}
+
+// The LinkedIn queue reader (`--linkedin-queue`, every 30 minutes): only
+// pending postings on LinkedIn, newest first (fresh postings matter most and
+// old ones may have closed), and no more than one run's LinkedIn read budget,
+// so the rest are left as they are instead of being marked deferred again.
+// Nothing is read while LinkedIn is cooling down.
+export function selectLinkedInQueue(pending, { limit, cooldown = null }) {
+  const queued = pending.filter((candidate) => linkedinJobId(candidate.canonicalUrl || candidate.url));
+  const take = cooldown ? 0 : Math.max(0, Number(limit) || 0);
+  return { queued: queued.length, selected: [...queued].reverse().slice(0, take) };
 }
 
 export function processingScope(candidate) {
@@ -572,6 +597,7 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   const pendingScores = [];
   let processingStage = 'page-fetch';
   let titleFilteredCount = 0;
+  let prefilteredCount = 0;
   let duplicateCount = 0;
   let blockedCompanyCount = 0;
   // A company marked "not interesting" on the decisions page: rejected
@@ -662,6 +688,47 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
     if (listedCompany && store.isCompanyBlocked?.(listedCompany)) {
       rejectBlockedCompany(candidate, listedCompany);
       continue;
+    }
+    // A LinkedIn link shared on WhatsApp is screened by the hint kept from its
+    // message (sources/whatsapp.mjs extractLinkHint) before any LinkedIn
+    // request: the same blocked companies and title keywords that otherwise
+    // threw ~85% of these reads away right after reading (2026-10-23). The
+    // target-role check needs a real title (URL slug or bold first line);
+    // free message text is checked for negative keywords only.
+    const hint = linkedinJobId(candidate.url) ? parseLinkHint(existing?.link_hint) : null;
+    if (hint) {
+      if (hint.company && store.isCompanyBlocked?.(hint.company)) {
+        prefilteredCount += 1;
+        rejectBlockedCompany(candidate, hint.company);
+        continue;
+      }
+      const hintTitle = hint.title || '';
+      const hintBlock = !passesNegativeTitleFilter(hintTitle || hint.text || '') ? 'negative'
+        : hintTitle && !passesPositiveTitleFilter(hintTitle) ? 'positive' : null;
+      if (hintBlock) {
+        prefilteredCount += 1;
+        store.saveEvaluation(candidate.jobKey, {
+          company: hint.company || candidate.company || 'חברה לא ידועה',
+          title: hintTitle || candidate.title || 'משרה לא ידועה',
+          summary: hintBlock === 'negative'
+            ? 'המשרה סוננה לפני קריאה מ-LinkedIn: הכותרת בהודעה מכילה מילת מפתח שלילית.'
+            : 'המשרה סוננה לפני קריאה מ-LinkedIn: הכותרת בהודעה אינה מזכירה אף תפקיד יעד.',
+          score: 1,
+          fitLabel: 'לא מתאים',
+          decisionReason: hintBlock === 'negative'
+            ? `סינון לפי רמז מההודעה (${hint.source}): מילת מפתח שלילית מ-title_filter.negative ב-portals.yml.`
+            : `סינון לפי רמז מההודעה (${hint.source}): אין מילת תפקיד מ-title_filter.positive ב-portals.yml.`,
+          suitable: false,
+          applyUrl: candidate.url,
+          activeStatus: 'unknown',
+          contentHash: null,
+          profileHash: scorer.profileHash,
+          criteriaVersion: config.decision.criteriaVersion,
+          evaluatedAt: Date.now(),
+        });
+        outcomes.set(candidate.jobKey, { status: 'filtered' });
+        continue;
+      }
     }
 
     let page;
@@ -787,6 +854,7 @@ export async function evaluateCandidates({ candidates, config, store, fetcher, s
   if (blockedCompanyCount > 0) console.log(`סוננו ${blockedCompanyCount} משרות מחברות שסימנת כלא מעניינות, לפני שליחה לניקוד.`);
   if (duplicateCount > 0) console.log(`דולגו ${duplicateCount} משרות כפולות (אותה חברה ואותו תפקיד כבר נבדקו), לפני שליחה לניקוד.`);
   if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי כותרת (מילות מפתח שליליות או ללא תפקיד יעד), לפני שליחה לניקוד.`);
+  if (prefilteredCount > 0) console.log(`סוננו ${prefilteredCount} קישורי LinkedIn לפי הכותרת/החברה שבהודעה, לפני קריאה מ-LinkedIn.`);
 
   const persistResult = (result) => {
     const item = pendingScores.find(({ candidate }) => candidate.jobKey === result.jobKey);
@@ -1015,12 +1083,19 @@ async function runJobsLocked(options, config) {
   const linkedinCooldown = store.getLinkedInCooldown({
     afterActivityMs: Number(cooldownSettings.afterActivityMinutes ?? 15) * 60_000,
   });
-  const noteLinkedInBlock = (status) => store.noteLinkedInBlock(status, { cooldownMs: linkedinBlockMs });
+  const noteLinkedInBlock = (status, detail = null) => store.noteLinkedInBlock(status, { cooldownMs: linkedinBlockMs, detail });
+  const linkedinLimits = { ...DEFAULT_LINKEDIN_LIMITS, ...(config.sources.linkedin?.limits || {}) };
+  const linkedinGate = createLinkedInGate({
+    store,
+    limit: Number(linkedinLimits.maxRequestsPerHour) - (options.linkedinQueue ? Number(linkedinLimits.queueReserve) : 0),
+  });
   const fetcher = createJobPageFetcher({
     store,
     cacheTtlMs: Number(config.scan.pageCacheHours) * 60 * 60 * 1000,
     linkedinLimits: config.sources.linkedin?.limits || {},
     linkedinCooldown: linkedinCooldown.reads,
+    linkedinGate,
+    onLinkedInRefusal: (detail) => store.recordLinkedInRefusal({ reason: 'rate_limited', detail }),
     onLinkedInRequest: () => store.noteLinkedInActivity(),
     onLinkedInBlock: noteLinkedInBlock,
   });
@@ -1125,6 +1200,10 @@ async function runJobsLocked(options, config) {
           manualHours: options.linkedinHours,
           passesTitle,
           cooldown: linkedinCooldown.scans,
+          gate: linkedinGate,
+          // Only recovered refusals are recorded here; a second 429 halts the
+          // search and is recorded by noteLinkedInBlock with the run's block.
+          onRefusal: (detail) => { if (detail.recovered) store.recordLinkedInRefusal({ reason: 'rate_limited', detail }); },
         });
         if (result.requests > 0) store.noteLinkedInActivity();
         if (['rate_limited', 'blocked'].includes(result.haltedBy)) noteLinkedInBlock(result.haltedBy);
@@ -1152,15 +1231,29 @@ async function runJobsLocked(options, config) {
     }
 
     runDetails = summarizeSourceResults(sourceResults, coverageContext);
-    if (options.retryOnly) console.log('ניסיון חוזר: מעבד רק קישורים שנכשלו או טרם קיבלו החלטה; המקורות לא נסרקים מחדש.');
+    if (options.retryOnly && !options.linkedinQueue) console.log('ניסיון חוזר: מעבד רק קישורים שנכשלו או טרם קיבלו החלטה; המקורות לא נסרקים מחדש.');
     printSourceSummary(runDetails);
     printLinkedInSummary(runDetails.linkedin);
     const candidateSightings = sourceResults.flatMap((result) => result.candidates);
-    const retryCandidates = filterPendingCandidatesForSources(
+    let retryCandidates = filterPendingCandidatesForSources(
       store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }),
       sources,
       { linkedinEnabled },
     );
+    if (options.linkedinQueue) {
+      const stale = store.archiveStaleLinkedInQueue({ olderThanMs: Number(linkedinLimits.queueMaxAgeDays) * 24 * 60 * 60 * 1000 });
+      if (stale.archived) {
+        console.log(`תור LinkedIn: ${stale.archived} משרות חיכו יותר מ-${linkedinLimits.queueMaxAgeDays} ימים והועברו לארכיון בלי קריאה.`);
+        const stillPending = new Set(store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }).map((job) => job.jobKey));
+        retryCandidates = retryCandidates.filter((candidate) => stillPending.has(candidate.jobKey));
+      }
+      const limit = Number(config.sources.linkedin?.limits?.maxDetailFetchesPerRun ?? 6);
+      const queue = selectLinkedInQueue(retryCandidates, { limit, cooldown: linkedinEnabled ? linkedinCooldown.reads : { reason: 'disabled' } });
+      retryCandidates = queue.selected;
+      console.log(`תור LinkedIn: ${queue.queued} משרות ממתינות; נקראות עכשיו ${queue.selected.length}`
+        + (linkedinCooldown.reads && linkedinEnabled ? ` (LinkedIn בהפסקה עד ${new Date(linkedinCooldown.reads.until).toLocaleTimeString('he-IL')})` : '')
+        + (linkedinEnabled ? '.' : ' (LinkedIn כבוי).'));
+    }
     const currentJobKeys = new Set(candidateSightings.map((candidate) => candidate.jobKey));
     const processingCandidates = [
       ...candidateSightings,

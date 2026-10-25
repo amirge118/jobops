@@ -7,7 +7,7 @@ import {
 } from '../liveness-browser.mjs';
 import { canonicalizeJobUrl, linkedinJobId } from './core.mjs';
 import {
-  DEFAULT_LINKEDIN_LIMITS, LINKEDIN_POSTING_ENDPOINT, classifySearchResponse, fetchWithTimeout, parsePostingPage,
+  DEFAULT_LINKEDIN_LIMITS, LINKEDIN_POSTING_ENDPOINT, classifySearchResponse, fetchWithTimeout, parsePostingPage, retryAfterMs,
 } from './sources/linkedin.mjs';
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -241,8 +241,12 @@ export function createJobPageFetcher({
   linkedinLimits = {},
   // Cross-run pacing, decided once when the run starts: { until, reason }.
   linkedinCooldown = null,
+  // The shared hourly cap (createLinkedInGate in sources/linkedin.mjs).
+  linkedinGate = null,
   onLinkedInRequest = () => {},
   onLinkedInBlock = () => {},
+  // A 429 the run recovered from with one retry: { status, retryAfter, waitedMs }.
+  onLinkedInRefusal = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
@@ -497,15 +501,47 @@ export function createJobPageFetcher({
             : 'The per-run LinkedIn reading limit was reached; reading was postponed to the next retry.',
         };
       }
+      const hourlyFull = () => {
+        linkedin.hourlyFull = true;
+        return {
+          canonicalUrl, finalUrl: canonicalUrl, content: '', contentHash: hashContent(''), fromCache: false,
+          status: 'uncertain',
+          code: 'linkedin_deferred',
+          reason: 'The hourly LinkedIn request limit shared by all runs was reached; reading was postponed.',
+        };
+      };
+      if (linkedin.hourlyFull || (linkedinGate && !linkedinGate.allow())) return hourlyFull();
       if (linkedin.fetched > 0) {
         const [min, max] = linkedin.detailDelayMs || [2_000, 4_000];
         await sleep(Math.round(min + Math.random() * Math.max(0, max - min)));
+        // Another process may have used the hour while this one waited.
+        if (linkedinGate && !linkedinGate.allow()) return hourlyFull();
       }
       linkedin.fetched += 1;
+      linkedinGate?.record('posting');
       onLinkedInRequest();
       let result;
       try {
-        const response = await fetchWithTimeout(fetchImpl, `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`, { timeoutMs: FETCH_TIMEOUT_MS });
+        const postingUrl = `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`;
+        let response = await fetchWithTimeout(fetchImpl, postingUrl, { timeoutMs: FETCH_TIMEOUT_MS });
+        // One 429 is not a block: wait Retry-After (or 45 s) and try once more,
+        // as other readers of these endpoints do. Only a second refusal, a
+        // sign-in page or 999 stops the run (2026-10-23: 8 refusals in 463
+        // requests, each of which used to halt the run and start a cooldown).
+        if (response.status === 429) {
+          const waitedMs = retryAfterMs(response.retryAfter);
+          const firstRefusal = { status: 429, retryAfter: response.retryAfter, waitedMs };
+          await sleep(waitedMs);
+          if (linkedinGate && !linkedinGate.allow()) {
+            onLinkedInRefusal({ ...firstRefusal, recovered: false, deferred: 'hourly_limit' });
+            return hourlyFull();
+          }
+          linkedinGate?.record('posting');
+          onLinkedInRequest();
+          response = await fetchWithTimeout(fetchImpl, postingUrl, { timeoutMs: FETCH_TIMEOUT_MS });
+          linkedin.lastRefusal = { ...firstRefusal, retryStatus: response.status };
+          if (response.status !== 429) onLinkedInRefusal({ ...firstRefusal, recovered: true, retryStatus: response.status });
+        }
         const posting = response.status === 200 ? parsePostingPage(response.html) : null;
         if (response.status === 404 || response.status === 410) {
           result = { status: 'expired', code: 'linkedin_not_found', reason: 'LinkedIn reports that the posting no longer exists.', content: '' };
@@ -529,7 +565,7 @@ export function createJobPageFetcher({
           const blocked = ['blocked', 'rate_limited'].includes(classification.status);
           if (blocked) {
             linkedin.haltedBy = classification.status;
-            onLinkedInBlock(classification.status);
+            onLinkedInBlock(classification.status, { status: response.status, retryAfter: response.retryAfter ?? null, ...(linkedin.lastRefusal ? { retried: true } : {}) });
           }
           result = {
             status: 'uncertain',

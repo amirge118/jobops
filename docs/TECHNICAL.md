@@ -251,8 +251,39 @@ them passes `--open`, so unattended matches wait for review on `/decisions` rath
 flood of Chrome tabs while no one is watching. Each agent writes stdout and stderr to
 `logs/scheduled/<key>.log`, so a skipped run (lock, cooldown, quota) or a crash leaves a trace.
 
+**LinkedIn queue reader and the shared hourly cap.** `com.amirgefen.jobops.linkedin-queue` runs
+`jobs.mjs --linkedin-queue --wait-for-lock 10` every 30 minutes (`StartInterval` 1800). It is a
+retry run limited to queued LinkedIn postings (`selectLinkedInQueue`): newest first, at most one
+run's posting budget (`limits.maxDetailFetchesPerRun`), nothing while LinkedIn is cooling down, and
+the rest of the queue is left untouched rather than marked deferred again. Every LinkedIn request from every process — search pages and postings —
+is written to `linkedin_requests` (14 days kept) and passes `createLinkedInGate` first: a request
+is sent only while fewer than `limits.maxRequestsPerHour` (10) were sent in the last hour; the queue
+reader stops `limits.queueReserve` (4) earlier, so searches and newly shared postings keep their
+share. A search that meets the cap ends as `partial` / `hourly_limit` (coverage does not advance);
+a posting waits as `linkedin_deferred`. Background: on 2026-10-19 three independent runs, each
+paced on its own, together sent 10–15 LinkedIn requests an hour and were refused
+(docs/linkedin-reliability-plan.md).
+
+Since 2026-10-24 three more rules keep the reads useful and cheap:
+
+- **Retry once after a 429.** A posting answered with 429 waits `Retry-After` (seconds or a date,
+  clamped to 5–120 s; 45 s when absent) and is requested once more. Only a second 429, a sign-in
+  page or 999 stops the run and starts the cooldown. Every refusal is a `refused:<reason>` row in
+  `linkedin_requests` with `detail` (HTTP status, `Retry-After`, whether the retry recovered); those
+  rows are history and do not count toward the hourly cap.
+- **Stale postings are archived unread.** The queue reader archives LinkedIn postings that waited
+  more than `limits.queueMaxAgeDays` (5) without being read or scored (`archiveStaleLinkedInQueue`,
+  same clearing as `archiveJob`; the job key stays for dedup).
+- **Shared links are screened before reading.** When a WhatsApp message carries a LinkedIn posting,
+  `extractLinkHint` keeps a hint on the job (`jobs.link_hint`): the URL's own slug
+  (`/jobs/view/<title>-at-<company>-<id>`), else a bold first line `*Title*`, else up to three lines
+  of text before the link (single-link messages only). Phone numbers and e-mail addresses are
+  removed, at most 160 characters, cleared when the job is archived. Before any LinkedIn request,
+  `evaluateCandidates` rejects the posting when the hint names a blocked company, contains a
+  negative title keyword, or — for slug and bold titles only — names no target role.
+
 ```bash
-npm run jobs:schedule:install    # install all LaunchAgents (scans, company resolution, health check, WhatsApp trigger)
+npm run jobs:schedule:install    # install all LaunchAgents (scans, company resolution, health check, WhatsApp trigger, LinkedIn queue)
 npm run jobs:schedule:status     # confirm they're loaded and see each schedule
 npm run jobs:schedule:uninstall  # remove all three; the database and config are untouched
 ```

@@ -7,6 +7,7 @@ import {
   parseArgs,
   processingScope,
   scanWindow,
+  selectLinkedInQueue,
   summarizeProcessingResults,
   summarizeSourceResults,
   windowStatusFor,
@@ -34,6 +35,7 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
     dryRun: false,
     retryOnly: false,
     whatsappBacklog: false,
+    linkedinQueue: false,
     linkedinOnly: false,
     linkedinHours: null,
     waitForLockMinutes: null,
@@ -46,6 +48,7 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
     dryRun: false,
     retryOnly: false,
     whatsappBacklog: true,
+    linkedinQueue: false,
     linkedinOnly: false,
     linkedinHours: null,
     waitForLockMinutes: null,
@@ -264,4 +267,30 @@ test('a source-level LinkedIn crash is reported as a failure, never as zero jobs
   ]);
   assert.equal(summary.linkedin.coverageStatus, 'incomplete');
   assert.equal(completionStatusFor(summary), 'incomplete');
+});
+
+test('the LinkedIn queue reader is a retry run of its own', () => {
+  const options = parseArgs(['--linkedin-queue', '--wait-for-lock', '10']);
+  assert.equal(options.linkedinQueue, true);
+  assert.equal(options.retryOnly, true);
+  assert.equal(options.waitForLockMinutes, 10);
+  for (const other of ['--retry-only', '--whatsapp-backlog', '--ats-only', '--linkedin-only']) {
+    assert.throws(() => parseArgs(['--linkedin-queue', other]), /runs alone/);
+  }
+});
+
+test('the LinkedIn queue reads the newest queued postings, one run budget at a time, never while cooling down', () => {
+  // listPendingEvaluation returns the oldest first.
+  const pending = [
+    { jobKey: 'old', canonicalUrl: 'https://www.linkedin.com/jobs/view/4400000001' },
+    { jobKey: 'ats', canonicalUrl: 'https://boards.greenhouse.io/acme/jobs/1' },
+    { jobKey: 'mid', url: 'https://il.linkedin.com/jobs/view/backend-at-x-4400000002' },
+    { jobKey: 'new', canonicalUrl: 'https://www.linkedin.com/jobs/view/4400000003' },
+  ];
+  assert.deepEqual(selectLinkedInQueue(pending, { limit: 2 }), {
+    queued: 3,
+    selected: [pending[3], pending[2]],
+  });
+  assert.deepEqual(selectLinkedInQueue(pending, { limit: 6, cooldown: { until: 1, reason: 'rate_limited' } }), { queued: 3, selected: [] });
+  assert.deepEqual(selectLinkedInQueue([], { limit: 6 }), { queued: 0, selected: [] });
 });

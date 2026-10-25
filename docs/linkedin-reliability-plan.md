@@ -1,6 +1,9 @@
 # LinkedIn reliability plan
 
-Status: phase 0 done (2026-10-19); conservative pacing live; phase 1 next. Owner: the jobOps maintainer.
+Status: phase 0 done (2026-10-19); conservative pacing, the shared hourly cap and the queue reader
+are live (phase 2 items 1–2, 2026-10-20); review options 1–3 (pre-read hint filter, stale archive,
+retry once after a 429) live since 2026-10-24, egress switched to the direct connection the same day;
+phase 1 measurements next. Owner: the jobOps maintainer.
 
 ## Problem
 
@@ -67,6 +70,63 @@ Follow-up the same afternoon:
   postings per run, 2–3 minutes apart, 20-minute cooldown, 2-minute gap after activity.
 
 Phase 1 therefore measures a budget per window, not the fastest interval.
+
+## Review after four days of the hourly cap (2026-10-20 → 23)
+
+Data: `linkedin_requests` (every request and every refusal, with the load before it) and the
+scheduled logs.
+
+- **Refusals are rare and barely depend on load.** 8 refusals in 463 requests (1.7 %). The first
+  request in any 10-minute window was never refused (0/103); every further request carried a 2–4 %
+  risk whether it was the 2nd or the 5th. Refusals came at loads as low as 3 requests an hour. With
+  traffic leaving through a shared Cloudflare WARP address, part of this is other people's traffic.
+- **The cost of a refusal is our own policy:** the run stops, everything after it is deferred and a
+  20-minute cooldown starts. Other projects wait `Retry-After` (or 30–45 s) and retry once.
+- **We are 30–90× slower than others who read the same endpoints.** Published setups read details
+  2–4 s apart (or ≤ 1 request/s) for hundreds of postings a day; one project hit 429s at ~500
+  detail fetches a day and fixed it with 4 s delays plus `Retry-After`. We read one posting every
+  2–3 minutes and at most 10 requests an hour.
+- **Throughput, not blocking, is the limit now.** 130–150 new LinkedIn postings a day (half from the
+  LinkedIn search, half shared on WhatsApp) against 80–120 posting reads. Fresh postings are read
+  the same day (newest first); the queue is leftovers: 53 aged 1–3 days, 48 aged 3–7, 80 older than
+  a week.
+- **Most reads are wasted.** In the queue reader's runs, 157 postings were thrown away after being
+  read (123 by the title filter, 30 by blocked companies, 4 duplicates) against 28 that reached
+  scoring — about 85 %. WhatsApp links arrive without a title or company (176 of 181 queued
+  postings have neither), although the messages usually carry the title (e.g. a bold first line),
+  and the message text is erased after URL extraction, so the filter can only run after the read.
+
+### Options, by expected effect
+
+1. **Read less — filter WhatsApp links before reading.** At ingestion, keep a title/company hint
+   from the message (bold first line, "X is hiring Y", the raw URL slug
+   `/jobs/view/<title>-at-<company>-<id>`) on the job, and apply the title filter and blocked
+   companies before queueing. Expected: most of the ~85 % wasted reads disappear.
+2. **Drop stale postings without reading them.** Postings queued more than N days (e.g. 5) are
+   closed as stale instead of read; fresh postings are what matter.
+3. **Handle a refusal like others do.** Record status and `Retry-After` with each refusal; on a 429
+   wait `Retry-After` (or ~45 s) and retry once; only a second refusal or a sign-in page / 999
+   stops the run and starts the cooldown.
+4. **Speed up step by step, measured.** Lower `detailDelayMs` (120–180 s → 30–45 s) and raise
+   `maxRequestsPerHour` gradually (10 → 20 → 30), each step for two days, keeping the refusal rate
+   under 3 % in `/pulse`.
+5. **Egress (owner's decision).** A direct home connection instead of the shared WARP address;
+   the canary log keeps the two apart for comparison.
+6. **Alternative source (decision: needs mail access).** LinkedIn's own job-alert e-mails carry
+   job ids, titles and companies without any request to LinkedIn.
+
+## Options 1–3 live, and the egress comparison (2026-10-24)
+
+- First queue-reader run with the new rules: 91 postings older than 5 days archived unread; the
+  queue went from 120 to 28. A 429 at 11:53 (no `Retry-After`) was waited out for 45 s, the retry
+  returned 200 and the run went on; the hourly cap then deferred the rest, as designed.
+- **The direct connection is refused far more often than WARP.** WARP was disconnected on
+  2026-10-23 around 17:00 (its route log goes quiet). In the ~30 hours before, through WARP, one
+  request was refused; in the 18 hours after, on the direct home connection, 16 of ~95 were
+  refused (~17 %), almost one every hour. A single canary over the direct connection right after
+  the switch succeeded, so this is a rate, not a block. The correlation is in time only; whether the
+  organization's WARP may be used for this is the owner's decision.
+- The hint filter applies to links collected from now on; the queue still held links without hints.
 
 ## Phase 1 — measure the accepted budget per window (small, bounded tests)
 

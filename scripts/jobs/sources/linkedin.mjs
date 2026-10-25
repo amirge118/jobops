@@ -26,6 +26,9 @@ export const DEFAULT_LINKEDIN_LIMITS = Object.freeze({
   maxDetailFetchesPerRun: 40,
   delayMs: [3_000, 7_000],
   runTimeoutMs: 300_000,
+  maxRequestsPerHour: 10,
+  queueReserve: 4,
+  queueMaxAgeDays: 5,
 });
 
 export function buildSearchUrl({ keywords, location, geoId, tprSeconds, start = 0 }) {
@@ -194,10 +197,23 @@ export async function fetchWithTimeout(fetchImpl, url, { timeoutMs = REQUEST_TIM
   try {
     const response = await fetchImpl(url, { redirect: 'follow', signal: controller.signal, headers });
     const html = await response.text();
-    return { status: response.status, finalUrl: response.url || url, html };
+    return { status: response.status, finalUrl: response.url || url, html, retryAfter: response.headers?.get?.('retry-after') ?? null };
   } finally {
     clearTimeout(timer);
   }
+}
+
+// How long to wait before the one retry after a 429: LinkedIn's Retry-After
+// (seconds or an HTTP date) when it sends one, otherwise `fallbackMs`;
+// clamped so a strange header can neither hammer nor stall a run.
+export function retryAfterMs(value, { fallbackMs = 45_000, minMs = 5_000, maxMs = 120_000, now = Date.now() } = {}) {
+  let ms = fallbackMs;
+  if (value != null && String(value).trim() !== '') {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds)) ms = seconds * 1000;
+    else if (Number.isFinite(Date.parse(value))) ms = Date.parse(value) - now;
+  }
+  return Math.min(maxMs, Math.max(minMs, Math.round(ms)));
 }
 
 function randomDelay([min, max]) {
@@ -206,12 +222,28 @@ function randomDelay([min, max]) {
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// One hourly cap for every LinkedIn request from every process (search pages
+// and postings), counted in SQLite (linkedin_requests). Per-run budgets and
+// per-request pacing cannot see each other: on 2026-10-19 three independent
+// runs together sent 10-15 requests an hour and LinkedIn refused. The queue
+// reader gets a lower limit, so searches and new postings keep their share.
+export function createLinkedInGate({ store, limit, now = Date.now }) {
+  const HOUR_MS = 60 * 60 * 1000;
+  return {
+    limit,
+    allow() { return store.countLinkedInRequests({ since: now() - HOUR_MS }) < limit; },
+    record(kind) { store.recordLinkedInRequest({ kind, at: now() }); },
+  };
+}
+
 // A run-wide budget shared by every search, so N searches cannot multiply
 // the request volume, and one block halts all of them.
-export function createLinkedInBudget(limits = {}, { now = Date.now } = {}) {
+export function createLinkedInBudget(limits = {}, { now = Date.now, gate = null, onRefusal = null } = {}) {
   const merged = { ...DEFAULT_LINKEDIN_LIMITS, ...limits };
   const startedAt = now();
   return {
+    gate,
+    onRefusal,
     limits: merged,
     requests: 0,
     detailFetches: 0,
@@ -254,6 +286,7 @@ export async function runLinkedInSearch({
     if (pages >= budget.limits.maxPagesPerSearch) { capped = true; status = 'partial'; endedBy = 'page_limit'; break; }
     if (!budget.hasRequests()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'request_limit'; reason = 'request_limit'; break; }
     if (budget.timedOut()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'time_limit'; reason = 'time_limit'; break; }
+    if (budget.gate && !budget.gate.allow()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'hourly_limit'; reason = 'hourly_limit'; break; }
     if (start >= MAX_START) { capped = true; status = 'partial'; endedBy = 'result_ceiling'; break; }
 
     if (!isFirstRequest()) await sleep(randomDelay(budget.limits.delayMs));
@@ -261,8 +294,23 @@ export async function runLinkedInSearch({
     let response;
     let classification;
     budget.requests += 1;
+    budget.gate?.record('search');
     try {
       response = await fetchWithTimeout(fetchImpl, url);
+      // Same policy as posting reads: one 429 is waited out (Retry-After or
+      // 45 s) and the page retried once; only a second refusal halts the
+      // search (2026-10-24: the 08:30 scan stopped on its 2nd page's 429).
+      if (response.status === 429 && budget.limits.retryAfter429 !== false) {
+        const waitedMs = retryAfterMs(response.retryAfter);
+        await sleep(waitedMs);
+        if (!budget.gate || budget.gate.allow()) {
+          budget.requests += 1;
+          budget.gate?.record('search');
+          const retried = await fetchWithTimeout(fetchImpl, url);
+          budget.onRefusal?.({ status: 429, retryAfter: response.retryAfter, waitedMs, recovered: retried.status !== 429, retryStatus: retried.status, kind: 'search' });
+          response = retried;
+        }
+      }
     } catch (error) {
       classification = classifySearchResponse({ error });
     }
@@ -351,10 +399,14 @@ export async function scanLinkedIn({
   // { until, reason } from an earlier run's block: no request is sent, and
   // coverage is not advanced, so the next run fills the gap.
   cooldown = null,
+  // The shared hourly cap (createLinkedInGate); null means no cap.
+  gate = null,
+  // A recovered 429 (history only): { status, retryAfter, waitedMs, ... }.
+  onRefusal = null,
 }) {
   const windowSettings = linkedinWindowSettings(config);
   const linkedin = config.sources?.linkedin || {};
-  const budget = createLinkedInBudget(linkedin.limits || {});
+  const budget = createLinkedInBudget(linkedin.limits || {}, { gate, onRefusal });
   if (cooldown && now < cooldown.until) budget.haltedBy = 'cooldown';
   const passesArea = buildLinkedInAreaFilter(linkedin.acceptedAreas || DEFAULT_LINKEDIN_AREAS);
   const searches = store.listLinkedInSearches().filter((search) => search.enabled);

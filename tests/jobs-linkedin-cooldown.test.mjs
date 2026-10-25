@@ -59,7 +59,8 @@ test('the fetcher sends nothing to LinkedIn during a cooldown, and reports reque
     fetchImpl: async () => new Response('', { status: 429 }),
   });
   assert.equal((await live.fetch('https://www.linkedin.com/jobs/view/2222222222')).code, 'linkedin_rate_limited');
-  assert.deepEqual(events, ['request', 'block:rate_limited']);
+  // One retry after the 429 (Retry-After / 45 s), then the block.
+  assert.deepEqual(events, ['request', 'request', 'block:rate_limited']);
 });
 
 test('a scan during a block sends no request and keeps coverage for the next run', async (context) => {

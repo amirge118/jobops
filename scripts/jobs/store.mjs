@@ -610,6 +610,16 @@ export function createJobStore(databasePath) {
       last_activity_at INTEGER
     );
 
+    -- Every LinkedIn request from any process (search page or posting): the
+    -- shared hourly cap counts it, and it shows what LinkedIn accepted.
+    -- 14 days are kept.
+    CREATE TABLE IF NOT EXISTS linkedin_requests (
+      id   INTEGER PRIMARY KEY,
+      at   INTEGER NOT NULL,
+      kind TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_linkedin_requests_at ON linkedin_requests(at);
+
     CREATE TABLE IF NOT EXISTS blocked_companies (
       company_key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -727,6 +737,12 @@ export function createJobStore(databasePath) {
     })();
   }
 
+  // Refusal rows carry their HTTP status, Retry-After and whether the one
+  // retry recovered (added 2026-10-24).
+  if (!db.prepare('PRAGMA table_info(linkedin_requests)').all().some((column) => column.name === 'detail')) {
+    db.exec('ALTER TABLE linkedin_requests ADD COLUMN detail TEXT');
+  }
+
   const runColumns = db.prepare('PRAGMA table_info(runs)').all();
   if (!runColumns.some((column) => column.name === 'details_json')) {
     db.exec('ALTER TABLE runs ADD COLUMN details_json TEXT');
@@ -738,6 +754,11 @@ export function createJobStore(databasePath) {
   const jobColumns = db.prepare('PRAGMA table_info(jobs)').all();
   if (!jobColumns.some((column) => column.name === 'archived_at')) {
     db.exec('ALTER TABLE jobs ADD COLUMN archived_at INTEGER');
+  }
+  // A short title/company hint from the WhatsApp message of a shared LinkedIn
+  // link, for the filter that runs before the link is read (2026-10-24).
+  if (!jobColumns.some((column) => column.name === 'link_hint')) {
+    db.exec('ALTER TABLE jobs ADD COLUMN link_hint TEXT');
   }
   // Durable outcome timestamps for source-value metrics: never cleared by
   // rejection or archiving (which wipe the job's content, not these facts).
@@ -1737,6 +1758,19 @@ export function createJobStore(databasePath) {
     },
 
     // Same URL, or same company + role from any source, is the same job.
+    // Kept only until the job is first decided; an existing hint (e.g. from the
+    // URL slug) is never replaced by a weaker one from a later sighting.
+    setLinkHint(jobKey, hint) {
+      if (!hint) return false;
+      const rank = { slug: 3, bold: 2, text: 1 };
+      const current = db.prepare('SELECT link_hint, evaluated_at FROM jobs WHERE job_key = ?').get(jobKey);
+      if (!current || current.evaluated_at) return false;
+      const previous = (() => { try { return JSON.parse(current.link_hint || 'null'); } catch { return null; } })();
+      if (previous && (rank[previous.source] || 0) >= (rank[hint.source] || 0)) return false;
+      db.prepare('UPDATE jobs SET link_hint = ? WHERE job_key = ?').run(JSON.stringify(hint).slice(0, 400), jobKey);
+      return true;
+    },
+
     recordSighting({ url, company = '', title = '', source, seenAt = Date.now() }) {
       const canonicalUrl = canonicalizeJobUrl(url);
       if (!canonicalUrl) throw new Error(`Invalid job URL: ${url}`);
@@ -2451,6 +2485,7 @@ export function createJobStore(databasePath) {
           last_error_code = NULL,
           last_error_reason = NULL,
           last_attempted_at = NULL,
+          link_hint = NULL,
           archived_at = ?
         WHERE job_key = ? AND archived_at IS NULL
       `).run(at, jobKey);
@@ -2505,10 +2540,28 @@ export function createJobStore(databasePath) {
           last_error_code = NULL,
           last_error_reason = NULL,
           last_attempted_at = NULL,
+          link_hint = NULL,
           archived_at = ?
         WHERE archived_at IS NULL AND last_error_code IN (${safeCodes.map(() => '?').join(', ')})
       `).run(at, ...safeCodes);
       return { archived: result.changes };
+    },
+
+    // LinkedIn postings that waited in the queue for longer than `olderThanMs`
+    // without ever being read are archived unread: the queue is read newest
+    // first, so they would never be reached, and a posting that old matters
+    // little (2026-10-23: 128 of 181 queued postings were 3+ days old).
+    // Same field-clearing as archiveJob; the job key stays for dedup.
+    archiveStaleLinkedInQueue({ olderThanMs, at = Date.now() }) {
+      const keys = db.prepare(`
+        SELECT job_key AS jobKey FROM jobs
+        WHERE archived_at IS NULL AND canonical_url LIKE '%linkedin.com/jobs/view/%'
+          AND last_error_code IN ('linkedin_deferred', 'linkedin_cooldown', 'linkedin_rate_limited', 'linkedin_blocked')
+          AND score IS NULL AND first_seen_at < ?
+      `).all(Number(at) - Number(olderThanMs)).map((row) => row.jobKey);
+      let archived = 0;
+      db.transaction(() => { for (const jobKey of keys) if (this.archiveJob(jobKey, at)) archived += 1; })();
+      return { archived };
     },
 
     getFreshPage(canonicalUrl, { now = Date.now(), ttlMs }) {
@@ -3503,7 +3556,7 @@ export function createJobStore(databasePath) {
 
     // ---- LinkedIn cooldown -------------------------------------------------
 
-    noteLinkedInBlock(reason, { at = Date.now(), cooldownMs = 60 * 60 * 1000 } = {}) {
+    noteLinkedInBlock(reason, { at = Date.now(), cooldownMs = 60 * 60 * 1000, detail = null } = {}) {
       db.prepare(`
         INSERT INTO linkedin_state (id, blocked_until, blocked_reason, blocked_at, last_activity_at)
         VALUES (1, @until, @reason, @at, @at)
@@ -3512,6 +3565,27 @@ export function createJobStore(databasePath) {
           blocked_reason = @reason, blocked_at = @at,
           last_activity_at = MAX(COALESCE(last_activity_at, 0), @at)
       `).run({ until: Number(at) + Number(cooldownMs), reason: String(reason).slice(0, 32), at: Number(at) });
+      // linkedin_state keeps only the latest block; this row keeps the history
+      // (when, and after how many requests). It is not a request: the hourly
+      // cap does not count it.
+      db.prepare('INSERT INTO linkedin_requests (at, kind, detail) VALUES (?, ?, ?)')
+        .run(Number(at), `refused:${String(reason).slice(0, 24)}`, detail ? JSON.stringify(detail).slice(0, 300) : null);
+    },
+
+    // A refusal the run recovered from (one retry after Retry-After): history
+    // only — no cooldown, and the hourly cap does not count it.
+    recordLinkedInRefusal({ reason, detail = null, at = Date.now() } = {}) {
+      db.prepare('INSERT INTO linkedin_requests (at, kind, detail) VALUES (?, ?, ?)')
+        .run(Number(at), `refused:${String(reason).slice(0, 24)}`, detail ? JSON.stringify(detail).slice(0, 300) : null);
+    },
+
+    recordLinkedInRequest({ kind, at = Date.now() } = {}) {
+      db.prepare('INSERT INTO linkedin_requests (at, kind) VALUES (?, ?)').run(Number(at), String(kind || 'unknown'));
+      db.prepare('DELETE FROM linkedin_requests WHERE at < ?').run(Number(at) - 14 * 24 * 60 * 60 * 1000);
+    },
+
+    countLinkedInRequests({ since }) {
+      return db.prepare("SELECT COUNT(*) AS count FROM linkedin_requests WHERE at >= ? AND kind NOT LIKE 'refused:%'").get(Number(since)).count;
     },
 
     noteLinkedInActivity(at = Date.now()) {

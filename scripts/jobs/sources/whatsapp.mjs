@@ -71,6 +71,46 @@ export function queueIncomingMessages({ messages = [], configuredGroupJids, stor
   return result;
 }
 
+// A shared LinkedIn link carries no title or company until its page is read,
+// and the message text is erased after URL extraction. This keeps a short
+// hint for the pre-read filter (scripts/jobs.mjs): ~85% of LinkedIn reads were
+// thrown away by the title/company filters right after reading (2026-10-23).
+//   slug — the URL's own `/jobs/view/<title>-at-<company>-<id>` (LinkedIn's title)
+//   bold — a bold first line `*Title*`, how many groups post the role
+//   text — the lines before the link (negative keywords only)
+// Phone numbers and e-mail addresses are removed; at most 160 characters.
+const HINT_MAX = 160;
+const cleanHint = (value) => String(value || '')
+  .replace(URL_PATTERN, ' ')
+  .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, ' ')
+  .replace(/\+?\d[\d\s-]{7,}\d/g, ' ')
+  .replace(/[*_~`]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, HINT_MAX);
+
+export function extractLinkHint(text, url, { urlCount = 1 } = {}) {
+  let slug = null;
+  try {
+    slug = new URL(url).pathname.match(/\/jobs\/view\/([a-z0-9%-]+)-\d{6,}\/?$/i)?.[1] || null;
+  } catch { /* not a URL: no slug */ }
+  if (slug) {
+    const words = decodeURIComponent(slug).replace(/-/g, ' ').trim();
+    const at = words.lastIndexOf(' at ');
+    return { source: 'slug', title: cleanHint(at > 0 ? words.slice(0, at) : words), company: at > 0 ? cleanHint(words.slice(at + 4)) : null };
+  }
+  // Several links in one message (a digest): its text cannot be tied to one link.
+  if (urlCount !== 1) return null;
+  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const bold = lines[0]?.match(/^\*([^*\n]{3,120})\*$/)?.[1];
+  if (bold) return { source: 'bold', title: cleanHint(bold), company: null };
+  const before = String(text || '').split(url)[0];
+  const textHint = cleanHint(before.split('\n').filter((line) => line.trim()).slice(-3).join(' '));
+  return textHint.length >= 4 ? { source: 'text', text: textHint } : null;
+}
+
+const isLinkedInPosting = (url) => /linkedin\.com\/jobs\/view\//i.test(url) || /linkedin\.com\/jobs\/.*currentJobId=\d{6,}/i.test(url);
+
 function messageUrls(text) {
   const urls = (text.match(URL_PATTERN) || []).map((url) => url.replace(/[.,;)\]]+$/, ''));
   return [...new Set(urls)];
@@ -187,12 +227,17 @@ function processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic, lim
     latestTimestamp = Math.max(latestTimestamp, timestamp);
 
     try {
-      for (const url of messageUrls(text)) {
+      const urls = messageUrls(text);
+      for (const url of urls) {
         const sighting = store.recordSighting({
           url,
           source: `WhatsApp: ${group.name}`,
           seenAt: timestamp,
         });
+        if (isLinkedInPosting(url)) {
+          const hint = extractLinkHint(text, url, { urlCount: urls.length });
+          if (hint) store.setLinkHint?.(sighting.jobKey, hint);
+        }
         candidates.push({
           ...sighting,
           url,

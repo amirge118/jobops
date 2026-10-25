@@ -376,7 +376,7 @@ test('a LinkedIn block stops further LinkedIn reads in the run and leaves them r
   assert.equal(first.code, 'linkedin_rate_limited');
   assert.equal(second.status, 'uncertain');
   assert.equal(second.code, 'linkedin_deferred');
-  assert.equal(requested.length, 1);
+  assert.equal(requested.length, 2, 'the posting is retried once after the 429, then the run stops');
 });
 
 test('LinkedIn reads stop at the per-run cap and a changed page is not called active', async () => {
@@ -413,4 +413,66 @@ test('a LinkedIn posting page without a description fails alone and does not hal
   assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222')).status, 'active', 'the next posting is still read');
   assert.deepEqual(blocks, []);
   assert.equal(requested.length, 2);
+});
+
+test('LinkedIn postings wait once the shared hourly cap is reached, without sending a request', async () => {
+  const requested = [];
+  const recorded = [];
+  let allowed = 1;
+  const linkedinGate = { allow: () => allowed > 0, record: (kind) => { recorded.push(kind); allowed -= 1; } };
+  const fetcher = createJobPageFetcher({
+    store: memoryStore(),
+    cacheTtlMs: 0,
+    sleep: async () => {},
+    linkedinGate,
+    fetchImpl: async (url) => {
+      requested.push(url);
+      return new Response(`<div class="show-more-less-html__markup">${'Build services. '.repeat(30)}</div>`, { status: 200 });
+    },
+  });
+  assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/1111111111')).status, 'active');
+  const second = await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222');
+  assert.equal(second.code, 'linkedin_deferred');
+  assert.match(second.reason, /hourly LinkedIn request limit/);
+  assert.equal((await fetcher.fetch('https://www.linkedin.com/jobs/view/3333333333')).code, 'linkedin_deferred');
+  assert.equal(requested.length, 1);
+  assert.deepEqual(recorded, ['posting']);
+});
+
+test('one LinkedIn 429 is waited out and retried once; a second refusal stops the run', async () => {
+  const description = `<div class="show-more-less-html__markup">${'Build services. '.repeat(30)}</div>`;
+  const run = async (statuses) => {
+    const waits = [];
+    const refusals = [];
+    const blocks = [];
+    const requested = [];
+    const fetcher = createJobPageFetcher({
+      store: memoryStore(),
+      cacheTtlMs: 0,
+      sleep: async (ms) => waits.push(ms),
+      onLinkedInRefusal: (detail) => refusals.push(detail),
+      onLinkedInBlock: (status, detail) => blocks.push({ status, detail }),
+      fetchImpl: async (url) => {
+        requested.push(url);
+        const status = statuses.shift() ?? 200;
+        return new Response(status === 200 ? description : '', { status, headers: status === 429 ? { 'retry-after': '30' } : {} });
+      },
+    });
+    const first = await fetcher.fetch('https://www.linkedin.com/jobs/view/1111111111');
+    const second = await fetcher.fetch('https://www.linkedin.com/jobs/view/2222222222');
+    return { first, second, waits, refusals, blocks, requested };
+  };
+
+  const recovered = await run([429, 200, 200]);
+  assert.equal(recovered.first.status, 'active');
+  assert.equal(recovered.second.status, 'active', 'the run continues after a recovered 429');
+  assert.equal(recovered.waits[0], 30_000, 'Retry-After is honoured');
+  assert.deepEqual(recovered.refusals, [{ status: 429, retryAfter: '30', waitedMs: 30_000, recovered: true, retryStatus: 200 }]);
+  assert.deepEqual(recovered.blocks, []);
+
+  const twice = await run([429, 429]);
+  assert.equal(twice.first.code, 'linkedin_rate_limited');
+  assert.equal(twice.second.code, 'linkedin_deferred');
+  assert.deepEqual(twice.blocks, [{ status: 'rate_limited', detail: { status: 429, retryAfter: '30', retried: true } }]);
+  assert.equal(twice.requested.length, 2, 'nothing after the second refusal');
 });

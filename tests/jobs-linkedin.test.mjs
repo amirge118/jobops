@@ -4,10 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import Database from 'better-sqlite3';
+
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import {
   buildTitleIncludeFilter, postedAgeLowerBoundMs,
-  buildLinkedInAreaFilter, buildSearchUrl, classifySearchResponse, createLinkedInBudget, isFallbackPage,
+  buildLinkedInAreaFilter, buildSearchUrl, classifySearchResponse, createLinkedInBudget, createLinkedInGate, isFallbackPage, retryAfterMs,
   parsePostingPage, parseSearchPage, runLinkedInSearch, scanLinkedIn, searchTerms,
 } from '../scripts/jobs/sources/linkedin.mjs';
 
@@ -139,7 +141,8 @@ test('hitting the page limit is partial and marked capped', async () => {
 });
 
 test('a block mid-search keeps collected cards as partial and halts the shared budget', async () => {
-  const responses = [response(page([{ id: '1000001' }])), response('', 429)];
+  // A refusal that persists through the one retry.
+  const responses = [response(page([{ id: '1000001' }])), response('', 429), response('', 429)];
   const budget = createLinkedInBudget();
   const result = await runLinkedInSearch({ search, window, budget, sleep: noSleep, fetchImpl: async () => responses.shift() });
   assert.equal(result.status, 'partial');
@@ -346,9 +349,109 @@ test('"no real matches" is not trusted when the same run was rate limited, so co
     { key: 'a', label: 'Backend', keywords: 'backend', location: 'Israel' },
     { key: 'b', label: 'Data', keywords: '"data engineer"', location: 'Israel' },
   ]);
-  const queue = [response(page([{ id: '1000001', title: 'Offshore Chemist' }, { id: '1000002', title: 'BIM Consultant' }])), response('', 429)];
+  const queue = [response(page([{ id: '1000001', title: 'Offshore Chemist' }, { id: '1000002', title: 'BIM Consultant' }])), response('', 429), response('', 429)];
   const result = await scanLinkedIn({ config: linkedinConfig(), store, sleep: noSleep, fetchImpl: async () => queue.shift() });
   assert.deepEqual(result.searches.map((row) => [row.status, row.reason]), [['failed', 'empty_unverified'], ['failed', 'rate_limited']]);
   assert.deepEqual(store.listLinkedInSearches().map((search) => search.coveredUntil), [null, null]);
   store.close();
+});
+
+function gateStore(context) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-li-gate-'));
+  context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = createJobStore(path.join(dir, 'jobs.db'));
+  context.after(() => store.close());
+  return store;
+}
+
+test('the hourly LinkedIn gate counts every process\'s requests over the last hour', (context) => {
+  const store = gateStore(context);
+  let clock = Date.parse('2026-10-19T15:00:00Z');
+  const gate = createLinkedInGate({ store, limit: 3, now: () => clock });
+  const queueGate = createLinkedInGate({ store, limit: 1, now: () => clock });
+  assert.equal(gate.allow(), true);
+  gate.record('search');
+  assert.equal(queueGate.allow(), false, 'the queue reader stops earlier');
+  gate.record('posting');
+  gate.record('posting');
+  assert.equal(gate.allow(), false);
+  clock += 61 * 60 * 1000;
+  assert.equal(gate.allow(), true, 'requests older than an hour no longer count');
+  // Fourteen days are kept, older rows are pruned on the next record.
+  clock += 15 * 24 * 60 * 60 * 1000;
+  gate.record('posting');
+  assert.equal(store.countLinkedInRequests({ since: 0 }), 1);
+});
+
+test('a search stops before a request once the shared hourly cap is reached', async () => {
+  const requested = [];
+  const recorded = [];
+  let allowed = 1;
+  const gate = { allow: () => allowed > 0, record: (kind) => { recorded.push(kind); allowed -= 1; } };
+  const fetchImpl = async (url) => { requested.push(url); return response(page(Array.from({ length: 10 }, (_, index) => ({ id: String(3_000_000 + requested.length * 100 + index) })))); };
+  const result = await runLinkedInSearch({ search, window, budget: createLinkedInBudget({}, { gate }), fetchImpl, sleep: noSleep });
+  assert.equal(requested.length, 1);
+  assert.deepEqual(recorded, ['search']);
+  assert.equal(result.endedBy, 'hourly_limit');
+  assert.equal(result.status, 'partial');
+});
+
+test('Retry-After is read as seconds or a date, with a fallback and clamps', () => {
+  const now = Date.parse('2026-10-24T09:00:00Z');
+  assert.equal(retryAfterMs('30', { now }), 30_000);
+  assert.equal(retryAfterMs(null, { now }), 45_000);
+  assert.equal(retryAfterMs('soon', { now }), 45_000);
+  assert.equal(retryAfterMs('1', { now }), 5_000, 'at least 5 s');
+  assert.equal(retryAfterMs('3600', { now }), 120_000, 'at most 2 minutes');
+  assert.equal(retryAfterMs('Sat, 24 Oct 2026 09:01:00 GMT', { now }), 60_000);
+});
+
+test('queued LinkedIn postings older than the limit are archived unread; fresh, scored and other jobs stay', (context) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-li-stale-'));
+  context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'jobs.db');
+  const store = createJobStore(file);
+  context.after(() => store.close());
+  const db = new Database(file);
+  context.after(() => db.close());
+  const now = Date.parse('2026-10-24T09:00:00Z');
+  const DAY = 24 * 60 * 60 * 1000;
+  const insert = db.prepare(`INSERT INTO jobs (job_key, canonical_url, apply_url, sources_json, first_seen_at, last_seen_at, last_error_code, score)
+    VALUES (?, ?, ?, '["WhatsApp: G"]', ?, ?, ?, ?)`);
+  const li = (id) => `https://www.linkedin.com/jobs/view/${id}`;
+  insert.run('old', li(4400000001), li(4400000001), now - 8 * DAY, now - 8 * DAY, 'linkedin_deferred', null);
+  insert.run('fresh', li(4400000002), li(4400000002), now - 2 * DAY, now - 2 * DAY, 'linkedin_deferred', null);
+  insert.run('scored', li(4400000003), li(4400000003), now - 9 * DAY, now - 9 * DAY, 'linkedin_deferred', 3.1);
+  insert.run('ats', 'https://boards.greenhouse.io/x/jobs/1', 'https://boards.greenhouse.io/x/jobs/1', now - 9 * DAY, now - 9 * DAY, 'fetch_failed', null);
+
+  assert.deepEqual(store.archiveStaleLinkedInQueue({ olderThanMs: 5 * DAY, at: now }), { archived: 1 });
+  const archived = db.prepare('SELECT job_key FROM jobs WHERE archived_at IS NOT NULL').all().map((row) => row.job_key);
+  assert.deepEqual(archived, ['old']);
+  assert.equal(db.prepare("SELECT canonical_url FROM jobs WHERE job_key = 'old'").get().canonical_url, li(4400000001), 'identity kept for dedup');
+});
+
+test('a search waits out one 429 and retries the page; a second 429 halts it', async () => {
+  const run = async (statuses) => {
+    const waits = [];
+    const refusals = [];
+    const pages = [page(Array.from({ length: 10 }, (_, index) => ({ id: String(5_000_000 + index) }))), ''];
+    const fetchImpl = async () => {
+      const status = statuses.shift() ?? 200;
+      return status === 429 ? response('', 429) : response(pages.shift() ?? '');
+    };
+    const budget = createLinkedInBudget({}, { onRefusal: (detail) => refusals.push(detail) });
+    const result = await runLinkedInSearch({ search, window, budget, fetchImpl, sleep: async (ms) => waits.push(ms), isFirstRequest: () => true });
+    return { result, waits, refusals, budget };
+  };
+  const recovered = await run([429, 200, 200]);
+  assert.equal(recovered.result.status, 'complete');
+  assert.equal(recovered.result.cards.length, 10);
+  assert.deepEqual(recovered.waits, [45_000]);
+  assert.equal(recovered.refusals[0].recovered, true);
+  assert.equal(recovered.budget.haltedBy, null);
+
+  const halted = await run([429, 429]);
+  assert.equal(halted.budget.haltedBy, 'rate_limited');
+  assert.equal(halted.result.status, 'failed');
+  assert.equal(halted.refusals[0].recovered, false);
 });
