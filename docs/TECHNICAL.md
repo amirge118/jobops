@@ -107,6 +107,7 @@ npm run jobs -- --days 2              # scan the last two days
 npm run jobs -- --days 2 --open       # also open new matches in Chrome
 npm run jobs:open                      # open matches that were not opened yet
 npm run jobs:verify-groups             # confirm configured WhatsApp groups still exist
+npm run jobs:list-groups -- --pause-collector --filter "TEXT" # find a joined group's jid to add to config
 npm run whatsapp:collector             # keep receiving WhatsApp messages in this terminal
 npm run jobs:import-whatsapp-links -- --group "GROUP" --file links.json # one-time browser/export backfill
 npm run jobs -- --whatsapp-backlog --days 7 # process seven days already queued locally

@@ -32,6 +32,7 @@
     "jobs": "node scripts/jobs.mjs",
     "jobs:open": "node scripts/jobs/open.mjs",
     "jobs:verify-groups": "node scripts/jobs/verify-groups.mjs",
+    "jobs:list-groups": "node scripts/jobs/list-groups.mjs",
     "jobs:mark-read": "node scripts/jobs/mark-groups-read.mjs",
     "jobs:migrate-whatsapp": "node scripts/migrate-whatsapp-state.mjs",
     "jobs:import-whatsapp-links": "node scripts/jobs/import-whatsapp-links.mjs",

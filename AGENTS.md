@@ -54,6 +54,7 @@ npm run jobs:linkedin # LinkedIn public search only (no login); --linkedin-hours
 npm run jobs:linkedin-probe # bounded read-only check that LinkedIn's guest search still behaves as expected
 npm run jobs:whatsapp-trigger # token-free check; processes the WhatsApp backlog only when enough new jobs wait
 npm run jobs:verify-groups # live-check configured WhatsApp groups
+npm run jobs:list-groups # every joined WhatsApp group with its jid (✓ = scanned); -- --pause-collector while the collector runs, --filter TEXT, --json
 npm run jobs:mark-read # mark only the configured WhatsApp group chats as read
 npm run jobs:migrate-whatsapp # one-time import of legacy WhatsApp message dedup
 npm run setup       # create missing private config/profile files without overwriting

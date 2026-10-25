@@ -48,14 +48,29 @@ function launchctl(args, { allowFailure = false } = {}) {
   return result;
 }
 
+export function isCollectorServiceLoaded() {
+  return launchctl(['print', `gui/${process.getuid()}/${LABEL}`], { allowFailure: true }).status === 0;
+}
+
+// Stop the running service but keep its plist, so `install` brings it back unchanged.
+export function pauseCollectorService() {
+  launchctl(['bootout', `gui/${process.getuid()}`, PLIST_PATH], { allowFailure: true });
+}
+
+// Write the plist and (re)start the service. Silent, so callers can keep stdout clean.
+export function resumeCollectorService() {
+  const domain = `gui/${process.getuid()}`;
+  fs.mkdirSync(path.dirname(PLIST_PATH), { recursive: true });
+  fs.writeFileSync(PLIST_PATH, renderLaunchAgent(), { mode: 0o644 });
+  fs.chmodSync(PLIST_PATH, 0o644);
+  launchctl(['bootout', domain, PLIST_PATH], { allowFailure: true });
+  launchctl(['bootstrap', domain, PLIST_PATH]);
+}
+
 export function manageCollectorService(command = process.argv[2]) {
   const domain = `gui/${process.getuid()}`;
   if (command === 'install') {
-    fs.mkdirSync(path.dirname(PLIST_PATH), { recursive: true });
-    fs.writeFileSync(PLIST_PATH, renderLaunchAgent(), { mode: 0o644 });
-    fs.chmodSync(PLIST_PATH, 0o644);
-    launchctl(['bootout', domain, PLIST_PATH], { allowFailure: true });
-    launchctl(['bootstrap', domain, PLIST_PATH]);
+    resumeCollectorService();
     console.log(`Installed ${LABEL}. Diagnostics are stored in data/jobs.db.`);
     return;
   }
