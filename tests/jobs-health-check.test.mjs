@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { evaluateHealth, runHealthCheck } from '../scripts/jobs/health-check.mjs';
+import { evaluateHealth, inShabbatQuiet, runHealthCheck } from '../scripts/jobs/health-check.mjs';
 import { completionStatusFor, liveCollectorSince, summarizeSourceResults } from '../scripts/jobs.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 
@@ -214,4 +214,20 @@ test('the live collector counts only when connected to every expected group', ()
   assert.equal(liveCollectorSince(storeWith({ status: 'connected', started_at: 5, groups_found: 3, groups_expected: 4 })), null);
   assert.equal(liveCollectorSince(storeWith({ status: 'reconnecting', started_at: 5, groups_found: 4, groups_expected: 4 })), null);
   assert.equal(liveCollectorSince(storeWith(null)), null);
+});
+
+test('group silence over Shabbat is expected, not a finding', () => {
+  // Saturday 2026-10-24 12:00 in Israel; last message Friday 23:00.
+  const saturdayNoon = Date.parse('2026-10-24T09:00:00Z');
+  const longRun = { status: 'connected', started_at: saturdayNoon - 72 * HOUR, reconnects: 10 };
+  assert.equal(inShabbatQuiet(saturdayNoon), true);
+  const whatsappKeys = (findings) => findings.map((f) => f.key).filter((key) => key.startsWith('whatsapp:'));
+  assert.deepEqual(whatsappKeys(evaluateHealth(facts({ now: saturdayNoon, collector: longRun, lastGroupMessageAt: saturdayNoon - 13 * HOUR }))), []);
+  // The same silence on a Thursday is a finding.
+  const thursdayNoon = Date.parse('2026-10-22T09:00:00Z');
+  assert.deepEqual(whatsappKeys(evaluateHealth(facts({ now: thursdayNoon, collector: { ...longRun, started_at: thursdayNoon - 72 * HOUR }, lastGroupMessageAt: thursdayNoon - 13 * HOUR }))), ['whatsapp:silent']);
+  // Saturday 22:00 and Thursday noon are not quiet.
+  assert.equal(inShabbatQuiet(Date.parse('2026-10-24T19:00:00Z')), false);
+  assert.equal(inShabbatQuiet(Date.parse('2026-10-22T09:00:00Z')), false);
+  assert.equal(inShabbatQuiet(Date.parse('2026-10-23T12:30:00Z')), true, 'Friday 15:30');
 });

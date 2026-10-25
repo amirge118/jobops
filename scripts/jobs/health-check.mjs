@@ -27,6 +27,15 @@ export const HEALTH_THRESHOLDS = Object.freeze({
   retryStuckHours: 24,
 });
 
+// The groups go quiet over Shabbat (2026-10-24: no message from Friday 23:00
+// to Saturday noon), so silence then is expected, not a broken collector.
+export function inShabbatQuiet(ms) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, weekday: 'short', hour: 'numeric', hourCycle: 'h23' })
+    .formatToParts(ms).map((part) => [part.type, part.value]));
+  const hour = Number(parts.hour);
+  return (parts.weekday === 'Fri' && hour >= 15) || (parts.weekday === 'Sat' && hour < 21);
+}
+
 function israelHour(ms) {
   return Number(new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: 'numeric', hourCycle: 'h23' }).format(ms));
 }
@@ -115,7 +124,7 @@ export function evaluateHealth(facts, thresholds = HEALTH_THRESHOLDS) {
     // it retried for three days as 'reconnecting'). The run start counts as
     // "heard" so a fresh pairing gets the full grace period.
     const heardAt = Math.max(Number(facts.lastGroupMessageAt || 0), Number(collector.started_at || 0));
-    if (now - heardAt > thresholds.groupSilenceHours * HOUR) {
+    if (now - heardAt > thresholds.groupSilenceHours * HOUR && !inShabbatQuiet(now)) {
       add('whatsapp:silent', 'whatsapp', 'error', 'אוסף ה-WhatsApp פעיל אבל לא מקבל הודעות מהקבוצות',
         `${facts.lastGroupMessageAt ? `ההודעה האחרונה מקבוצה התקבלה ב-${timeText(facts.lastGroupMessageAt)}` : 'אין הודעות מהקבוצות'}`
         + ` (מצב: ${collector.status}). WhatsApp כנראה הפסיק למסור הודעות למכשיר המקושר או לא מאפשר לו להתחבר: `
