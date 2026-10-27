@@ -373,7 +373,8 @@ test('duplicate ATS source cannot be attached to two companies', () => {
 
   assert.throws(
     () => store.upsertCompanySource(second.company.id, first.sources[0]),
-    (error) => error instanceof CompanyRegistryError && error.code === 'source_conflict',
+    (error) => error instanceof CompanyRegistryError && error.code === 'source_conflict' &&
+      error.ownerName === 'First Name',
   );
   store.close();
 });

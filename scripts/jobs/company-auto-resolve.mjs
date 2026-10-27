@@ -379,42 +379,58 @@ async function main(argv = process.argv.slice(2)) {
   const research = createCompanyResearcher(config);
   const discovery = createCareersPageDiscovery();
   const http = makeHttpCtx();
-  const summary = { watched: [], unscannable: [] };
+  const summary = { watched: [], unscannable: [], failed: [] };
   try {
     for (const company of due) {
       console.log(`• ${company.name}`);
-      const outcome = await resolveCandidate(company, {
-        research: dryRun ? null : research,
-        discoverPage: (url) => discovery.discover(url),
-        fetchJson: (url) => http.fetchJson(url, { timeoutMs: 15_000 }),
-        log: (line) => console.log(line),
-        saveResearch: async (target, result) => withStore((store) => {
-          const saved = store.upsertCompanyCandidate(result.candidate);
-          const source = saved.sources.find((item) => item.provider === result.candidate.source?.provider &&
-            item.careersUrl === result.candidate.source?.careersUrl);
-          if (source && result.probe) store.recordCompanySourceProbe(source.id, result.probe, result.research?.evidenceUrls || []);
-          return store.getCompany(target.id);
-        }),
-      });
-      if (outcome.status === 'watched') {
-        summary.watched.push(`${company.name} (${outcome.source.provider}, ${outcome.probe.count} משרות; ${outcome.how})`);
-        if (!dryRun) withStore((store) => {
-          const saved = store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
-          store.recordCompanySourceProbe(saved.id, outcome.probe, []);
-          store.approveCompany(company.id);
-          store.recordAutoResolve(company.id, { status: 'auto_watched', reason: null, detail: `${outcome.source.provider}: ${outcome.source.careersUrl}`, at: now });
+      // One company's failure must not stop the rest of the queue: before
+      // this, a single board conflict aborted every daily run.
+      try {
+        const outcome = await resolveCandidate(company, {
+          research: dryRun ? null : research,
+          discoverPage: (url) => discovery.discover(url),
+          fetchJson: (url) => http.fetchJson(url, { timeoutMs: 15_000 }),
+          log: (line) => console.log(line),
+          saveResearch: async (target, result) => withStore((store) => {
+            const saved = store.upsertCompanyCandidate(result.candidate);
+            const source = saved.sources.find((item) => item.provider === result.candidate.source?.provider &&
+              item.careersUrl === result.candidate.source?.careersUrl);
+            if (source && result.probe) store.recordCompanySourceProbe(source.id, result.probe, result.research?.evidenceUrls || []);
+            return store.getCompany(target.id);
+          }),
         });
-      } else {
-        summary.unscannable.push(`${company.name}: ${outcome.reason}${outcome.detail ? ` (${outcome.detail})` : ''}`);
-        if (!dryRun) withStore((store) => {
-          if (outcome.source) {
+        if (outcome.status === 'watched') {
+          if (!dryRun) withStore((store) => {
             const saved = store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
             store.recordCompanySourceProbe(saved.id, outcome.probe, []);
-          }
-          store.recordAutoResolve(company.id, {
-            status: 'unscannable', reason: outcome.reason, detail: outcome.detail, at: now, nextAt: now + RETRY_DAYS * DAY_MS,
+            store.approveCompany(company.id);
+            store.recordAutoResolve(company.id, { status: 'auto_watched', reason: null, detail: `${outcome.source.provider}: ${outcome.source.careersUrl}`, at: now });
           });
-        });
+          // Only after the save: a conflicting board must not be reported as watched.
+          summary.watched.push(`${company.name} (${outcome.source.provider}, ${outcome.probe.count} משרות; ${outcome.how})`);
+        } else {
+          summary.unscannable.push(`${company.name}: ${outcome.reason}${outcome.detail ? ` (${outcome.detail})` : ''}`);
+          if (!dryRun) withStore((store) => {
+            if (outcome.source) {
+              const saved = store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
+              store.recordCompanySourceProbe(saved.id, outcome.probe, []);
+            }
+            store.recordAutoResolve(company.id, {
+              status: 'unscannable', reason: outcome.reason, detail: outcome.detail, at: now, nextAt: now + RETRY_DAYS * DAY_MS,
+            });
+          });
+        }
+      } catch (error) {
+        if (error?.code === 'source_conflict') {
+          const detail = error.ownerName || null;
+          summary.unscannable.push(`${company.name}: source_conflict${detail ? ` (${detail})` : ''}`);
+          if (!dryRun) withStore((store) => store.recordAutoResolve(company.id, {
+            status: 'unscannable', reason: 'source_conflict', detail, at: now, nextAt: now + RETRY_DAYS * DAY_MS,
+          }));
+        } else {
+          // Left due, so the next daily run retries it.
+          summary.failed.push(`${company.name}: ${String(error?.message || error).slice(0, 200)}`);
+        }
       }
     }
   } finally {
@@ -422,6 +438,10 @@ async function main(argv = process.argv.slice(2)) {
   }
   console.log(`\nנוספו למעקב אוטומטית (${summary.watched.length}):\n${summary.watched.map((line) => `  ${line}`).join('\n')}`);
   console.log(`\nלא ניתן לסרוק (${summary.unscannable.length}):\n${summary.unscannable.map((line) => `  ${line}`).join('\n')}`);
+  if (summary.failed.length) {
+    console.log(`\nנכשלו ויבדקו שוב מחר (${summary.failed.length}):\n${summary.failed.map((line) => `  ${line}`).join('\n')}`);
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

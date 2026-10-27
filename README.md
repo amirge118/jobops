@@ -91,8 +91,9 @@ and no third-party application server are in the loop.
   ATS API calls the page makes in the background, and a repeated job-link pattern on the site
   itself. A source with jobs that carries the company's own name (or job links on its own site)
   starts being watched, labeled "added automatically"; everything else moves to a "cannot be
-  scanned" list with the reason in plain words and a retry in 14 days
-  (`npm run jobs:companies:resolve`; `npm run jobs:import-interested` catches up on past decisions).
+  scanned" list with the reason in plain words and a retry in 14 days. One company's failure no
+  longer stops the rest of the daily run; a board already assigned to another company is listed
+  with that company's name (`npm run jobs:companies:resolve`; `npm run jobs:import-interested` catches up on past decisions).
 - 📲 **A WhatsApp ping for strong jobs** — every new suitable job scoring 4.0+ is sent once to your
   own WhatsApp ("Message yourself") with the score, the posting, and a link to the decisions page
   (`notifications.whatsapp` in `config/jobs.yml`).
@@ -205,7 +206,10 @@ npm run dashboard:service:install  # optional: keep the dashboard running in the
 ```
 
 With the dashboard service installed, the dashboard starts at login, comes back after a crash,
-and no longer depends on the terminal that started it.
+and no longer depends on the terminal that started it. It also restarts itself when
+`config/jobs.yml` changes (once no action is running and the new file loads), so new groups or
+searches show up without a manual restart. The WhatsApp collector still needs
+`launchctl kickstart -k gui/$(id -u)/com.amirgefen.jobops.whatsapp-collector` to pick up new groups.
 
 Then open `http://127.0.0.1:4177` and configure your sources in `config/jobs.yml` and
 `portals.yml`.

@@ -211,6 +211,7 @@ Scoring anchors (pick the matching band first, then the number; use the same ban
 
 Hard caps (apply after the anchors):
 - A role that is mainly frontend, mobile, QA, or IT/DevOps operations without backend development: roleScope <= 2 and domainMatches false.
+- A role whose main work matches a role-type deal-breaker in the preferences (not the level rule, which seniority already scores): domainMatches false.
 - A role whose primary duty is people management while the profile shows no management experience: seniority <= 3.
 - cvMatch 5 requires every stated must-have to be evidenced in the profile; otherwise cvMatch <= 4.
 - When the posting does not state something, score that dimension by the "unknown" anchor and list it in uncertainties — never assume the favourable case.

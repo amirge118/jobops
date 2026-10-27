@@ -1252,7 +1252,9 @@ export function createJobStore(databasePath) {
     const sourceKey = companySourceKey(source);
     const existing = db.prepare('SELECT * FROM company_job_sources WHERE source_key = ?').get(sourceKey);
     if (existing && existing.company_id !== id) {
-      throw new CompanyRegistryError('source_conflict', 'ATS source is already assigned to another company');
+      const error = new CompanyRegistryError('source_conflict', 'ATS source is already assigned to another company');
+      error.ownerName = getCompanyRow.get(existing.company_id)?.name ?? null;
+      throw error;
     }
     db.prepare(`
       INSERT INTO company_job_sources (

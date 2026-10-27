@@ -26,6 +26,8 @@ import { recordApplicationInTracker } from './jobs/tracker.mjs';
 import { runHealthCheck } from './jobs/health-check.mjs';
 import { serveDashboardAsset } from './dashboard/static.mjs';
 import { createActionController, runCommand } from './dashboard/actions.mjs';
+import { CONFIG_RESTART_EXIT_CODE, watchConfigForRestart } from './dashboard/config-watch.mjs';
+import { DASHBOARD_LABEL } from './dashboard/service.mjs';
 import { blockersForAction, createReadinessService } from './dashboard/readiness.mjs';
 import { buildScanDiagnosis } from './dashboard/scan-diagnosis.mjs';
 import { parseDashboardOptions } from './jobs/dashboard.mjs';
@@ -153,7 +155,7 @@ export function createDashboardServer({
     return queries.snapshot();
   }
 
-  return http.createServer(async (request, response) => {
+  const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${HOST}`);
       if (request.method === 'GET' && url.pathname === '/api/state') {
@@ -596,6 +598,8 @@ export function createDashboardServer({
       sendJson(response, statusCode, { error: statusCode >= 500 ? 'Internal server error' : error.message });
     }
   });
+  server.isBusy = () => action.status === 'running' || browserProbe.running;
+  return server;
 }
 
 export async function startDashboard(argv = process.argv.slice(2)) {
@@ -605,6 +609,22 @@ export async function startDashboard(argv = process.argv.slice(2)) {
   const config = demo?.config || loadJobsConfig();
   const server = createDashboardServer({ config, execute: demo ? runDemoAction : runCommand });
   if (demo) server.once('close', demo.cleanup);
+  if (!demo) {
+    // Only the LaunchAgent copy restarts itself; a terminal run would just end.
+    const managed = process.env.XPC_SERVICE_NAME === DASHBOARD_LABEL;
+    const stopWatching = watchConfigForRestart({
+      configPath: config.configPath,
+      isBusy: server.isBusy,
+      validate: () => loadJobsConfig(config.configPath),
+      onRestart: managed
+        ? () => {
+          console.log('config/jobs.yml השתנה; הדשבורד עולה מחדש עם ההגדרות החדשות.');
+          process.exit(CONFIG_RESTART_EXIT_CODE);
+        }
+        : () => console.log('config/jobs.yml השתנה; הפעל מחדש את הדשבורד כדי לטעון את ההגדרות החדשות.'),
+    });
+    server.once('close', stopWatching);
+  }
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(options.port, HOST, resolve);
