@@ -81,6 +81,15 @@ and no third-party application server are in the loop.
   for free. A token-free check every 30 minutes counts the *new jobs* waiting (unique, unseen
   links — one job shared in four groups counts once) and processes them once at least 8 are
   waiting or the oldest has waited 2 hours. Both numbers live in `config/jobs.yml`.
+- 🪪 **HireMeTech links lead to the real company** — HireMeTech hides the employer and the apply
+  link from anonymous readers. `npm run jobs:hiremetech-login` opens a plain Chrome window with a
+  dedicated profile under `auth/` (Google sign-in works there); you sign in yourself and quit it
+  with Cmd+Q, and the script confirms the session. Each masked listing is then resolved once: the
+  signed-in API gives the company, and when its apply link is an ATS API address, one press of the
+  apply button reveals the company page that opens (nothing on that page is touched). The company
+  page is scored when it names the role (otherwise the full API text is), and it is the apply
+  link either way. At most 15 per run; signed out, it falls back to the public API text and the
+  health check says to sign in again.
 - 🏢 **ATS boards every hour** — a company's own board is where a job appears first (in our data
   it beat LinkedIn by a median of ~36 hours), and its public API costs no tokens. Each company
   keeps its own progress, so one failing board never holds the others back; companies that need a

@@ -39,6 +39,11 @@ test('a healthy system has no findings', () => {
   assert.deepEqual(evaluateHealth(facts()), []);
 });
 
+test('a signed-out HireMeTech profile is a finding until a later resolve succeeds', () => {
+  assert.deepEqual(keys(evaluateHealth(facts({ hireMeTechLoggedOutAt: AFTERNOON - HOUR }))), ['hiremetech:login']);
+  assert.deepEqual(keys(evaluateHealth(facts({ hireMeTechLoggedOutAt: AFTERNOON - 2 * HOUR, hireMeTechResolvedAt: AFTERNOON - HOUR }))), []);
+});
+
 test('a company that failed once is not a finding; failing in three runs is', () => {
   const findings = evaluateHealth(facts({ companyFailures: [
     { company: 'Faye', runs: 1, code: 'timeout' },

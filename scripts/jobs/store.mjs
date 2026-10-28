@@ -620,6 +620,18 @@ export function createJobStore(databasePath) {
     );
     CREATE INDEX IF NOT EXISTS idx_linkedin_requests_at ON linkedin_requests(at);
 
+    -- Where a HireMeTech listing really leads (scripts/jobs/hiremetech-resolve.mjs):
+    -- resolved once per job, so a rescore never presses the apply button again.
+    -- A failed attempt keeps its error and is retried after a day.
+    CREATE TABLE IF NOT EXISTS hiremetech_targets (
+      job_id      TEXT PRIMARY KEY,
+      company     TEXT,
+      target_url  TEXT,
+      method      TEXT,
+      error       TEXT,
+      resolved_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS blocked_companies (
       company_key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -3105,6 +3117,8 @@ export function createJobStore(databasePath) {
         `).all(since),
         llmBlockedUntil: db.prepare('SELECT blocked_until AS blockedUntil FROM llm_state WHERE id = 1').get()?.blockedUntil ?? null,
         linkedinBlockedUntil: db.prepare('SELECT blocked_until AS blockedUntil FROM linkedin_state WHERE id = 1').get()?.blockedUntil ?? null,
+        hireMeTechLoggedOutAt: db.prepare('SELECT last_timestamp FROM checkpoints WHERE source_key = ?').get('hiremetech:logged_out')?.last_timestamp ?? null,
+        hireMeTechResolvedAt: db.prepare('SELECT last_timestamp FROM checkpoints WHERE source_key = ?').get('hiremetech:resolved')?.last_timestamp ?? null,
         linkedinSearches: db.prepare(`
           SELECT s.search_key AS key, p.last_status AS lastStatus, p.last_reason AS lastReason,
             p.last_success_at AS lastSuccessAt, p.last_attempt_at AS lastAttemptAt
@@ -3600,6 +3614,20 @@ export function createJobStore(databasePath) {
     // A block stops every LinkedIn request; recent activity (another run's
     // searches or page reads) only spaces out page reads, so frequent
     // WhatsApp runs can never starve the scheduled LinkedIn scan.
+    getHireMeTechTarget(jobId) {
+      return db.prepare('SELECT * FROM hiremetech_targets WHERE job_id = ?').get(String(jobId)) || null;
+    },
+
+    saveHireMeTechTarget(jobId, { company = null, targetUrl = null, method = null, error = null, at = Date.now() } = {}) {
+      db.prepare(`
+        INSERT INTO hiremetech_targets (job_id, company, target_url, method, error, resolved_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id) DO UPDATE SET
+          company = excluded.company, target_url = excluded.target_url, method = excluded.method,
+          error = excluded.error, resolved_at = excluded.resolved_at
+      `).run(String(jobId), company, targetUrl, method, error == null ? null : String(error).slice(0, 200), Number(at));
+    },
+
     getLinkedInCooldown({ now = Date.now(), afterActivityMs = 15 * 60 * 1000 } = {}) {
       const row = db.prepare('SELECT * FROM linkedin_state WHERE id = 1').get();
       const block = row?.blocked_until > now ? { until: row.blocked_until, reason: row.blocked_reason || 'blocked' } : null;

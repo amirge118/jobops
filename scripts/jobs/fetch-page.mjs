@@ -6,11 +6,13 @@ import {
   checkUrlLiveness, createHeadedPageProvider, isChallengeResult, newLivenessPage,
 } from '../liveness-browser.mjs';
 import { canonicalizeJobUrl, linkedinJobId } from './core.mjs';
+import { hireMeTechTarget } from './hiremetech-resolve.mjs';
 import {
   DEFAULT_LINKEDIN_LIMITS, LINKEDIN_POSTING_ENDPOINT, classifySearchResponse, fetchWithTimeout, parsePostingPage, retryAfterMs,
 } from './sources/linkedin.mjs';
 
 const FETCH_TIMEOUT_MS = 15_000;
+const HIREMETECH_RETRY_MS = 24 * 60 * 60 * 1000;
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36';
 
 function htmlToText(html) {
@@ -247,6 +249,10 @@ export function createJobPageFetcher({
   onLinkedInBlock = () => {},
   // A 429 the run recovered from with one retry: { status, retryAfter, waitedMs }.
   onLinkedInRefusal = () => {},
+  // Signed-in HireMeTech resolver (hiremetech-resolve.mjs); without it a
+  // masked listing is scored from the public API text, as before.
+  hireMeTech = null,
+  onHireMeTechResolve = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
@@ -306,6 +312,65 @@ export function createJobPageFetcher({
         finalUrl: url,
       };
     }
+  }
+
+  // HireMeTech hides the employer and the apply link from anonymous readers.
+  // Read the company's own page instead whenever its address is known (from
+  // the API, the per-job cache, or the signed-in resolver); otherwise keep the
+  // API text, naming the company when it is known.
+  const roleWords = (text) => String(text || '').toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  function namesRole(content, title) {
+    const words = roleWords(title).split(' ').filter((word) => word.length > 2).slice(0, 4);
+    const text = roleWords(content);
+    return words.length > 0 && words.every((word) => text.includes(word));
+  }
+
+  async function companyPageForHireMeTech(jobId, job, apiResult) {
+    const listed = hireMeTechTarget(job);
+    // An unmasked listing already carries the full text and the company link.
+    if (!listed.masked && listed.targetUrl) return apiResult;
+    let target = null;
+    if (!target) {
+      const cached = store.getHireMeTechTarget?.(jobId);
+      const retryDue = cached && !cached.target_url && now() - Number(cached.resolved_at) >= HIREMETECH_RETRY_MS;
+      if (cached && !retryDue) {
+        target = { company: cached.company || listed.company, targetUrl: cached.target_url, method: cached.method };
+      } else if (hireMeTech) {
+        const resolved = await hireMeTech.resolve(jobId);
+        onHireMeTechResolve(resolved);
+        if (['resolved', 'masked', 'failed'].includes(resolved.status)) {
+          store.saveHireMeTechTarget?.(jobId, {
+            company: resolved.company || null, targetUrl: resolved.targetUrl || null, method: resolved.method || null,
+            error: resolved.status === 'resolved' ? null : resolved.error || resolved.status, at: now(),
+          });
+        }
+        target = { company: resolved.company || listed.company, targetUrl: resolved.targetUrl || null, method: resolved.method };
+      }
+    }
+    const company = target?.company || listed.company;
+    const prefix = company ? `Company: ${company}\n` : '';
+    if (!target?.targetUrl) return { ...apiResult, content: `${prefix}${apiResult.content}` };
+
+    const page = await fetchPage(target.targetUrl);
+    const loaded = page.status === 'active' || (page.status === 'uncertain' && page.code === 'no_apply_control');
+    // Some ATS pages render client-side and come back as an empty template
+    // ("{{position.name}}"); only a page that names the role is better than
+    // the API text, which already holds the full description.
+    if (loaded && namesRole(page.content, job.title)) {
+      return {
+        status: 'active',
+        code: 'hiremetech_company_page',
+        reason: `The company's own page, reached through HireMeTech (${target.method || 'cache'}).`,
+        finalUrl: page.finalUrl || target.targetUrl,
+        content: `${prefix}${page.content}`.slice(0, 50_000),
+      };
+    }
+    if (page.status === 'expired') {
+      return { ...apiResult, status: 'expired', code: 'hiremetech_company_page_expired', reason: page.reason, finalUrl: target.targetUrl };
+    }
+    // The company page could not be read: score the API text, but still send
+    // the person to the company's page rather than back to HireMeTech.
+    return { ...apiResult, finalUrl: target.targetUrl, content: `${prefix}${apiResult.content}` };
   }
 
   async function fetchPage(url) {
@@ -379,6 +444,7 @@ export function createJobPageFetcher({
             finalUrl: safeHttpUrl(job.apply_url || job.job_url, canonicalUrl),
             content: hireMeTechContent(job),
           };
+          if (active) result = await companyPageForHireMeTech(hireMeTechId, job, result);
         }
       } catch (error) {
         result = {
@@ -655,6 +721,7 @@ export function createJobPageFetcher({
     async close() {
       if (browser) await browser.close().catch(() => {});
       if (headed) await headed.close().catch(() => {});
+      if (hireMeTech) await hireMeTech.close().catch(() => {});
       browser = null;
       page = null;
       headed = null;

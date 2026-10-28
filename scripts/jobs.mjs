@@ -8,6 +8,9 @@ import { loadJobsConfig, readCandidateContext } from './jobs/config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { deduplicateJobs, linkedinJobId, resumeGapInputHash } from './jobs/core.mjs';
 import { createJobPageFetcher } from './jobs/fetch-page.mjs';
+import {
+  createHireMeTechResolver, hireMeTechProfileExists, hireMeTechProfilePath, launchHireMeTechContext,
+} from './jobs/hiremetech-resolve.mjs';
 import { openJobUrls } from './jobs/open.mjs';
 import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
@@ -1005,6 +1008,21 @@ export function linkedinEnabledFor(config, store) {
   return Boolean(config.sources.linkedin?.enabled) && store.isSourceEnabled('linkedin');
 }
 
+// Only with a signed-in profile (npm run jobs:hiremetech-login); without one,
+// masked HireMeTech listings keep their public API text.
+function createScanHireMeTechResolver(config) {
+  const settings = config.sources?.hiremetech || {};
+  if (settings.resolveCompanyPage === false) return null;
+  const profilePath = hireMeTechProfilePath(config);
+  if (!hireMeTechProfileExists(profilePath)) return null;
+  return createHireMeTechResolver({
+    profilePath,
+    launchContext: (dir) => launchHireMeTechContext(dir),
+    maxResolves: Number(settings.maxResolvesPerRun ?? 15),
+    delayMs: settings.delayMs || [4_000, 9_000],
+  });
+}
+
 export async function runJobs(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = loadJobsConfig();
@@ -1126,6 +1144,11 @@ async function runJobsLocked(options, config) {
     onLinkedInRefusal: (detail) => store.recordLinkedInRefusal({ reason: 'rate_limited', detail }),
     onLinkedInRequest: () => store.noteLinkedInActivity(),
     onLinkedInBlock: noteLinkedInBlock,
+    hireMeTech: createScanHireMeTechResolver(config),
+    onHireMeTechResolve: (outcome) => {
+      if (outcome.status === 'logged_out') store.setCheckpoint('hiremetech:logged_out', Date.now());
+      if (outcome.status === 'resolved') store.setCheckpoint('hiremetech:resolved', Date.now());
+    },
   });
   let runId = null;
   let runDetails = null;

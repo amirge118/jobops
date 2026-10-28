@@ -148,6 +148,14 @@ export function evaluateHealth(facts, thresholds = HEALTH_THRESHOLDS) {
       `קודים: ${stuckRetries.map((group) => `${group.code} (${group.count})`).join(', ')}. ניסיון חוזר מעמוד הסריקה.`);
   }
 
+  // The resolver found the HireMeTech profile signed out more recently than
+  // it last resolved a job: listings fall back to the masked API text.
+  const loggedOutAt = Number(facts.hireMeTechLoggedOutAt || 0);
+  if (loggedOutAt && loggedOutAt > Number(facts.hireMeTechResolvedAt || 0)) {
+    add('hiremetech:login', 'jobs', 'warn', 'החיבור ל-HireMeTech פג',
+      `מ-${timeText(loggedOutAt)} משרות HireMeTech נקראות בלי שם החברה ועם קישור ל-HireMeTech. הרץ npm run jobs:hiremetech-login והתחבר שוב.`);
+  }
+
   if (Number(facts.resumeGapFailures) > 0) {
     add('jobs:resume-gap', 'jobs', 'info', `ניתוח קורות החיים נכשל ל-${facts.resumeGapFailures} משרות`, 'ינוסה שוב בסריקה הבאה.');
   }
