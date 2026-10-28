@@ -623,6 +623,18 @@ export function createJobStore(databasePath) {
     -- Where a HireMeTech listing really leads (scripts/jobs/hiremetech-resolve.mjs):
     -- resolved once per job, so a rescore never presses the apply button again.
     -- A failed attempt keeps its error and is retried after a day.
+    -- The weekly statistics run (scripts/jobs/weekly-stats.mjs): one row per
+    -- week (its Sunday, Israel time). The previous row gives week-over-week
+    -- deltas; /statistics reads the latest one in full.
+    CREATE TABLE IF NOT EXISTS weekly_reports (
+      week_start    TEXT PRIMARY KEY,
+      snapshot_json TEXT NOT NULL,
+      analysis_json TEXT,
+      status        TEXT NOT NULL CHECK(status IN ('analyzed', 'fallback')),
+      created_at    INTEGER NOT NULL,
+      sent_at       INTEGER
+    );
+
     CREATE TABLE IF NOT EXISTS hiremetech_targets (
       job_id      TEXT PRIMARY KEY,
       company     TEXT,
@@ -650,6 +662,17 @@ export function createJobStore(databasePath) {
     );
 
     CREATE INDEX IF NOT EXISTS job_source_sightings_seen_idx ON job_source_sightings(first_seen_at);
+
+    -- Which WhatsApp group / LinkedIn search brought each job. sources_json is
+    -- cleared once a job is rejected or decided, so per-group and per-search
+    -- yield (weekly-stats.mjs) needs this small, never-wiped record.
+    CREATE TABLE IF NOT EXISTS job_source_labels (
+      job_key       TEXT NOT NULL,
+      label         TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (job_key, label)
+    );
+    CREATE INDEX IF NOT EXISTS job_source_labels_seen_idx ON job_source_labels(first_seen_at);
 
     CREATE TABLE IF NOT EXISTS source_scan_stats (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1079,9 +1102,11 @@ export function createJobStore(databasePath) {
   `);
   // First time each source kind saw a job — survives rejection and archiving,
   // so a source's exclusive finds and lead time can be measured later.
+  const insertSourceLabel = db.prepare('INSERT OR IGNORE INTO job_source_labels (job_key, label, first_seen_at) VALUES (?, ?, ?)');
   const noteSourceSighting = (jobKey, source, company, seenAt) => {
     const [kind] = sourceKinds(source ? [source] : []);
     if (kind) insertSourceSighting.run(jobKey, kind, String(company || '').trim().slice(0, 200) || null, Number(seenAt));
+    if (/^(WhatsApp|LinkedIn): /.test(String(source || ''))) insertSourceLabel.run(jobKey, String(source).slice(0, 200), Number(seenAt));
   };
 
   // A duplicate row keeps only its URL and identity key; company+role matches
@@ -3614,6 +3639,32 @@ export function createJobStore(databasePath) {
     // A block stops every LinkedIn request; recent activity (another run's
     // searches or page reads) only spaces out page reads, so frequent
     // WhatsApp runs can never starve the scheduled LinkedIn scan.
+    saveWeeklyReport({ weekStart, snapshot, analysis = null, status, at = Date.now() }) {
+      db.prepare(`
+        INSERT INTO weekly_reports (week_start, snapshot_json, analysis_json, status, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(week_start) DO UPDATE SET
+          snapshot_json = excluded.snapshot_json, analysis_json = excluded.analysis_json,
+          status = excluded.status, created_at = excluded.created_at
+      `).run(String(weekStart), JSON.stringify(snapshot), analysis == null ? null : JSON.stringify(analysis), status, Number(at));
+    },
+
+    // The newest report, or the newest one before `before` (a week_start).
+    getWeeklyReport({ before = null } = {}) {
+      const row = before
+        ? db.prepare('SELECT * FROM weekly_reports WHERE week_start < ? ORDER BY week_start DESC LIMIT 1').get(String(before))
+        : db.prepare('SELECT * FROM weekly_reports ORDER BY week_start DESC LIMIT 1').get();
+      if (!row) return null;
+      return {
+        weekStart: row.week_start, status: row.status, createdAt: row.created_at, sentAt: row.sent_at,
+        snapshot: JSON.parse(row.snapshot_json), analysis: row.analysis_json ? JSON.parse(row.analysis_json) : null,
+      };
+    },
+
+    markWeeklyReportSent(weekStart, at = Date.now()) {
+      db.prepare('UPDATE weekly_reports SET sent_at = ? WHERE week_start = ?').run(Number(at), String(weekStart));
+    },
+
     getHireMeTechTarget(jobId) {
       return db.prepare('SELECT * FROM hiremetech_targets WHERE job_id = ?').get(String(jobId)) || null;
     },

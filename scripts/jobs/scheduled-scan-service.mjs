@@ -79,6 +79,17 @@ export const SCHEDULES = [
     args: ['--linkedin-queue', '--wait-for-lock', '10'],
     intervalSeconds: 1800,
   },
+  // The weekly statistics report (scripts/jobs/weekly-stats.mjs): Sunday
+  // 08:15, before the day's scans and off LinkedIn's 08:30 slot. A token-free snapshot, one Codex analysis,
+  // and a WhatsApp summary; launchd runs a slot missed in sleep on wake, and
+  // a second run in the same week does nothing.
+  {
+    key: 'weekly-stats',
+    label: 'com.amirgefen.jobops.weekly-stats',
+    script: ['scripts', 'jobs', 'weekly-stats.mjs'],
+    args: ['--send'],
+    times: [{ weekday: 0, hour: 8, minute: 15 }],
+  },
   // A token-free check every 30 minutes: it processes the locally collected
   // WhatsApp backlog only once enough new jobs are waiting, or once the
   // oldest has waited long enough (see scripts/jobs/whatsapp-trigger.mjs).
@@ -103,7 +114,7 @@ export function renderScheduledScanAgent(schedule, { nodePath = process.execPath
     ? `<key>StartInterval</key><integer>${Number(schedule.intervalSeconds)}</integer>`
     : `<key>StartCalendarInterval</key>
   <array>${schedule.times
-    .map(({ hour, minute }) => `<dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`)
+    .map(({ weekday, hour, minute }) => `<dict>${weekday == null ? '' : `<key>Weekday</key><integer>${weekday}</integer>`}<key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`)
     .join('')}</array>`;
   const argsXml = schedule.args.map((arg) => `<string>${xml(arg)}</string>`).join('');
   // Without a log, a skipped or failed scheduled run leaves no trace at all.
@@ -145,7 +156,8 @@ function launchctl(args, { allowFailure = false } = {}) {
 
 function formatTimes(times, intervalSeconds) {
   if (intervalSeconds) return `every ${Math.round(intervalSeconds / 60)} minutes`;
-  return times.map(({ hour, minute }) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`).join(', ');
+  const day = (weekday) => (weekday == null ? '' : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][weekday]} `);
+  return times.map(({ weekday, hour, minute }) => `${day(weekday)}${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`).join(', ');
 }
 
 export function manageScheduledScans(command = process.argv[2]) {

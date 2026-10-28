@@ -54,6 +54,13 @@ and no third-party application server are in the loop.
 - 📈 **Measures whether each source is worth it** — per source: what it found, what scoring it
   cost, what fit, which ATS companies actually produce matches, and which fits only one source
   found (and how many days earlier).
+- 🗓️ **A weekly review on WhatsApp** — every Sunday at 08:15 a token-free snapshot of the week
+  (sources, each WhatsApp group and LinkedIn search, ATS companies, speed, score calibration,
+  outcomes and follow-ups, data quality, health, learning focus) gets one Codex analysis and
+  arrives as a short WhatsApp summary with the top recommendations. `/statistics` walks through the
+  full report and applies a recommendation only after you approve it. Deleting old history is
+  only ever proposed (`npm run jobs:stats:prune` is a dry run; `-- --apply --only <category>` after
+  approval), and job identities, decisions and dedup data are never deleted.
 - 🙅 **Never applies for you** — it opens the real application URL in Chrome; you always send it.
 
 ![Scored, explainable matches ready to review](docs/assets/decisions-page.png)
