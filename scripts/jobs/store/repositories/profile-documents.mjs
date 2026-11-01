@@ -78,6 +78,11 @@ export function createProfileDocumentsRepository({ db, store }) {
         .get(userId, canonicalHash))?.stored_hash ?? null;
     },
 
+    // The hash stored verdicts carried when this user's files were imported.
+    async getImportedScoringHash(userId) {
+      return (await db.prepare('SELECT stored_hash FROM scoring_hash_aliases WHERE user_id = ? LIMIT 1').get(userId))?.stored_hash ?? null;
+    },
+
     async saveScoringHashAlias(userId, canonicalHash, storedHash) {
       await db.prepare(`
         INSERT INTO scoring_hash_aliases (user_id, canonical_hash, stored_hash) VALUES (?, ?, ?)

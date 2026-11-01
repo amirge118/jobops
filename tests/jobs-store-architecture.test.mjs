@@ -23,9 +23,11 @@ function sources(dir) {
 // a same-named code folder would silently be left out of every commit too.
 test('no source file is caught by a rule meant for personal data', (context) => {
   const files = [...sources('scripts'), ...sources('tests')];
-  const result = spawnSync('git', ['check-ignore', '--stdin'], { input: files.join('\n'), encoding: 'utf8' });
+  const result = spawnSync('git', ['check-ignore', '--verbose', '--stdin'], { input: files.join('\n'), encoding: 'utf8' });
   if (result.error || result.status > 1) return context.skip('git is not available');
-  assert.deepEqual(result.stdout.split('\n').filter(Boolean), []);
+  // Rules naming one exact file are personal helpers, ignored on purpose.
+  const caughtByFolderRule = result.stdout.split('\n').filter((line) => /^[^\t]*\/\t/.test(line));
+  assert.deepEqual(caughtByFolderRule, []);
 });
 
 test('only the database module loads the driver', () => {

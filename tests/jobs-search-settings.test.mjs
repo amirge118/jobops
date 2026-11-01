@@ -79,6 +79,7 @@ test('changing what the prompt is built from makes scores outdated; thresholds a
 
 test('a re-score waits for a request, counts the cost, and only touches what is outdated', async (context) => {
   const { store, config } = setup(context);
+  await saveUserSettings(store, USER, { 'search.maxLevel': 'Lead' }, config);
   const { profileHash: current } = await loadCandidateContext({ store, config, userId: USER });
   const now = Date.now();
   const outdated = await scoredJob(store, 1, { hash: 'old' });
@@ -112,8 +113,20 @@ test('a changed profile alone never asks for evaluation again', async (context) 
   assert.equal(await store.needsEvaluation(jobKey, { ...same, criteriaVersion: 'v2' }), true, 'a new system prompt does');
 });
 
+test('old rejections are not offered until something actually changed', async (context) => {
+  const { store, config } = setup(context);
+  const { profileHash: current } = await loadCandidateContext({ store, config, userId: USER });
+  await scoredJob(store, 1, { suitable: false, hash: 'from-an-older-edit' });
+  assert.equal(current, (await loadCandidateContext({ store, config, userId: USER })).profileHash);
+  assert.equal((await estimateRescore({ store, config, userId: USER })).rejected, 0);
+  assert.equal(await requestRescore({ store, config, userId: USER, includeRejected: true }), 0);
+  await saveUserSettings(store, USER, { 'search.maxLevel': 'Lead' }, config);
+  assert.equal((await estimateRescore({ store, config, userId: USER })).rejected, 1);
+});
+
 test('rejected re-scores are capped', async (context) => {
   const { store, config } = setup(context);
+  await saveUserSettings(store, USER, { 'search.maxLevel': 'Lead' }, config);
   const raw = new Database(config.jobsDbPath);
   context.after(() => raw.close());
   const insert = raw.prepare("INSERT INTO jobs (job_key, canonical_url, apply_url, company_role_key, sources_json, first_seen_at, last_seen_at, evaluated_at, suitable, profile_hash) VALUES (?, ?, ?, '::', '[]', 1, 1, ?, 0, 'old')");
