@@ -877,7 +877,7 @@ config/jobs.example.yml  public configuration template
 portals.yml              ATS/official career sources and fast pre-filters
 scripts/jobs.mjs         unified CLI
 scripts/jobs/            shared collection, scoring, and reporting modules
-scripts/jobs/profile/    CV, profile and preferences as versioned documents, and the CV import
+scripts/jobs/candidate/    CV, profile and preferences as versioned documents, and the CV import
 scripts/jobs/llm/        the one seam for which AI runs a structured request
 scripts/jobs/store/      storage layer: repositories per domain, migrations, the only driver module
 scripts/dashboard/routes/  dashboard API routes by domain, behind dashboard/request-guard.mjs

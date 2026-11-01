@@ -8,11 +8,11 @@ import Database from 'better-sqlite3';
 
 import { readCandidateContext } from '../scripts/jobs/config.mjs';
 import { LOCAL_USER_ID as USER } from '../scripts/jobs/current-user.mjs';
-import { loadCandidateContext } from '../scripts/jobs/profile/candidate-context.mjs';
-import * as serverSections from '../scripts/jobs/profile/document-sections.mjs';
-import { driftedKinds } from '../scripts/jobs/profile/file-sync.mjs';
-import { applyIdentity, parseIdentity } from '../scripts/jobs/profile/identity-section.mjs';
-import { createProfileService } from '../scripts/jobs/profile/profile-service.mjs';
+import { loadCandidateContext } from '../scripts/jobs/candidate/candidate-context.mjs';
+import * as serverSections from '../scripts/jobs/candidate/document-sections.mjs';
+import { driftedKinds } from '../scripts/jobs/candidate/file-sync.mjs';
+import { applyIdentity, parseIdentity } from '../scripts/jobs/candidate/identity-section.mjs';
+import { createProfileService } from '../scripts/jobs/candidate/profile-service.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import * as browserSections from '../web/shared/document-sections.js';
 

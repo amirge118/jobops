@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
@@ -17,6 +18,15 @@ function sources(dir) {
     return entry.name.endsWith('.mjs') ? [full] : [];
   });
 }
+
+// .gitignore keeps personal folders such as profile/ out of the repository, and
+// a same-named code folder would silently be left out of every commit too.
+test('no source file is caught by a rule meant for personal data', (context) => {
+  const files = [...sources('scripts'), ...sources('tests')];
+  const result = spawnSync('git', ['check-ignore', '--stdin'], { input: files.join('\n'), encoding: 'utf8' });
+  if (result.error || result.status > 1) return context.skip('git is not available');
+  assert.deepEqual(result.stdout.split('\n').filter(Boolean), []);
+});
 
 test('only the database module loads the driver', () => {
   const offenders = sources('scripts')

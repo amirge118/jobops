@@ -1,6 +1,6 @@
 import { resumeHashOf } from '../../jobs/config.mjs';
 import { resolveCurrentUser } from '../../jobs/current-user.mjs';
-import { importMissingFromFiles } from '../../jobs/profile/file-sync.mjs';
+import { importMissingFromFiles } from '../../jobs/candidate/file-sync.mjs';
 import { coverageKeyOf } from '../../jobs/gap-coverage.mjs';
 import { aggregateGaps } from '../../jobs/gap-insights.mjs';
 import { createJobStore } from '../../jobs/store.mjs';

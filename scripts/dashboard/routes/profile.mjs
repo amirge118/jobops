@@ -1,7 +1,7 @@
 import { resolveCurrentUser } from '../../jobs/current-user.mjs';
-import { createCvImporter } from '../../jobs/profile/cv-import.mjs';
-import { DOCUMENT_KINDS } from '../../jobs/profile/file-sync.mjs';
-import { createProfileService } from '../../jobs/profile/profile-service.mjs';
+import { createCvImporter } from '../../jobs/candidate/cv-import.mjs';
+import { DOCUMENT_KINDS } from '../../jobs/candidate/file-sync.mjs';
+import { createProfileService } from '../../jobs/candidate/profile-service.mjs';
 import { createJobStore } from '../../jobs/store.mjs';
 import { readJson, requireObjectBody, sendJson } from '../http.mjs';
 

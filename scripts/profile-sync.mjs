@@ -8,8 +8,8 @@
 
 import { resolveCurrentUser } from './jobs/current-user.mjs';
 import { loadJobsConfig } from './jobs/config.mjs';
-import { DOCUMENT_KINDS, driftedKinds, importMissingFromFiles } from './jobs/profile/file-sync.mjs';
-import { createProfileService } from './jobs/profile/profile-service.mjs';
+import { DOCUMENT_KINDS, driftedKinds, importMissingFromFiles } from './jobs/candidate/file-sync.mjs';
+import { createProfileService } from './jobs/candidate/profile-service.mjs';
 import { createJobStore } from './jobs/store.mjs';
 
 const args = process.argv.slice(2);

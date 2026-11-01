@@ -21,7 +21,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 | `scripts/jobs.mjs` | Unified ATS + WhatsApp + LinkedIn scan, scoring, reporting, and optional Chrome opening | system |
 | `scripts/jobs/` | Shared job collection, storage, evaluation, and output modules | system |
 | `scripts/jobs/store/` | Storage layer: repositories per domain, migrations, and the only driver module (ADR 0007) | system |
-| `scripts/jobs/profile/` | CV, profile and preferences as versioned documents; `profile/*.md` are a copy of them (ADR 0009) | system |
+| `scripts/jobs/candidate/` | CV, profile and preferences as versioned documents; `profile/*.md` are a copy of them (ADR 0009) | system |
 | `scripts/jobs/llm/` | The one seam for which AI runs a structured request; Codex only for now | system |
 | `scripts/jobs/user-settings.mjs` | Per-user settings allowlist; a stored value overrides `config/jobs.yml`, which overrides the code default | system |
 | `scripts/dashboard/routes/` | Dashboard API routes by domain, behind `request-guard.mjs` (ADR 0008) | system |

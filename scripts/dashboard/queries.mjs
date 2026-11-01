@@ -1,6 +1,6 @@
 import { createJobStore } from '../jobs/store.mjs';
 import { resolveCurrentUser } from '../jobs/current-user.mjs';
-import { loadCandidateContext } from '../jobs/profile/candidate-context.mjs';
+import { loadCandidateContext } from '../jobs/candidate/candidate-context.mjs';
 import { aggregateGroupStats, aggregateSourcePerformance, STATS_WINDOWS } from '../jobs/insights.mjs';
 import { RESUME_GAP_VERSION } from '../jobs/resume-gap.mjs';
 import { buildDecisionStats } from '../jobs/decision-stats.mjs';

@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { loadJobsConfig } from './jobs/config.mjs';
 import { resolveCurrentUser } from './jobs/current-user.mjs';
-import { loadCandidateContext } from './jobs/profile/candidate-context.mjs';
+import { loadCandidateContext } from './jobs/candidate/candidate-context.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { deduplicateJobs, linkedinJobId, resumeGapInputHash } from './jobs/core.mjs';
 import { createJobPageFetcher } from './jobs/fetch-page.mjs';

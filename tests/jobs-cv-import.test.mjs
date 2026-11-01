@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createLlm } from '../scripts/jobs/llm/index.mjs';
-import { createCvImporter, renderDraft } from '../scripts/jobs/profile/cv-import.mjs';
+import { createCvImporter, renderDraft } from '../scripts/jobs/candidate/cv-import.mjs';
 
 const CV_TEXT = 'Noa Example, backend engineer at Acme since 2020. Python, Kafka, AWS, PostgreSQL.';
 const ANSWER = {

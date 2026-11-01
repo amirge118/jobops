@@ -1,5 +1,5 @@
 import { LOCAL_USER_ID } from './current-user.mjs';
-import { canonicalScoringHash } from './profile/scoring-hash.mjs';
+import { canonicalScoringHash } from './candidate/scoring-hash.mjs';
 
 const RESUME = `# Noa Example
 

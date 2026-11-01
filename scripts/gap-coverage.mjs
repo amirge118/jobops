@@ -6,7 +6,7 @@
 
 import { loadJobsConfig } from './jobs/config.mjs';
 import { resolveCurrentUser } from './jobs/current-user.mjs';
-import { loadCandidateContext } from './jobs/profile/candidate-context.mjs';
+import { loadCandidateContext } from './jobs/candidate/candidate-context.mjs';
 import { createGapCoverageChecker, refreshGapCoverage } from './jobs/gap-coverage.mjs';
 import { setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { createJobStore } from './jobs/store.mjs';
