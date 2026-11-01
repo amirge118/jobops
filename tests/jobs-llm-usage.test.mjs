@@ -308,3 +308,19 @@ test('an exhausted window in Codex\'s own record skips the run without any call'
   fresh.close();
   resetInMemoryQuota();
 });
+
+test('a failing usage recorder never breaks scoring, whether it throws or rejects', async (context) => {
+  const { reportCodexCall, setCodexUsageRecorder } = await import('../scripts/jobs/llm-usage.mjs');
+  context.after(() => setCodexUsageRecorder(null));
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  context.after(() => process.off('unhandledRejection', onUnhandled));
+
+  setCodexUsageRecorder(() => { throw new Error('sync failure'); });
+  assert.doesNotThrow(() => reportCodexCall({ purpose: 'score' }));
+  setCodexUsageRecorder(async () => { throw new Error('database unavailable'); });
+  assert.doesNotThrow(() => reportCodexCall({ purpose: 'score' }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(unhandled, []);
+});

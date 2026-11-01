@@ -18,7 +18,8 @@ export function setCodexUsageRecorder(fn) {
 }
 
 export function reportCodexCall(entry) {
-  try { recorder?.(entry); } catch { /* accounting must never break scoring */ }
+  // Accounting must never break scoring, whether the recorder throws or rejects.
+  try { Promise.resolve(recorder?.(entry)).catch(() => {}); } catch { /* Same. */ }
 }
 
 export function isUsageLimitMessage(message) {
