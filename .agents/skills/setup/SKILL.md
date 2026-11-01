@@ -36,3 +36,4 @@ verified profile in `profile/`. Idempotent — re-running updates rather than du
 ## Rules
 - The profile is the single source of truth — generated CVs may only contain claims backed by it.
 - Profile files are user data: never overwrite silently on re-runs; merge and show diffs of substance.
+- The documents on the dashboard's `/profile` page are the source of truth, and `profile/*.md` are their copy. After editing a file, run `npm run profile:adopt -- <profile|preferences|resume>`, or scans keep using the saved document.

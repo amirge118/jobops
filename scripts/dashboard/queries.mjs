@@ -1,5 +1,6 @@
 import { createJobStore } from '../jobs/store.mjs';
-import { readCandidateContext } from '../jobs/config.mjs';
+import { resolveCurrentUser } from '../jobs/current-user.mjs';
+import { loadCandidateContext } from '../jobs/profile/candidate-context.mjs';
 import { aggregateGroupStats, aggregateSourcePerformance, STATS_WINDOWS } from '../jobs/insights.mjs';
 import { RESUME_GAP_VERSION } from '../jobs/resume-gap.mjs';
 import { buildDecisionStats } from '../jobs/decision-stats.mjs';
@@ -39,9 +40,9 @@ export function createDashboardQueries(config, action) {
     finally { store.close(); }
   };
 
-  const resumeGapContext = () => {
+  const resumeGapContext = async (store) => {
     try {
-      const candidate = readCandidateContext(config);
+      const candidate = await loadCandidateContext({ store, config, userId: resolveCurrentUser().id });
       return {
         profileHash: candidate.profileHash, resumeHash: candidate.resumeHash,
         resumeAvailable: candidate.resumeAvailable, analysisVersion: RESUME_GAP_VERSION,
@@ -244,7 +245,7 @@ export function createDashboardQueries(config, action) {
     async jobs() {
       return await withStore(async (store) => ({
         stats: await store.getDashboardStats(),
-        jobs: await store.listDashboardJobs({ resumeGapContext: resumeGapContext() }),
+        jobs: await store.listDashboardJobs({ resumeGapContext: await resumeGapContext(store) }),
       }));
     },
 

@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { loadJobsConfig, readCandidateContext } from './jobs/config.mjs';
+import { loadJobsConfig } from './jobs/config.mjs';
+import { resolveCurrentUser } from './jobs/current-user.mjs';
+import { loadCandidateContext } from './jobs/profile/candidate-context.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { deduplicateJobs, linkedinJobId, resumeGapInputHash } from './jobs/core.mjs';
 import { createJobPageFetcher } from './jobs/fetch-page.mjs';
@@ -1311,7 +1313,10 @@ async function runJobsLocked(options, config) {
       ...retryCandidates.filter((candidate) => !currentJobKeys.has(candidate.jobKey)),
     ];
     const candidates = uniqueCandidates([...candidateSightings, ...retryCandidates]);
-    const candidateContext = readCandidateContext(config);
+    const candidateContext = await loadCandidateContext({ store, config, userId: resolveCurrentUser().id });
+    if (candidateContext.fileDrift.length) {
+      console.warn(`profile/ נערך ידנית ולא נקלט (${candidateContext.fileDrift.join(', ')}); הסריקה משתמשת במסמכים השמורים. לקליטה: npm run profile:adopt -- <kind>`);
+    }
     await lifecycle?.stage('scorer-setup');
     const scorer = createJobScorer(config, { candidateContext });
     let failureSamples = 0;

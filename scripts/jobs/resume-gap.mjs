@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveCodexBinary, runCodexExec } from './score-job.mjs';
+import { resolveCodexBinary, runCodexExec } from './llm/codex-provider.mjs';
 import { sourceMixOf } from './store.mjs';
 
 function firstSource(sourcesJson) {

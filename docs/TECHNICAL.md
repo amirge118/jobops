@@ -876,6 +876,8 @@ config/jobs.example.yml  public configuration template
 portals.yml              ATS/official career sources and fast pre-filters
 scripts/jobs.mjs         unified CLI
 scripts/jobs/            shared collection, scoring, and reporting modules
+scripts/jobs/profile/    CV, profile and preferences as versioned documents, and the CV import
+scripts/jobs/llm/        the one seam for which AI runs a structured request
 scripts/jobs/store/      storage layer: repositories per domain, migrations, the only driver module
 scripts/dashboard/routes/  dashboard API routes by domain, behind dashboard/request-guard.mjs
 scripts/jobs/company-*   company catalogue bootstrap and persistent registry rules
@@ -939,6 +941,8 @@ npm run scan:dry
   and listens only on `127.0.0.1`.
 - **Other websites can't drive the dashboard:** every request passes a guard that refuses foreign
   `Host` and `Origin` values and non-JSON bodies (ADR 0008).
+- **Documents own the candidate text:** the CV, profile and preferences live in the database and
+  are edited on `/profile`; `profile/*.md` are a copy for skills, and a hand edit waits for adoption (ADR 0009).
 - **One storage layer:** all SQL sits under `scripts/jobs/store/`, behind an async driver module and
   numbered migrations, so the database can be replaced later (ADR 0007).
 - **No scoring API key:** matching runs through the locally signed-in Codex CLI and explicitly

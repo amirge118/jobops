@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fetchGroupMessagesSince, normalizeWhatsAppAnchor } from '../scripts/jobs/sources/whatsapp-history.mjs';
 import { scanWhatsApp, queueIncomingMessages } from '../scripts/jobs/sources/whatsapp.mjs';
 import { scanAts } from '../scripts/jobs/sources/ats.mjs';
+import { up as applyBaseline } from '../scripts/jobs/store/migrations/001-baseline.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import Database from 'better-sqlite3';
 import { evaluateCandidates } from '../scripts/jobs.mjs';
@@ -103,7 +104,8 @@ test('anchor migration is additive, survives reopening and uses its primary-key 
   const job = await store.recordSighting({ url: 'https://example.com/jobs/existing' });
   store.close();
   const legacy = new Database(dbPath);
-  legacy.exec('DROP TABLE whatsapp_anchors; DROP TABLE schema_migrations; DROP TABLE user_settings; DROP TABLE users'); // Synthetic legacy database only.
+  legacy.exec('DROP TABLE whatsapp_anchors'); // Synthetic legacy database only.
+  applyBaseline(legacy); // What opening such a database runs, once.
   legacy.close();
   store = createJobStore(dbPath);
   assert.ok(await store.getJob(job.jobKey));

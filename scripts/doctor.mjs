@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { load as loadYaml } from 'js-yaml';
 
 import { ROOT_DIR } from './jobs/config.mjs';
-import { resolveCodexBinary } from './jobs/score-job.mjs';
+import { resolveCodexBinary } from './jobs/llm/codex-provider.mjs';
 
 function defaultCommandStatus(command) {
   if (command === 'chrome') {

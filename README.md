@@ -177,6 +177,13 @@ posting (from each card's "N hours ago"), which source saw the same job first an
 how many wanted jobs come from companies you watch (and which ones you don't yet), and — from
 `data/applications.md` — what happened after "applied".
 
+## Your CV and search live in the app
+
+The `/profile` page edits your CV, contact details, what you are looking for and any extra facts,
+with a version history you can restore. Paste an existing CV and AI organizes it into sections for
+you to review; nothing is saved or invented without your approval. Changing a phone number never
+re-scores anything.
+
 ## Shows what your CV is missing for a perfect fit
 
 Every suitable job is checked against your exact current CV, and the result is kept after you

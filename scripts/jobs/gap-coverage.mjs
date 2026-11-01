@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { aggregateGaps } from './gap-insights.mjs';
-import { resolveCodexBinary, runCodexExec } from './score-job.mjs';
+import { resolveCodexBinary, runCodexExec } from './llm/codex-provider.mjs';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.join(MODULE_DIR, 'gap-coverage.schema.json');

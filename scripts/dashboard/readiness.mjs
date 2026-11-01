@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { chromium } from 'playwright';
-import { resolveCodexBinary } from '../jobs/score-job.mjs';
+import { resolveCodexBinary } from '../jobs/llm/codex-provider.mjs';
 import { createJobStore } from '../jobs/store.mjs';
 import { rateLimitBlockedUntil, readCodexRateLimits } from '../jobs/llm-usage.mjs';
 

@@ -37,6 +37,20 @@ export function resumeHashOf(currentResume) {
   return createHash('sha256').update(currentResume).digest('hex');
 }
 
+export function resumeIsAvailable(currentResume) {
+  return currentResume.trim().length >= 20 &&
+    !/\b(?:TODO|REPLACE THIS|PASTE (?:YOUR )?RESUME)\b/i.test(currentResume);
+}
+
+export function rawProfileHash(profile, preferences) {
+  return createHash('sha256')
+    .update(profile)
+    .update('\n--- preferences ---\n')
+    .update(preferences)
+    .digest('hex');
+}
+
+// Reads the files directly. Real work goes through profile/candidate-context.mjs.
 export function readCandidateContext(config) {
   const profilePath = requiredFile(
     path.join(config.rootDir, 'profile', '01-candidate-profile.md'),
@@ -50,13 +64,8 @@ export function readCandidateContext(config) {
   const profile = fs.readFileSync(profilePath, 'utf8');
   const preferences = fs.readFileSync(preferencesPath, 'utf8');
   const currentResume = fs.existsSync(resumePath) ? fs.readFileSync(resumePath, 'utf8') : '';
-  const resumeAvailable = currentResume.trim().length >= 20 &&
-    !/\b(?:TODO|REPLACE THIS|PASTE (?:YOUR )?RESUME)\b/i.test(currentResume);
-  const profileHash = createHash('sha256')
-    .update(profile)
-    .update('\n--- preferences ---\n')
-    .update(preferences)
-    .digest('hex');
+  const resumeAvailable = resumeIsAvailable(currentResume);
+  const profileHash = rawProfileHash(profile, preferences);
   const resumeHash = resumeHashOf(currentResume);
   return { profile, preferences, profileHash, currentResume, resumeHash, resumeAvailable };
 }

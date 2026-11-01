@@ -2,9 +2,11 @@
 
 // On-demand run of the check a scan does anyway: which personal-area gap terms
 // the current resume already covers in other words. Useful right after
-// editing profile/03-current-resume.md. Asks Codex only about unjudged terms.
+// editing the CV. Asks Codex only about unjudged terms.
 
-import { loadJobsConfig, readCandidateContext } from './jobs/config.mjs';
+import { loadJobsConfig } from './jobs/config.mjs';
+import { resolveCurrentUser } from './jobs/current-user.mjs';
+import { loadCandidateContext } from './jobs/profile/candidate-context.mjs';
 import { createGapCoverageChecker, refreshGapCoverage } from './jobs/gap-coverage.mjs';
 import { setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 import { createJobStore } from './jobs/store.mjs';
@@ -14,7 +16,7 @@ const store = createJobStore(config.jobsDbPath);
 setCodexUsageRecorder(async (entry) => await store.recordCodexCall(entry));
 try {
   const result = await refreshGapCoverage({
-    store, checker: createGapCoverageChecker({ config }), candidateContext: readCandidateContext(config),
+    store, checker: createGapCoverageChecker({ config }), candidateContext: await loadCandidateContext({ store, config, userId: resolveCurrentUser().id }),
   });
   if (result.status === 'skipped') console.log('דולג: חסר profile/03-current-resume.md.');
   else if (!result.checked) console.log('אין נושאים חדשים לבדיקה מול קורות החיים הנוכחיים.');

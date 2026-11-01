@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { CompanyRegistryError, normalizeCompanyName } from './company-registry.mjs';
 import { createCompanySourceResolver } from './company-source-resolver.mjs';
-import { resolveCodexBinary, runCodexExec } from './score-job.mjs';
+import { resolveCodexBinary, runCodexExec } from './llm/codex-provider.mjs';
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.join(MODULE_DIR, 'company-research.schema.json');

@@ -1,5 +1,6 @@
 import { up as baseline } from './001-baseline.mjs';
 import { up as users } from './002-users.mjs';
+import { up as profileDocuments } from './003-profile-documents.mjs';
 
 // Append-only: a shipped migration never changes, and each runs once per
 // database. A schema or data change is a new entry here, including a new
@@ -7,6 +8,7 @@ import { up as users } from './002-users.mjs';
 export const MIGRATIONS = Object.freeze([
   { version: 1, name: 'baseline', up: baseline },
   { version: 2, name: 'users', up: users },
+  { version: 3, name: 'profile_documents', up: profileDocuments },
 ]);
 
 export function runMigrations(db, migrations = MIGRATIONS) {

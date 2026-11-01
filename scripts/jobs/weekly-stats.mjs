@@ -331,7 +331,7 @@ async function defaultCollectors(config, reportStore) {
 }
 
 async function codexAnalyzer(config, store) {
-  const { runCodexExec, resolveCodexBinary } = await import('./score-job.mjs');
+  const { runCodexExec, resolveCodexBinary } = await import('./llm/codex-provider.mjs');
   const { checkCodexQuota, readCodexRateLimits, setCodexUsageRecorder } = await import('./llm-usage.mjs');
   return async (snapshot) => {
     const quota = await checkCodexQuota({ store, readRateLimits: () => readCodexRateLimits({ fsModule: fs }) });

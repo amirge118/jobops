@@ -6,6 +6,7 @@ const PAGE_ROUTES = new Map([
   ['/decisions', 'decisions.html'],
   ['/companies', 'companies.html'],
   ['/personal-area', 'personal-area.html'],
+  ['/profile', 'profile.html'],
   ['/decision-stats', 'decision-stats.html'],
 ]);
 
