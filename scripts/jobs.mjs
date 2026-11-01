@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 
 import { loadJobsConfig } from './jobs/config.mjs';
 import { resolveCurrentUser } from './jobs/current-user.mjs';
+import { resolveLocationFilter, resolveTitleFilter } from './jobs/candidate/search-filters.mjs';
+import { applyUserSettings } from './jobs/user-settings.mjs';
 import { loadCandidateContext } from './jobs/candidate/candidate-context.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { deduplicateJobs, linkedinJobId, resumeGapInputHash } from './jobs/core.mjs';
@@ -28,7 +30,7 @@ import { createLinkedInGates, DEFAULT_LINKEDIN_LIMITS, scanLinkedIn } from './jo
 import { createRunLifecycle, describeFailure, hasFailureReason, safeTargetUrl } from './jobs/diagnostics.mjs';
 import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
-import { buildNegativeTitleFilter, buildTitleFilter, loadTitleFilterNegative, loadTitleFilterPositive } from './scan.mjs';
+import { buildNegativeTitleFilter, buildTitleFilter } from './scan.mjs';
 
 function numericFlag(argv, name, { max = Infinity } = {}) {
   const index = argv.indexOf(name);
@@ -652,18 +654,15 @@ export async function evaluateCandidates({
   // negative keyword list already exists to catch. Reusing that one,
   // person-edited list here (negative-only — see buildNegativeTitleFilter)
   // closes that gap without a second list to keep in sync.
-  const passesNegativeTitleFilter = config.rootDir
-    ? buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')))
-    : () => true;
+  const titleFilter = config.rootDir ? resolveTitleFilter(config) : { positive: [], negative: [], always_allow: [] };
+  const passesNegativeTitleFilter = buildNegativeTitleFilter(titleFilter.negative);
   // The positive half: a WhatsApp page whose title area names none of the
   // target roles never reaches Codex (a scored job costs ~2.6k+ tokens).
   // Checked against a wider 600-char prefix than the negative check, and
   // validated on 2026-09-29: none of the suitable WhatsApp jobs on record
   // would have been dropped even at 300 chars. Disable with
   // sources.whatsapp.titlePrefilter: false.
-  const positiveTitle = config.rootDir && config.sources?.whatsapp?.titlePrefilter !== false
-    ? loadTitleFilterPositive(path.join(config.rootDir, 'portals.yml'))
-    : { positive: [] };
+  const positiveTitle = config.sources?.whatsapp?.titlePrefilter !== false ? titleFilter : { positive: [] };
   const passesPositiveTitleFilter = positiveTitle.positive.length
     ? buildTitleFilter({ ...positiveTitle, negative: [] })
     : () => true;
@@ -696,8 +695,10 @@ export async function evaluateCandidates({
   let fetched = 0;
   for (const candidate of candidates) {
     const existing = await store.getJob(candidate.jobKey);
+    // A changed profile leaves verdicts alone until the person asks to re-score,
+    // because that spends their AI quota. A new system prompt version still counts.
     const evaluationIsCurrent = existing?.evaluated_at && !existing.last_error_code &&
-      existing.profile_hash === scorer.profileHash &&
+      !existing.rescore_requested_at &&
       existing.criteria_version === config.decision.criteriaVersion;
     if (existing?.duplicate_of) {
       outcomes.set(candidate.jobKey, { status: 'duplicate' });
@@ -1027,7 +1028,7 @@ function createScanHireMeTechResolver(config) {
 
 export async function runJobs(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const config = loadJobsConfig();
+  let config = loadJobsConfig();
   process.chdir(config.rootDir);
   // Scheduled scans (launchd) and a manually triggered dashboard scan are
   // separate OS processes with no shared in-memory state, so the dashboard's
@@ -1101,6 +1102,7 @@ function printUsageSummary(usage) {
 
 async function runJobsLocked(options, config) {
   const store = createJobStore(options.dryRun ? ':memory:' : config.jobsDbPath);
+  config = await applyUserSettings(config, store, resolveCurrentUser().id);
   const runStartedAt = Date.now();
   let usageRunId = null;
   setCodexUsageRecorder(async (entry) => await store.recordCodexCall({ ...entry, runId: usageRunId }));
@@ -1213,6 +1215,7 @@ async function runJobsLocked(options, config) {
       await lifecycle?.stage('collection', 'ats');
       sourceStartedAt = Date.now();
       await saveSource(await scanAts({
+        filters: { title: resolveTitleFilter(config), location: resolveLocationFilter(config) },
         store,
         lookbackHours: Math.ceil((window.to - window.from) / (60 * 60 * 1000)),
         companyWindow: {

@@ -92,7 +92,7 @@ export async function createDemoEnvironment({ rootDir, now = Date.now() }) {
     browser: { application: 'Google Chrome' },
   };
   const store = createJobStore(config.jobsDbPath);
-  await seedDemoProfile(store, 'demo-profile');
+  await seedDemoProfile(store, config, 'demo-profile');
   await store.syncLinkedInSearches(config.sources.linkedin.searches, now);
   const [backendSearch, analystSearch] = await store.listLinkedInSearches();
   const backendSummary = {

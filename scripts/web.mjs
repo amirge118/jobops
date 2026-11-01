@@ -23,6 +23,7 @@ import { createJobsRoutes } from './dashboard/routes/jobs.mjs';
 import { createOverviewRoutes } from './dashboard/routes/overview.mjs';
 import { createPersonalAreaRoutes } from './dashboard/routes/personal-area.mjs';
 import { createProfileRoutes } from './dashboard/routes/profile.mjs';
+import { createSearchSettingsRoutes } from './dashboard/routes/search-settings.mjs';
 import { createSourcesRoutes } from './dashboard/routes/sources.mjs';
 import { CONFIG_RESTART_EXIT_CODE, watchConfigForRestart } from './dashboard/config-watch.mjs';
 import { DASHBOARD_LABEL } from './dashboard/service.mjs';
@@ -88,6 +89,7 @@ export async function createDashboardServer({
     createOverviewRoutes({ config, queries, readinessService, snapshot }),
     createPersonalAreaRoutes({ config }),
     createProfileRoutes({ config }),
+    createSearchSettingsRoutes({ config, readinessService, startAction }),
     createSourcesRoutes({ config, queries }),
     createCompaniesRoutes({ config, queries, companyResearch, probeSource, resolveWithBrowser, browserProbe }),
     createActionsRoutes({ config, readinessService, startAction }),

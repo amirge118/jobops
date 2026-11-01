@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { rawProfileHash } from '../config.mjs';
-import { canonicalScoringHash } from './scoring-hash.mjs';
+import { applyUserSettings } from '../user-settings.mjs';
+import { canonicalScoringHash, scoringCriteria } from './scoring-hash.mjs';
 
 // The documents live in the database. profile/*.md stay as a copy for the
 // skills that read them, and as the way in for what was there before. The demo
@@ -39,8 +40,9 @@ export async function importMissingFromFiles({ store, config, userId }) {
   // Scores already stored carry the hash of the raw files. Linking it to the
   // canonical hash keeps them current, without re-scoring anything.
   const byKind = Object.fromEntries(missing.map(({ kind, content }) => [kind, content]));
+  const criteria = scoringCriteria(await applyUserSettings(config, store, userId));
   const alias = byKind.profile !== undefined && byKind.preferences !== undefined
-    ? { canonicalHash: canonicalScoringHash(byKind.profile, byKind.preferences), storedHash: rawProfileHash(byKind.profile, byKind.preferences) }
+    ? { canonicalHash: canonicalScoringHash(byKind.profile, byKind.preferences, criteria), storedHash: rawProfileHash(byKind.profile, byKind.preferences) }
     : null;
   const imported = await store.importMissingDocuments(userId, missing, { alias });
   for (const { kind, content } of missing) {

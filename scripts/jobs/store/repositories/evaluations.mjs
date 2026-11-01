@@ -61,7 +61,7 @@ export function createEvaluationsRepository({ db, store, identity }) {
             ORDER BY s.first_seen_at DESC LIMIT 1) AS sightingKind
         FROM jobs
         WHERE archived_at IS NULL AND duplicate_of IS NULL
-          AND (evaluated_at IS NULL OR last_error_code IS NOT NULL)
+          AND (evaluated_at IS NULL OR last_error_code IS NOT NULL OR rescore_requested_at IS NOT NULL)
           ${excludeClause}
         ORDER BY first_seen_at ASC
         LIMIT ?
@@ -74,12 +74,11 @@ export function createEvaluationsRepository({ db, store, identity }) {
       }));
     },
 
-    async needsEvaluation(jobKey, { contentHash, profileHash, criteriaVersion, activeStatus }) {
+    async needsEvaluation(jobKey, { contentHash, criteriaVersion, activeStatus }) {
       const job = await store.getJob(jobKey);
       if (job?.archived_at) return false;
       if (!job?.evaluated_at) return true;
-      return job.content_hash !== contentHash ||
-        job.profile_hash !== profileHash ||
+      return Boolean(job.rescore_requested_at) || job.content_hash !== contentHash ||
         job.criteria_version !== criteriaVersion ||
         (activeStatus && job.active_status !== activeStatus);
     },
@@ -108,6 +107,7 @@ export function createEvaluationsRepository({ db, store, identity }) {
       const suitable = Boolean(evaluation.suitable);
       await db.prepare(`
         UPDATE jobs SET
+          rescore_requested_at = NULL,
           company = @company,
           title = @title,
           company_role_key = @companyRoleKey,

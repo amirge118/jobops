@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["positive", "negative", "alwaysAllow"],
+  "properties": {
+    "positive": { "type": "array", "items": { "type": "string" } },
+    "negative": { "type": "array", "items": { "type": "string" } },
+    "alwaysAllow": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -23,7 +23,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 | `scripts/jobs/store/` | Storage layer: repositories per domain, migrations, and the only driver module (ADR 0007) | system |
 | `scripts/jobs/candidate/` | CV, profile and preferences as versioned documents; `profile/*.md` are a copy of them (ADR 0009) | system |
 | `scripts/jobs/llm/` | The one seam for which AI runs a structured request; Codex only for now | system |
-| `scripts/jobs/user-settings.mjs` | Per-user settings allowlist; a stored value overrides `config/jobs.yml`, which overrides the code default | system |
+| `scripts/jobs/user-settings.mjs` | Per-user settings allowlist; a stored value overrides `config/jobs.yml`, which overrides the code default (ADR 0010) | system |
 | `scripts/dashboard/routes/` | Dashboard API routes by domain, behind `request-guard.mjs` (ADR 0008) | system |
 | `scripts/web.mjs` | Local-only dashboard server and bounded action runner | system |
 | `web/` | Dependency-free Hebrew dashboard UI | system |

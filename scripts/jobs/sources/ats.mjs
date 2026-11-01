@@ -21,7 +21,7 @@ export function companyLookbackHours({ lastSuccessAt, sharedFrom, now, overlapMs
 // window still covers the hours in between.
 export const BROWSER_SCAN_INTERVAL_HOURS = 6;
 
-export async function scanAts({ store, lookbackHours, companyWindow = null, runScan = runPortalScan }) {
+export async function scanAts({ store, lookbackHours, companyWindow = null, runScan = runPortalScan, filters = null }) {
   // The unified SQLite store owns dedup. Legacy pipeline/history files must not
   // hide jobs that have never reached the unified evaluation flow.
   const args = ['--dry-run', '--quiet', '--ignore-history'];
@@ -35,7 +35,7 @@ export async function scanAts({ store, lookbackHours, companyWindow = null, runS
     : null;
   const catchUp = new Map();
   const skipped = new Set();
-  const options = { additionalCompanies: watchedCompanies };
+  const options = { additionalCompanies: watchedCompanies, ...(filters ? { titleFilter: filters.title, locationFilter: filters.location } : {}) };
   if (lastSuccess) {
     options.shouldScan = (company) => {
       if (company.render_with_browser !== true) return true;

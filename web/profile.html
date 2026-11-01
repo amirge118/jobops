@@ -7,6 +7,7 @@
       <main class="page-main">
         <section class="page-hero"><div><h1>קורות חיים</h1><p>הפרטים שלך, ומה שהמערכת מסתמכת עליו כשהיא בודקת התאמה למשרות.</p></div></section>
         <div id="file-drift" class="profile-notice" role="status" hidden></div>
+        <div id="rescore-banner" class="profile-notice" role="status" hidden></div>
         <nav class="profile-tabs" role="tablist" aria-label="חלקי הפרופיל">
           <button type="button" role="tab" data-tab="resume" aria-selected="true">קורות חיים</button>
           <button type="button" role="tab" data-tab="identity" aria-selected="false">פרטים אישיים</button>
@@ -30,7 +31,9 @@
           <form id="identity-form" class="profile-fields"></form>
         </section>
         <section id="tab-preferences" class="page-section profile-panel" role="tabpanel" hidden>
-          <p class="profile-hint">תפקידים, מיקום, שכר ומה לא מתאים לך. הטקסט הזה נשלח לניקוד, ולכן שינוי בו משפיע על הציונים.</p>
+          <form id="search-form" class="profile-search"></form>
+          <h2 class="profile-subtitle">במילים שלך</h2>
+          <p class="profile-hint">שכר, סביבת עבודה וכל מה שלא נכנס לשדות למעלה. הטקסט הזה נשלח לניקוד, ולכן שינוי בו משפיע על הציונים.</p>
           <div id="editor-preferences"></div>
         </section>
         <section id="tab-profile" class="page-section profile-panel" role="tabpanel" hidden>

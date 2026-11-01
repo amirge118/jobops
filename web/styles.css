@@ -669,3 +669,9 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 16px
 .profile-fields label { display: block; margin: 0 0 4px; }
 .profile-fields input { box-sizing: border-box; width: 100%; }
 .profile-fields .button { justify-self: start; align-self: end; }
+.profile-group { margin: 0 0 16px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 6px; min-width: 0; }
+.profile-group legend { padding: 0 6px; font-weight: 600; }
+.profile-group textarea { box-sizing: border-box; width: 100%; }
+.profile-group .button { margin-top: 10px; }
+.profile-subtitle { margin: 16px 0 4px; font-size: 14px; }
+.profile-notice p { margin: 0 0 6px; }

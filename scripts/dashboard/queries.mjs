@@ -1,5 +1,7 @@
 import { createJobStore } from '../jobs/store.mjs';
+import { DEFAULT_EXACT_MATCH_SCORE, DEFAULT_MINIMUM_SCORE } from '../jobs/core.mjs';
 import { resolveCurrentUser } from '../jobs/current-user.mjs';
+import { applyUserSettings } from '../jobs/user-settings.mjs';
 import { loadCandidateContext } from '../jobs/candidate/candidate-context.mjs';
 import { aggregateGroupStats, aggregateSourcePerformance, STATS_WINDOWS } from '../jobs/insights.mjs';
 import { RESUME_GAP_VERSION } from '../jobs/resume-gap.mjs';
@@ -22,12 +24,18 @@ function safeRateLimits() {
 }
 import { DEFAULT_LINKEDIN_LIMITS } from '../jobs/sources/linkedin.mjs';
 
+function decisionThresholds(config) {
+  return {
+    minimumScore: Number(config.decision?.minimumScore ?? DEFAULT_MINIMUM_SCORE),
+    exactMatchScore: Number(config.decision?.exactMatchScore ?? DEFAULT_EXACT_MATCH_SCORE),
+  };
+}
+
 export function dashboardSettings(config) {
   return {
     defaultLookbackDays: Number(config.scan.defaultLookbackDays),
     maxLookbackDays: Number(config.scan.maxLookbackDays),
-    minimumScore: Number(config.decision?.minimumScore ?? 4),
-    exactMatchScore: Number(config.decision?.exactMatchScore ?? 4.5),
+    ...decisionThresholds(config),
     demo: Boolean(config.demo),
     groups: (config.sources.whatsapp?.groups || []).map(({ name }) => ({ name })),
   };
@@ -253,8 +261,7 @@ export function createDashboardQueries(config, action) {
       return await withStore(async (store) => ({
         ...buildDecisionStats(await store.listJobDecisions(), {
           pending: (await store.getDashboardStats()).suitable,
-          minimumScore: Number(config.decision?.minimumScore ?? 4),
-          exactMatchScore: Number(config.decision?.exactMatchScore ?? 4.5),
+          ...decisionThresholds(await applyUserSettings(config, store, resolveCurrentUser().id)),
         }),
         sourceValue: buildSourceValue(await store.listSourceValueFacts({
           since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,

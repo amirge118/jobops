@@ -1,5 +1,5 @@
 import { LOCAL_USER_ID } from './current-user.mjs';
-import { canonicalScoringHash } from './candidate/scoring-hash.mjs';
+import { canonicalScoringHash, scoringCriteria } from './candidate/scoring-hash.mjs';
 
 const RESUME = `# Noa Example
 
@@ -32,10 +32,10 @@ Full-time on-site outside the center of the country.
 `;
 
 // Synthetic only. The demo shares the real project folder but never its documents.
-export async function seedDemoProfile(store, profileHash) {
+export async function seedDemoProfile(store, config, profileHash) {
   await store.importMissingDocuments(LOCAL_USER_ID, [
     { kind: 'profile', content: PROFILE },
     { kind: 'preferences', content: PREFERENCES },
     { kind: 'resume', content: RESUME },
-  ], { alias: { canonicalHash: canonicalScoringHash(PROFILE, PREFERENCES), storedHash: profileHash } });
+  ], { alias: { canonicalHash: canonicalScoringHash(PROFILE, PREFERENCES, scoringCriteria(config)), storedHash: profileHash } });
 }

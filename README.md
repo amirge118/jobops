@@ -185,6 +185,10 @@ with a version history you can restore. Paste an existing CV and AI organizes it
 you to review; nothing is saved or invented without your approval. Changing a phone number never
 re-scores anything.
 
+The page also holds what you are looking for: target domains, excluded roles, level, locations, score
+thresholds and the free title filters, which AI can suggest for your field. After a change, existing scores
+stay until you see the estimated AI cost and confirm a re-score, optionally including recent rejections.
+
 ## Shows what your CV is missing for a perfect fit
 
 Every suitable job is checked against your exact current CV, and the result is kept after you

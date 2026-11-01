@@ -3,6 +3,8 @@ import { formatTime } from '../shared/formatters.js';
 import { createCvImport } from './profile-cv-import.js';
 import { createDocumentEditor } from './profile-document-editor.js';
 import { createIdentityForm } from './profile-identity-form.js';
+import { createRescoreBanner } from './profile-rescore-banner.js';
+import { createSearchForm } from './profile-search-form.js';
 
 const KIND_LABELS = { resume: 'קורות החיים', preferences: 'ההעדפות', profile: 'המידע הנוסף' };
 const feedbackLine = document.querySelector('#page-feedback');
@@ -34,12 +36,15 @@ function showDrift(kinds) {
 
 const editors = {};
 let identityForm;
+const rescoreBanner = createRescoreBanner({ root: document.querySelector('#rescore-banner'), feedback });
+const searchForm = createSearchForm({ form: document.querySelector('#search-form'), feedback, onSaved: () => rescoreBanner.refresh() });
 
 async function load() {
   const overview = await requestJson('/api/profile');
   for (const [kind, editor] of Object.entries(editors)) await editor.load(overview.documents[kind]);
   identityForm.load(overview.identity);
   showDrift(overview.fileDrift);
+  await Promise.all([searchForm.load(), rescoreBanner.refresh()]);
   document.querySelector('#last-updated').textContent = `עודכן ${formatTime(Date.now())}`;
 }
 
@@ -51,10 +56,10 @@ async function refreshFromServer() {
   if (!editors.profile.isDirty()) await editors.profile.load(overview.documents.profile);
 }
 
-const refreshQuietly = () => refreshFromServer().catch(() => {});
+const refreshQuietly = () => Promise.all([refreshFromServer(), rescoreBanner.refresh()]).catch(() => {});
 
 editors.resume = createDocumentEditor({ root: document.querySelector('#editor-resume'), kind: 'resume', feedback, onSaved: refreshQuietly });
-editors.preferences = createDocumentEditor({ root: document.querySelector('#editor-preferences'), kind: 'preferences', feedback });
+editors.preferences = createDocumentEditor({ root: document.querySelector('#editor-preferences'), kind: 'preferences', feedback, onSaved: () => rescoreBanner.refresh() });
 editors.profile = createDocumentEditor({ root: document.querySelector('#editor-profile'), kind: 'profile', feedback, onSaved: refreshQuietly });
 identityForm = createIdentityForm({
   form: document.querySelector('#identity-form'),
@@ -81,7 +86,7 @@ for (const tab of document.querySelectorAll('.profile-tabs [role="tab"]')) {
 }
 
 window.addEventListener('beforeunload', (event) => {
-  if (Object.values(editors).some((editor) => editor.isDirty()) || identityForm.isDirty()) event.preventDefault();
+  if (Object.values(editors).some((editor) => editor.isDirty()) || identityForm.isDirty() || searchForm.isDirty()) event.preventDefault();
 });
 
 load().catch((error) => feedback(error.message, true));

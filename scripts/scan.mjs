@@ -499,7 +499,7 @@ export function mergeTrackedCompanies(configured = [], additional = []) {
 // `maxAgeHoursFor(companyName)` gives one company its own recency window (its
 // own catch-up after a failed scan); it returns null to use the shared one.
 // `shouldScan(company)` returning false skips a company for this run only.
-export async function runPortalScan(args = [], { additionalCompanies = [], maxAgeHoursFor = null, shouldScan = null } = {}) {
+export async function runPortalScan(args = [], { additionalCompanies = [], maxAgeHoursFor = null, shouldScan = null, titleFilter: titleFilterOverride = null, locationFilter: locationFilterOverride = null } = {}) {
   const log = args.includes('--quiet') ? () => {} : console.log;
   const dryRun = args.includes('--dry-run');
   const verify = args.includes('--verify');
@@ -535,8 +535,8 @@ export async function runPortalScan(args = [], { additionalCompanies = [], maxAg
 
   const config = parseYaml(readFileSync(PORTALS_PATH, 'utf-8'));
   const companies = mergeTrackedCompanies(config.tracked_companies || [], additionalCompanies);
-  const titleFilter = buildTitleFilter(config.title_filter);
-  const locationFilter = buildLocationFilter(config.location_filter);
+  const titleFilter = buildTitleFilter(titleFilterOverride ?? config.title_filter);
+  const locationFilter = buildLocationFilter(locationFilterOverride ?? config.location_filter);
   const maxAgeHours = cliMaxAgeHours !== undefined && !Number.isNaN(cliMaxAgeHours)
     ? cliMaxAgeHours
     : config.recency_filter?.max_age_hours;

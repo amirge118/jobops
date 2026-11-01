@@ -160,14 +160,17 @@ export function calculateFitScore({ cvMatch, seniority, roleScope, location, sec
   return Math.round(Math.max(1, Math.min(5, weighted)) * 10) / 10;
 }
 
+export const DEFAULT_MINIMUM_SCORE = 4;
+export const DEFAULT_EXACT_MATCH_SCORE = 4.5;
+
 export function decideFit({
   score,
   isActive,
   domainMatches,
   locationMatches,
   hasApplyUrl,
-  minimumScore = 4,
-  exactMatchScore = 4.5,
+  minimumScore = DEFAULT_MINIMUM_SCORE,
+  exactMatchScore = DEFAULT_EXACT_MATCH_SCORE,
 }) {
   const passesBasicGates = Boolean(isActive && domainMatches && locationMatches && hasApplyUrl);
   if (!passesBasicGates || Number(score) < Number(minimumScore)) {

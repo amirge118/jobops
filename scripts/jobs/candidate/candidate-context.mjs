@@ -1,6 +1,7 @@
 import { resumeHashOf, resumeIsAvailable } from '../config.mjs';
 import { driftedKinds, importMissingFromFiles } from './file-sync.mjs';
-import { canonicalScoringHash } from './scoring-hash.mjs';
+import { applyUserSettings } from '../user-settings.mjs';
+import { canonicalScoringHash, scoringCriteria } from './scoring-hash.mjs';
 
 // The candidate text a scan or a page works from, for one user.
 export async function loadCandidateContext({ store, config, userId }) {
@@ -9,7 +10,8 @@ export async function loadCandidateContext({ store, config, userId }) {
     .map((kind) => store.getCurrentDocument(userId, kind)));
   if (!profile) throw new Error('Missing candidate profile');
   if (!preferences) throw new Error('Missing candidate preferences');
-  const canonicalHash = canonicalScoringHash(profile.content, preferences.content);
+  const effective = await applyUserSettings(config, store, userId);
+  const canonicalHash = canonicalScoringHash(profile.content, preferences.content, scoringCriteria(effective));
   const currentResume = resume?.content ?? '';
   return {
     profile: profile.content,
