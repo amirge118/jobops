@@ -950,6 +950,8 @@ npm run scan:dry
   owner changes them; the picker shows group names, never their addresses (ADR 0011).
 - **Applications are rows:** `/tracker` lists and edits them, and `data/applications.md` is a copy for skills.
   Suitable jobs appear only on the Decisions page; scans no longer append to `data/pipeline.md` (ADR 0012).
+- **A store works for one user:** decisions, blocks, gap data, reports and alerts are filtered by the store's user,
+  and negative tests cover reads and writes across users (ADR 0013).
 - **One storage layer:** all SQL sits under `scripts/jobs/store/`, behind an async driver module and
   numbered migrations, so the database can be replaced later (ADR 0007).
 - **No scoring API key:** matching runs through the locally signed-in Codex CLI and explicitly

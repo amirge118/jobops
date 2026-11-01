@@ -5,7 +5,7 @@ function compactText(value, limit) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
-export function createResumeGapsRepository({ db }) {
+export function createResumeGapsRepository({ db, userId }) {
   return {
     async countResumeGapFailures() {
       return await db.prepare(`
@@ -54,9 +54,9 @@ export function createResumeGapsRepository({ db }) {
         `).run(JSON.stringify(analysis), inputHash, analyzedAt, analyzedAt, jobKey);
         if (result.changes !== 1) throw new Error(`Cannot save resume analysis for job: ${jobKey}`);
         await db.prepare(`
-          INSERT OR REPLACE INTO gap_observations (job_key, company, title, score, resume_hash, analysis_json, observed_at)
-          SELECT job_key, company, title, score, ?, ?, ? FROM jobs WHERE job_key = ?
-        `).run(resumeHash, JSON.stringify({ items: analysis.items || [], employerPriorities: analysis.employerPriorities || [] }), analyzedAt, jobKey);
+          INSERT OR REPLACE INTO gap_observations (user_id, job_key, company, title, score, resume_hash, analysis_json, observed_at)
+          SELECT ?, job_key, company, title, score, ?, ?, ? FROM jobs WHERE job_key = ?
+        `).run(userId, resumeHash, JSON.stringify({ items: analysis.items || [], employerPriorities: analysis.employerPriorities || [] }), analyzedAt, jobKey);
       })();
     },
 
@@ -64,9 +64,10 @@ export function createResumeGapsRepository({ db }) {
       return (await db.prepare(`
         SELECT g.job_key AS jobKey, g.company, g.title, g.score, g.resume_hash AS resumeHash,
           g.analysis_json AS analysisJson, g.observed_at AS observedAt, d.decision
-        FROM gap_observations g LEFT JOIN job_decisions d ON d.job_key = g.job_key
+        FROM gap_observations g LEFT JOIN job_decisions d ON d.job_key = g.job_key AND d.user_id = g.user_id
+        WHERE g.user_id = ?
         ORDER BY g.observed_at DESC
-      `).all()).map(({ analysisJson, ...row }) => ({ ...row, analysis: parseJson(analysisJson, { items: [], employerPriorities: [] }) }));
+      `).all(userId)).map(({ analysisJson, ...row }) => ({ ...row, analysis: parseJson(analysisJson, { items: [], employerPriorities: [] }) }));
     },
 
     async markResumeGapFailure(jobKey, { inputHash, code = 'resume_gap_failed', reason, attemptedAt = Date.now() }) {
@@ -91,24 +92,24 @@ export function createResumeGapsRepository({ db }) {
     // The user's own state per aggregated gap term: working on it, or hidden
     // as noise. Keyed by the same normalization the aggregation groups by.
     async listGapTermStatuses() {
-      return await db.prepare('SELECT term_key AS termKey, term, status, updated_at AS updatedAt FROM gap_term_statuses').all();
+      return await db.prepare('SELECT term_key AS termKey, term, status, updated_at AS updatedAt FROM gap_term_statuses WHERE user_id = ?').all(userId);
     },
 
     // Map(termKey → covered) for one resume version.
     async listGapTermCoverage(coverageKey) {
-      return new Map((await db.prepare('SELECT term_key AS termKey, covered FROM gap_term_coverage WHERE coverage_key = ?')
-        .all(coverageKey)).map((row) => [row.termKey, row.covered === 1]));
+      return new Map((await db.prepare('SELECT term_key AS termKey, covered FROM gap_term_coverage WHERE user_id = ? AND coverage_key = ?')
+        .all(userId, coverageKey)).map((row) => [row.termKey, row.covered === 1]));
     },
 
     async saveGapTermCoverage(coverageKey, rows, at = Date.now()) {
       const insert = db.prepare(`
-        INSERT INTO gap_term_coverage (coverage_key, term_key, covered, checked_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT(coverage_key, term_key) DO UPDATE SET covered = excluded.covered, checked_at = excluded.checked_at
+        INSERT INTO gap_term_coverage (user_id, coverage_key, term_key, covered, checked_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, coverage_key, term_key) DO UPDATE SET covered = excluded.covered, checked_at = excluded.checked_at
       `);
       await db.transaction(async () => {
         // Answers for older resumes can never be read again.
-        await db.prepare('DELETE FROM gap_term_coverage WHERE coverage_key != ?').run(coverageKey);
-        for (const row of rows) await insert.run(coverageKey, row.termKey, row.covered ? 1 : 0, at);
+        await db.prepare('DELETE FROM gap_term_coverage WHERE user_id = ? AND coverage_key != ?').run(userId, coverageKey);
+        for (const row of rows) await insert.run(userId, coverageKey, row.termKey, row.covered ? 1 : 0, at);
       })();
     },
 
@@ -116,16 +117,16 @@ export function createResumeGapsRepository({ db }) {
       const key = termKey(term);
       if (!key) throw Object.assign(new Error('term is required'), { statusCode: 400 });
       if (status == null) {
-        await db.prepare('DELETE FROM gap_term_statuses WHERE term_key = ?').run(key);
+        await db.prepare('DELETE FROM gap_term_statuses WHERE user_id = ? AND term_key = ?').run(userId, key);
         return null;
       }
       if (!GAP_TERM_STATUSES.has(status)) {
         throw Object.assign(new Error(`Unknown gap term status: ${status}`), { statusCode: 400 });
       }
       await db.prepare(`
-        INSERT INTO gap_term_statuses (term_key, term, status, updated_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT(term_key) DO UPDATE SET term = excluded.term, status = excluded.status, updated_at = excluded.updated_at
-      `).run(key, compactText(term, 100), status, at);
+        INSERT INTO gap_term_statuses (user_id, term_key, term, status, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, term_key) DO UPDATE SET term = excluded.term, status = excluded.status, updated_at = excluded.updated_at
+      `).run(userId, key, compactText(term, 100), status, at);
       return { termKey: key, term: compactText(term, 100), status, updatedAt: at };
     },
   };

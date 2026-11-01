@@ -24,7 +24,7 @@ function mapJobDecision(row) {
   };
 }
 
-export function createEvaluationsRepository({ db, store, identity }) {
+export function createEvaluationsRepository({ db, store, identity, userId }) {
   const { findTwinRow, isSettled, markDuplicateRow } = identity;
 
   return {
@@ -305,19 +305,19 @@ export function createEvaluationsRepository({ db, store, identity }) {
         const screenPass = parseJson(job.resume_gap_json, null)?.screenPass?.level ?? null;
         await db.prepare(`
           INSERT OR REPLACE INTO job_decisions (
-            job_key, decision, decided_at, company, title, apply_url, score, fit_label,
+            user_id, job_key, decision, decided_at, company, title, apply_url, score, fit_label,
             fit_json, source_kinds_json, screen_pass, criteria_version, first_seen_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
-          jobKey, decision, at, job.company, job.title, job.apply_url, job.score, job.fit_label,
+          userId, jobKey, decision, at, job.company, job.title, job.apply_url, job.score, job.fit_label,
           fit ? JSON.stringify(fit) : null,
           JSON.stringify(sourceKinds(parseSources(job.sources_json))),
           screenPass, job.criteria_version, job.first_seen_at,
         );
         const companyKey = decision === 'company_not_interesting' ? companyIdentityKey(job.company) : '';
         if (companyKey) {
-          await db.prepare('INSERT OR IGNORE INTO blocked_companies (company_key, name, blocked_at) VALUES (?, ?, ?)')
-            .run(companyKey, String(job.company).slice(0, 200), at);
+          await db.prepare('INSERT OR IGNORE INTO blocked_companies (user_id, company_key, name, blocked_at) VALUES (?, ?, ?, ?)')
+            .run(userId, companyKey, String(job.company).slice(0, 200), at);
         }
         if (!await store.archiveJob(jobKey, at)) throw new Error(`Cannot archive decided job: ${jobKey}`);
         return true;
@@ -325,8 +325,8 @@ export function createEvaluationsRepository({ db, store, identity }) {
     },
 
     async listJobDecisions({ since = 0 } = {}) {
-      return (await db.prepare('SELECT * FROM job_decisions WHERE decided_at >= ? ORDER BY decided_at DESC')
-        .all(Number(since) || 0)).map(mapJobDecision);
+      return (await db.prepare('SELECT * FROM job_decisions WHERE user_id = ? AND decided_at >= ? ORDER BY decided_at DESC')
+        .all(userId, Number(since) || 0)).map(mapJobDecision);
     },
 
     async markPresented(jobKeys, at = Date.now()) {
