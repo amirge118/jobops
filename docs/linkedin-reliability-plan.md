@@ -182,6 +182,29 @@ shared gap, caps, the back-off ladder and its reset, and no request while backin
   ≥ 5 minutes, LinkedIn's guest endpoints are not usable from this egress and LinkedIn job alert
   e-mails become the alternative source (separate decision: needs mail access).
 
+## Separate posting cap, slower posting reads (2026-11-01)
+
+Why: only the queue reader honoured the reserve, so WhatsApp and ATS runs could read postings up to
+the whole cap. On 2026-11-01 the AI / LLM and Forward Deployed searches stopped on `hourly_limit` at
+12:30 and 14:30, and their coverage stayed at 10:30.
+
+Evidence (14 days to 2026-11-01, mostly on the direct egress, so not a controlled comparison):
+
+- Search requests per slot: median 4, p75 6, p90 8, max 10 (the cap itself truncates this).
+- 18% of slots began with 7 or more requests already in the previous hour.
+- Refusal rate by requests in the previous 10 minutes: 0–1 0.9%, 2–3 6.5%, 4–5 11.6%, 6+ 13.4%. By
+  requests in the previous hour the relationship is less clear: 4–6 6.6%, 7–8 3.6%, 9–10 12.6%.
+- Postings read per day: median 88, max 122.
+
+Change: `maxRequestsPerHour` 10 → 12, new `maxPostingsPerHour` 7 for every reader, `queueReserve`
+4 → 2 (now against the posting limit), `detailDelayMs` 120–180 s → 180–240 s,
+`maxDetailFetchesPerRun` 6 → 4.
+
+Expected after a week: almost no `hourly_limit` on searches, a refusal rate below 5%, and a queue
+that empties by the end of a normal day. Risks: 7 postings an hour is about 112 in 16 active hours,
+under the busiest day, so the queue may lag on peak days and postings older than `queueMaxAgeDays`
+are archived unread; 12 an hour is above anything measured, so go back to 11 if refusals rise.
+
 ## Limitations
 
 - LinkedIn's limits are undocumented and may change; the canary log and the request table exist so a

@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import {
   buildTitleIncludeFilter, postedAgeLowerBoundMs,
-  buildLinkedInAreaFilter, buildSearchUrl, classifySearchResponse, createLinkedInBudget, createLinkedInGate, isFallbackPage, retryAfterMs,
+  buildLinkedInAreaFilter, buildSearchUrl, classifySearchResponse, createLinkedInBudget, createLinkedInGate, createLinkedInGates, isFallbackPage, retryAfterMs,
   parsePostingPage, parseSearchPage, runLinkedInSearch, scanLinkedIn, searchTerms,
 } from '../scripts/jobs/sources/linkedin.mjs';
 
@@ -381,6 +381,52 @@ test('the hourly LinkedIn gate counts every process\'s requests over the last ho
   clock += 15 * 24 * 60 * 60 * 1000;
   await gate.record('posting');
   assert.equal(await store.countLinkedInRequests({ since: 0 }), 1);
+});
+
+test('posting readers leave the rest of the hourly cap free for searches', async (context) => {
+  const store = gateStore(context);
+  let clock = Date.parse('2026-11-01T12:00:00Z');
+  const limits = { maxRequestsPerHour: 12, maxPostingsPerHour: 7, queueReserve: 2 };
+  const { search, posting } = createLinkedInGates({ store, limits, now: () => clock });
+  const queue = createLinkedInGates({ store, limits, linkedinQueue: true, now: () => clock }).posting;
+
+  for (let index = 0; index < 5; index += 1) await posting.record('posting');
+  assert.equal(await queue.allow(), false, 'the queue reader stops first');
+  assert.equal(await posting.allow(), true, 'new postings still have room');
+  await posting.record('posting');
+  await posting.record('posting');
+  assert.equal(await posting.allow(), false, 'all readers stop at the posting limit');
+
+  for (let index = 0; index < 5; index += 1) {
+    assert.equal(await search.allow(), true, `search page ${index + 1} is still guaranteed`);
+    await search.record('search');
+  }
+  assert.equal(await search.allow(), false, 'nothing passes the overall cap');
+
+  clock += 61 * 60 * 1000;
+  assert.equal(await queue.allow(), true);
+  assert.equal(await search.allow(), true);
+});
+
+test('search pages do not count toward the posting limit, but the overall cap binds postings too', async (context) => {
+  const store = gateStore(context);
+  const clock = Date.parse('2026-11-01T12:00:00Z');
+  const { search, posting } = createLinkedInGates({ store, limits: { maxRequestsPerHour: 12, maxPostingsPerHour: 7 }, now: () => clock });
+
+  for (let index = 0; index < 6; index += 1) await search.record('search');
+  assert.equal(await posting.allow(), true, 'a search does not block postings for the hour');
+  for (let index = 0; index < 5; index += 1) await posting.record('posting');
+  assert.equal(await posting.allow(), true, 'still under both limits');
+  await posting.record('posting');
+  assert.equal(await posting.allow(), false, 'the overall cap is reached before the posting limit');
+});
+
+test('refused requests count toward neither the overall cap nor the posting limit', async (context) => {
+  const store = gateStore(context);
+  const clock = Date.parse('2026-11-01T12:00:00Z');
+  await store.recordLinkedInRefusal({ reason: 'rate_limited', at: clock - 1000 });
+  assert.equal(await store.countLinkedInRequests({ since: clock - 60_000 }), 0);
+  assert.equal(await store.countLinkedInRequests({ since: clock - 60_000, kind: 'posting' }), 0);
 });
 
 test('a search stops before a request once the shared hourly cap is reached', async () => {

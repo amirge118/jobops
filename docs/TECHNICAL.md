@@ -259,9 +259,10 @@ retry run limited to queued LinkedIn postings (`selectLinkedInQueue`): newest fi
 run's posting budget (`limits.maxDetailFetchesPerRun`), nothing while LinkedIn is cooling down, and
 the rest of the queue is left untouched rather than marked deferred again. Every LinkedIn request from every process — search pages and postings —
 is written to `linkedin_requests` (14 days kept) and passes `createLinkedInGate` first: a request
-is sent only while fewer than `limits.maxRequestsPerHour` (10) were sent in the last hour; the queue
-reader stops `limits.queueReserve` (4) earlier, so searches and newly shared postings keep their
-share. A search that meets the cap ends as `partial` / `hourly_limit` (coverage does not advance);
+is sent only while fewer than `limits.maxRequestsPerHour` (12) were sent in the last hour. Postings,
+from every reader, also stop at `limits.maxPostingsPerHour` (7), counted apart from search pages, so
+at least 5 requests stay free for a search; the queue reader stops `limits.queueReserve` (2) earlier,
+so newly shared postings keep their share. A search that meets the cap ends as `partial` / `hourly_limit` (coverage does not advance);
 a posting waits as `linkedin_deferred`. Background: on 2026-10-19 three independent runs, each
 paced on its own, together sent 10–15 LinkedIn requests an hour and were refused
 (docs/linkedin-reliability-plan.md).

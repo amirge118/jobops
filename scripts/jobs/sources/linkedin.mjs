@@ -26,8 +26,9 @@ export const DEFAULT_LINKEDIN_LIMITS = Object.freeze({
   maxDetailFetchesPerRun: 40,
   delayMs: [3_000, 7_000],
   runTimeoutMs: 300_000,
-  maxRequestsPerHour: 10,
-  queueReserve: 4,
+  maxRequestsPerHour: 12,
+  maxPostingsPerHour: 7,
+  queueReserve: 2,
   queueMaxAgeDays: 5,
 });
 
@@ -225,14 +226,33 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // One hourly cap for every LinkedIn request from every process (search pages
 // and postings), counted in SQLite (linkedin_requests). Per-run budgets and
 // per-request pacing cannot see each other: on 2026-10-19 three independent
-// runs together sent 10-15 requests an hour and LinkedIn refused. The queue
-// reader gets a lower limit, so searches and new postings keep their share.
-export function createLinkedInGate({ store, limit, now = Date.now }) {
+// runs together sent 10-15 requests an hour and LinkedIn refused. postingLimit
+// additionally caps postings alone, counted apart from search pages.
+export function createLinkedInGate({ store, limit, postingLimit = null, now = Date.now }) {
   const HOUR_MS = 60 * 60 * 1000;
   return {
     limit,
-    async allow() { return await store.countLinkedInRequests({ since: now() - HOUR_MS }) < limit; },
+    postingLimit,
+    async allow() {
+      if (await store.countLinkedInRequests({ since: now() - HOUR_MS }) >= limit) return false;
+      if (postingLimit === null) return true;
+      return await store.countLinkedInRequests({ since: now() - HOUR_MS, kind: 'posting' }) < postingLimit;
+    },
     async record(kind) { await store.recordLinkedInRequest({ kind, at: now() }); },
+  };
+}
+
+// Searches may use the whole cap; every posting reader stops at its own limit,
+// so maxRequestsPerHour - maxPostingsPerHour stays free for search pages. The
+// queue reader stops queueReserve earlier, leaving newly shared postings room.
+// Counting postings apart keeps a search from blocking them for a whole hour.
+export function createLinkedInGates({ store, limits, linkedinQueue = false, now = Date.now }) {
+  const merged = { ...DEFAULT_LINKEDIN_LIMITS, ...limits };
+  const limit = Number(merged.maxRequestsPerHour);
+  const postingLimit = Number(merged.maxPostingsPerHour) - (linkedinQueue ? Number(merged.queueReserve) : 0);
+  return {
+    search: createLinkedInGate({ store, limit, now }),
+    posting: createLinkedInGate({ store, limit, postingLimit, now }),
   };
 }
 

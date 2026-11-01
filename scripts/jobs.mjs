@@ -22,7 +22,7 @@ import { createJobStore, sourceKindOf } from './jobs/store.mjs';
 import { queueJobNotifications } from './jobs/notifications.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
-import { createLinkedInGate, DEFAULT_LINKEDIN_LIMITS, scanLinkedIn } from './jobs/sources/linkedin.mjs';
+import { createLinkedInGates, DEFAULT_LINKEDIN_LIMITS, scanLinkedIn } from './jobs/sources/linkedin.mjs';
 import { createRunLifecycle, describeFailure, hasFailureReason, safeTargetUrl } from './jobs/diagnostics.mjs';
 import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
@@ -1131,16 +1131,13 @@ async function runJobsLocked(options, config) {
   });
   const noteLinkedInBlock = async (status, detail = null) => await store.noteLinkedInBlock(status, { cooldownMs: linkedinBlockMs, detail });
   const linkedinLimits = { ...DEFAULT_LINKEDIN_LIMITS, ...(config.sources.linkedin?.limits || {}) };
-  const linkedinGate = createLinkedInGate({
-    store,
-    limit: Number(linkedinLimits.maxRequestsPerHour) - (options.linkedinQueue ? Number(linkedinLimits.queueReserve) : 0),
-  });
+  const linkedinGates = createLinkedInGates({ store, limits: linkedinLimits, linkedinQueue: options.linkedinQueue });
   const fetcher = createJobPageFetcher({
     store,
     cacheTtlMs: Number(config.scan.pageCacheHours) * 60 * 60 * 1000,
     linkedinLimits: config.sources.linkedin?.limits || {},
     linkedinCooldown: linkedinCooldown.reads,
-    linkedinGate,
+    linkedinGate: linkedinGates.posting,
     onLinkedInRefusal: async (detail) => await store.recordLinkedInRefusal({ reason: 'rate_limited', detail }),
     onLinkedInRequest: async () => await store.noteLinkedInActivity(),
     onLinkedInBlock: noteLinkedInBlock,
@@ -1251,7 +1248,7 @@ async function runJobsLocked(options, config) {
           manualHours: options.linkedinHours,
           passesTitle,
           cooldown: linkedinCooldown.scans,
-          gate: linkedinGate,
+          gate: linkedinGates.search,
           // Only recovered refusals are recorded here; a second 429 halts the
           // search and is recorded by noteLinkedInBlock with the run's block.
           onRefusal: async (detail) => { if (detail.recovered) await store.recordLinkedInRefusal({ reason: 'rate_limited', detail }); },

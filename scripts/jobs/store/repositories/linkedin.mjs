@@ -213,7 +213,8 @@ export function createLinkedinRepository({ db, store }) {
       await db.prepare('DELETE FROM linkedin_requests WHERE at < ?').run(Number(at) - 14 * 24 * 60 * 60 * 1000);
     },
 
-    async countLinkedInRequests({ since }) {
+    async countLinkedInRequests({ since, kind = null }) {
+      if (kind) return (await db.prepare('SELECT COUNT(*) AS count FROM linkedin_requests WHERE at >= ? AND kind = ?').get(Number(since), String(kind))).count;
       return (await db.prepare("SELECT COUNT(*) AS count FROM linkedin_requests WHERE at >= ? AND kind NOT LIKE 'refused:%'").get(Number(since))).count;
     },
 
