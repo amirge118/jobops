@@ -875,7 +875,9 @@ These values are configurable in `config/jobs.yml`.
 config/jobs.example.yml  public configuration template
 portals.yml              ATS/official career sources and fast pre-filters
 scripts/jobs.mjs         unified CLI
-scripts/jobs/            shared collection, scoring, storage, and reporting modules
+scripts/jobs/            shared collection, scoring, and reporting modules
+scripts/jobs/store/      storage layer: repositories per domain, migrations, the only driver module
+scripts/dashboard/routes/  dashboard API routes by domain, behind dashboard/request-guard.mjs
 scripts/jobs/company-*   company catalogue bootstrap and persistent registry rules
 scripts/jobs/company-source-resolver.mjs  researched URL discovery, safe probing, and source selection
 scripts/jobs/sources/linkedin.mjs  LinkedIn guest search, parsing, failure classification, collection
@@ -935,6 +937,10 @@ npm run scan:dry
   technical identity required for deduplication.
 - **Bounded local actions:** the dashboard executes a fixed allowlist of commands without a shell
   and listens only on `127.0.0.1`.
+- **Other websites can't drive the dashboard:** every request passes a guard that refuses foreign
+  `Host` and `Origin` values and non-JSON bodies (ADR 0008).
+- **One storage layer:** all SQL sits under `scripts/jobs/store/`, behind an async driver module and
+  numbered migrations, so the database can be replaced later (ADR 0007).
 - **No scoring API key:** matching runs through the locally signed-in Codex CLI and explicitly
   removes API-oriented credentials from the child process.
 - **Runnable without secrets:** `npm run demo` makes the full product surface reviewable with

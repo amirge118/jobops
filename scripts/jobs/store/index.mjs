@@ -25,6 +25,7 @@ import { createHealthRepository } from './repositories/health.mjs';
 import { createLinkedinRepository } from './repositories/linkedin.mjs';
 import { createWeeklyReportsRepository } from './repositories/weekly-reports.mjs';
 import { createPulseRepository } from './repositories/pulse.mjs';
+import { createUsersRepository } from './repositories/users.mjs';
 import { createWeeklyStatsRepository } from './repositories/weekly-stats.mjs';
 
 export { israelDay, sourceKindOf, sourceMixOf, GAP_TERM_STATUSES, JOB_DECISIONS } from './shared.mjs';
@@ -48,6 +49,7 @@ const REPOSITORIES = [
   createLinkedinRepository,
   createWeeklyReportsRepository,
   createPulseRepository,
+  createUsersRepository,
   createWeeklyStatsRepository,
 ];
 

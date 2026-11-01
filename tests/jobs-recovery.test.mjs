@@ -103,7 +103,7 @@ test('anchor migration is additive, survives reopening and uses its primary-key 
   const job = await store.recordSighting({ url: 'https://example.com/jobs/existing' });
   store.close();
   const legacy = new Database(dbPath);
-  legacy.exec('DROP TABLE whatsapp_anchors; DROP TABLE schema_migrations'); // Synthetic legacy database only.
+  legacy.exec('DROP TABLE whatsapp_anchors; DROP TABLE schema_migrations; DROP TABLE user_settings; DROP TABLE users'); // Synthetic legacy database only.
   legacy.close();
   store = createJobStore(dbPath);
   assert.ok(await store.getJob(job.jobKey));

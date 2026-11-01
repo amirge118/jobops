@@ -764,7 +764,7 @@ test('opening the store re-keys legacy LinkedIn URLs to the posting id without d
   const store = createJobStore(dbPath);
   store.close();
   const raw = new Database(dbPath);
-  raw.exec('DROP TABLE schema_migrations'); // A database from before versioned migrations.
+  raw.exec('DROP TABLE schema_migrations; DROP TABLE user_settings; DROP TABLE users'); // A database from before versioned migrations.
   const insert = raw.prepare(`INSERT INTO jobs (job_key, canonical_url, apply_url, company_role_key, sources_json, first_seen_at, last_seen_at)
     VALUES (?, ?, ?, '::', '[]', 1, 1)`);
   insert.run('legacy1', 'https://il.linkedin.com/jobs/view/backend-at-acme-4100000001?refId=x', 'https://il.linkedin.com/jobs/view/backend-at-acme-4100000001');

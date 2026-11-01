@@ -273,7 +273,7 @@ test('API retains failed actions after a successful action and a server restart 
   const listen = async () => { await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); return `http://127.0.0.1:${server.address().port}`; };
   let base = await listen();
   context.after(() => server.close());
-  const first = await fetch(`${base}/api/actions/scan`, { method: 'POST', body: JSON.stringify({ days: 2, source: 'ats' }) }).then((r) => r.json());
+  const first = await fetch(`${base}/api/actions/scan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days: 2, source: 'ats' }) }).then((r) => r.json());
   await new Promise((resolve) => setImmediate(resolve));
   await fetch(`${base}/api/actions/mark-read`, { method: 'POST' });
   await new Promise((resolve) => setImmediate(resolve));
