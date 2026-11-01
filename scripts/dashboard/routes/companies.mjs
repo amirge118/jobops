@@ -82,6 +82,24 @@ export function createCompaniesRoutes({ config, queries, companyResearch, probeS
       return true;
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/companies/blocked') {
+      const store = createJobStore(config.jobsDbPath);
+      try { sendJson(response, 200, { blocked: await store.listBlockedCompanies() }); }
+      finally { store.close(); }
+      return true;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/companies/unblock') {
+      const body = requireObjectBody(await readJson(request), ['key']);
+      if (typeof body.key !== 'string' || !body.key) throw new CompanyRegistryError('invalid_request', 'A company key is required');
+      const store = createJobStore(config.jobsDbPath);
+      try {
+        const removed = await store.unblockCompany(body.key);
+        sendJson(response, removed ? 200 : 404, removed ? { unblocked: true } : { error: 'החברה לא נמצאה ברשימה' });
+      } finally { store.close(); }
+      return true;
+    }
+
     const companyManualSourceMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/companies\/([1-9]\d{0,8})\/manual-source$/)
       : null;

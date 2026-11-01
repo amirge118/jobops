@@ -6,9 +6,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const LABEL = 'com.amirgefen.jobops.whatsapp-collector';
+export const COLLECTOR_LABEL = 'com.amirgefen.jobops.whatsapp-collector';
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
+const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${COLLECTOR_LABEL}.plist`);
 
 function xml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -22,7 +22,7 @@ export function renderLaunchAgent({ nodePath = process.execPath, rootDir = ROOT_
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>${LABEL}</string>
+  <key>Label</key><string>${COLLECTOR_LABEL}</string>
   <key>ProgramArguments</key>
   <array><string>${xml(nodePath)}</string><string>${xml(collectorPath)}</string></array>
   <key>WorkingDirectory</key><string>${xml(rootDir)}</string>
@@ -49,7 +49,7 @@ function launchctl(args, { allowFailure = false } = {}) {
 }
 
 export function isCollectorServiceLoaded() {
-  return launchctl(['print', `gui/${process.getuid()}/${LABEL}`], { allowFailure: true }).status === 0;
+  return launchctl(['print', `gui/${process.getuid()}/${COLLECTOR_LABEL}`], { allowFailure: true }).status === 0;
 }
 
 // Stop the running service but keep its plist, so `install` brings it back unchanged.
@@ -71,18 +71,18 @@ export function manageCollectorService(command = process.argv[2]) {
   const domain = `gui/${process.getuid()}`;
   if (command === 'install') {
     resumeCollectorService();
-    console.log(`Installed ${LABEL}. Diagnostics are stored in data/jobs.db.`);
+    console.log(`Installed ${COLLECTOR_LABEL}. Diagnostics are stored in data/jobs.db.`);
     return;
   }
   if (command === 'uninstall') {
     launchctl(['bootout', domain, PLIST_PATH], { allowFailure: true });
     fs.rmSync(PLIST_PATH, { force: true });
-    console.log(`Uninstalled ${LABEL}. Local database and WhatsApp auth were preserved.`);
+    console.log(`Uninstalled ${COLLECTOR_LABEL}. Local database and WhatsApp auth were preserved.`);
     return;
   }
   if (command === 'status') {
-    const result = launchctl(['print', `${domain}/${LABEL}`], { allowFailure: true });
-    console.log(result.status === 0 ? result.stdout : `${LABEL} is not loaded.`);
+    const result = launchctl(['print', `${domain}/${COLLECTOR_LABEL}`], { allowFailure: true });
+    console.log(result.status === 0 ? result.stdout : `${COLLECTOR_LABEL} is not loaded.`);
     process.exitCode = result.status === 0 ? 0 : 1;
     return;
   }

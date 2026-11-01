@@ -80,7 +80,7 @@ export async function createDemoEnvironment({ rootDir, now = Date.now() }) {
     scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
     decision: { minimumScore: 4, exactMatchScore: 4.5 },
     sources: {
-      whatsapp: { groups: GROUPS.map((name) => ({ name })) },
+      whatsapp: { groups: GROUPS.map((name, index) => ({ name, jid: `120363000000000${index + 100}@g.us` })) },
       linkedin: {
         enabled: true,
         searches: [

@@ -355,9 +355,9 @@ async function codexAnalyzer(config, store) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  const { loadJobsConfig } = await import('./config.mjs');
+  const { loadEffectiveConfig } = await import('./effective-config.mjs');
   const { createJobStore } = await import('./store.mjs');
-  const config = loadJobsConfig();
+  const config = await loadEffectiveConfig();
 
   if (argv[0] === 'prune') {
     const apply = argv.includes('--apply');

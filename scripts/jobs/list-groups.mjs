@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { connectWhatsApp, disconnectWhatsApp } from './sources/whatsapp-client.mjs';
 import { isCollectorServiceLoaded, pauseCollectorService, resumeCollectorService } from './collector-service.mjs';
 import { loadJobsConfig } from './config.mjs';
+import { loadEffectiveConfig } from './effective-config.mjs';
 import { createJobStore } from './store.mjs';
 
 const ACTIVE_COLLECTOR_STATUSES = ['starting', 'connecting', 'connected', 'reconnecting', 'pairing_required', 'unconfirmed'];
@@ -64,7 +65,7 @@ async function fetchParticipating(authAbsPath) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const config = loadJobsConfig();
+  const config = await loadEffectiveConfig();
   const whatsapp = config.sources.whatsapp;
   if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
 

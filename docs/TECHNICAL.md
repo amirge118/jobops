@@ -946,6 +946,8 @@ npm run scan:dry
   are edited on `/profile`; `profile/*.md` are a copy for skills, and a hand edit waits for adoption (ADR 0009).
 - **Re-scoring is the person's decision:** a changed profile leaves verdicts as they are until they see the cost
   and confirm on `/profile`; search rules and pre-filters are per-user settings, not code (ADR 0010).
+- **Sources belong to the owner:** one WhatsApp connection and one LinkedIn network feed everyone, so only the
+  owner changes them; the picker shows group names, never their addresses (ADR 0011).
 - **One storage layer:** all SQL sits under `scripts/jobs/store/`, behind an async driver module and
   numbered migrations, so the database can be replaced later (ADR 0007).
 - **No scoring API key:** matching runs through the locally signed-in Codex CLI and explicitly

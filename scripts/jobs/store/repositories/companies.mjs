@@ -579,6 +579,14 @@ export function createCompaniesRepository({ db, store }) {
       return { updated };
     },
 
+    async listBlockedCompanies() {
+      return await db.prepare('SELECT company_key AS key, name AS company, blocked_at AS blockedAt FROM blocked_companies ORDER BY blocked_at DESC').all();
+    },
+
+    async unblockCompany(key) {
+      return (await db.prepare('DELETE FROM blocked_companies WHERE company_key = ?').run(String(key))).changes > 0;
+    },
+
     async isCompanyBlocked(company) {
       const key = companyIdentityKey(company);
       return Boolean(key && await db.prepare('SELECT 1 FROM blocked_companies WHERE company_key = ?').get(key));

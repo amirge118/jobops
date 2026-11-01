@@ -3,13 +3,14 @@
 import { connectWhatsApp, disconnectWhatsApp } from './sources/whatsapp-client.mjs';
 import { markConfiguredGroupsRead, verifyConfiguredGroups } from './sources/whatsapp.mjs';
 import { loadJobsConfig } from './config.mjs';
+import { loadEffectiveConfig } from './effective-config.mjs';
 import { createJobStore } from './store.mjs';
 
 async function main() {
   let store;
   let sock;
   try {
-    const config = loadJobsConfig();
+    const config = await loadEffectiveConfig();
     const whatsapp = config.sources.whatsapp;
     if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
 

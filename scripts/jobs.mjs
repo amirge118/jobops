@@ -1159,11 +1159,13 @@ async function runJobsLocked(options, config) {
   try {
     const sources = [];
     const fullScan = !options.whatsappBacklog && !options.retryOnly;
-    if (fullScan && !options.whatsappOnly && !options.linkedinOnly && config.sources.ats?.enabled) sources.push('ats');
-    if (fullScan && !options.atsOnly && !options.linkedinOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    const atsEnabled = config.sources.ats?.enabled && await store.isSourceEnabled('ats');
+    const whatsappEnabled = config.sources.whatsapp?.enabled && await store.isSourceEnabled('whatsapp');
+    if (fullScan && !options.whatsappOnly && !options.linkedinOnly && atsEnabled) sources.push('ats');
+    if (fullScan && !options.atsOnly && !options.linkedinOnly && whatsappEnabled) sources.push('whatsapp');
     if (fullScan && !options.atsOnly && !options.whatsappOnly && linkedinEnabled) sources.push('linkedin');
     if (options.linkedinOnly && !linkedinEnabled) console.log('LinkedIn כבוי (config/jobs.yml או לוח הבקרה); אין מה לסרוק.');
-    if (options.whatsappBacklog && config.sources.whatsapp?.enabled) sources.push('whatsapp-backlog');
+    if (options.whatsappBacklog && whatsappEnabled) sources.push('whatsapp-backlog');
     if (options.retryOnly) sources.push('retry');
     if (sources.length === 0) throw new Error('No job sources are enabled for this run');
     const window = options.whatsappBacklog

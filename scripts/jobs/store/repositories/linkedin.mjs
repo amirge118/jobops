@@ -4,7 +4,7 @@ import { parseJson, serializeAuditDetails } from '../shared.mjs';
 
 const LINKEDIN_KEYWORDS_PATTERN = /^[\p{L}\p{N} "'()+#.&/,-]+$/u;
 
-function normalizeLinkedInSearch(input = {}) {
+export function normalizeLinkedInSearch(input = {}) {
   const text = (value, max) => String(value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, max);
   const keywords = text(input.keywords, 200);
   const label = text(input.label, 80) || keywords.slice(0, 80);

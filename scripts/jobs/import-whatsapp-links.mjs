@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { canonicalizeJobUrl } from './core.mjs';
 import { loadJobsConfig } from './config.mjs';
+import { loadEffectiveConfig } from './effective-config.mjs';
 import { createJobStore } from './store.mjs';
 
 const MAX_LINKS = 5_000;
@@ -84,7 +85,7 @@ export function readLinkFile(filePath) {
 
 async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const config = loadJobsConfig();
+  const config = await loadEffectiveConfig();
   const store = createJobStore(config.jobsDbPath);
   try {
     const result = await importWhatsAppLinks({
