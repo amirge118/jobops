@@ -43,7 +43,7 @@ test('a missing tracker starts with the header; cell separators in names cannot 
   assert.match(result.markdown, /\| 001 \| 2026-10-05 \| A B \| Backend Engineer \| N\/A \| Applied \|/);
 });
 
-test('a database from before "applied" existed is migrated without losing decisions', (context) => {
+test('a database from before "applied" existed is migrated without losing decisions', async (context) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-decisions-migration-'));
   context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   const file = path.join(tempDir, 'jobs.db');
@@ -59,7 +59,7 @@ test('a database from before "applied" existed is migrated without losing decisi
 
   const store = createJobStore(file);
   context.after(() => store.close());
-  assert.deepEqual(store.listJobDecisions().map((item) => [item.jobKey, item.decision, item.company]), [['old', 'interested', 'Acme']]);
+  assert.deepEqual((await store.listJobDecisions()).map((item) => [item.jobKey, item.decision, item.company]), [['old', 'interested', 'Acme']]);
   const db = new Database(file);
   context.after(() => db.close());
   db.prepare("INSERT INTO job_decisions (job_key, decision, decided_at) VALUES ('new1', 'applied', 2), ('new2', 'not_interested', 3)").run();

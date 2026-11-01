@@ -12,18 +12,18 @@ function item(term) {
   return { keyword: term, term, category: 'tool', kind: 'experience_gap', importance: 'preferred', explanation: 'e', suggestion: 's', evidence: null };
 }
 
-function storeWithGaps(context, terms) {
+async function storeWithGaps(context, terms) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-gap-coverage-'));
   context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   const store = createJobStore(path.join(tempDir, 'jobs.db'));
   context.after(() => store.close());
-  const sighting = store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend', source: 'ats', seenAt: 100 });
-  store.saveEvaluation(sighting.jobKey, {
+  const sighting = await store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend', source: 'ats', seenAt: 100 });
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Acme', title: 'Backend', summary: 's', score: 4.2, fitLabel: 'מתאים', decisionReason: 'r',
     suitable: true, applyUrl: sighting.canonicalUrl, activeStatus: 'active',
     contentHash: 'c', profileHash: 'p', criteriaVersion: 'v1', evaluatedAt: 200,
   });
-  store.saveResumeGap(sighting.jobKey, { inputHash: 'h', analyzedAt: 300, analysis: { items: terms.map(item), employerPriorities: [] } });
+  await store.saveResumeGap(sighting.jobKey, { inputHash: 'h', analyzedAt: 300, analysis: { items: terms.map(item), employerPriorities: [] } });
   return store;
 }
 
@@ -39,7 +39,7 @@ function fakeCodex(coveredTerms, calls) {
 const context = (resume) => ({ resumeAvailable: true, resumeHash: `hash-of-${resume}`, currentResume: resume });
 
 test('terms the resume covers in other words are judged once per resume', async (t) => {
-  const store = storeWithGaps(t, ['MCP Servers', 'RabbitMQ', 'Kafka']);
+  const store = await storeWithGaps(t, ['MCP Servers', 'RabbitMQ', 'Kafka']);
   const calls = [];
   const checker = createGapCoverageChecker({ runCodex: fakeCodex(['MCP Servers'], calls) });
   const candidate = context('Built agents with Model Context Protocol (MCP) and Kafka.');
@@ -48,7 +48,7 @@ test('terms the resume covers in other words are judged once per resume', async 
   // Kafka is already matched as text, so Codex is asked only about the other two.
   assert.deepEqual(first, { status: 'complete', checked: 2, covered: 1 });
   assert.deepEqual(calls, [{ purpose: 'gap_coverage', items: 2 }]);
-  assert.deepEqual([...store.listGapTermCoverage(coverageKeyOf(candidate.resumeHash))],
+  assert.deepEqual([...await store.listGapTermCoverage(coverageKeyOf(candidate.resumeHash))],
     [[termKey('MCP Servers'), true], [termKey('RabbitMQ'), false]]);
 
   const again = await refreshGapCoverage({ store, checker, candidateContext: candidate });
@@ -57,17 +57,17 @@ test('terms the resume covers in other words are judged once per resume', async 
 });
 
 test('a new resume is judged from scratch and older answers are dropped', async (t) => {
-  const store = storeWithGaps(t, ['MCP Servers']);
+  const store = await storeWithGaps(t, ['MCP Servers']);
   const calls = [];
   const checker = createGapCoverageChecker({ runCodex: fakeCodex([], calls) });
   await refreshGapCoverage({ store, checker, candidateContext: context('Old resume text here.') });
   await refreshGapCoverage({ store, checker, candidateContext: context('New resume text here.') });
   assert.equal(calls.length, 2);
-  assert.equal(store.listGapTermCoverage(coverageKeyOf('hash-of-Old resume text here.')).size, 0);
+  assert.equal((await store.listGapTermCoverage(coverageKeyOf('hash-of-Old resume text here.'))).size, 0);
 });
 
 test('a term missing from the answer is asked about again next time', async (t) => {
-  const store = storeWithGaps(t, ['MCP Servers', 'RabbitMQ']);
+  const store = await storeWithGaps(t, ['MCP Servers', 'RabbitMQ']);
   const checker = createGapCoverageChecker({ runCodex: async () => ({ results: [{ id: 't1', covered: true }] }) });
   const result = await refreshGapCoverage({ store, checker, candidateContext: context('Some resume text.') });
   assert.equal(result.status, 'partial');
@@ -82,7 +82,7 @@ test('covered terms leave the personal area like terms the resume says verbatim'
 });
 
 test('no resume, no Codex call', async (t) => {
-  const store = storeWithGaps(t, ['MCP Servers']);
+  const store = await storeWithGaps(t, ['MCP Servers']);
   const calls = [];
   const result = await refreshGapCoverage({
     store, checker: createGapCoverageChecker({ runCodex: fakeCodex([], calls) }),

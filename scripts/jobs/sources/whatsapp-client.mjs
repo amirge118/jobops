@@ -220,7 +220,7 @@ export async function connectWhatsApp(authPath, {
         lastHistoryActivityAt = Date.now();
       });
 
-      const collect = (messages = [], eventType, { sessionId = null } = {}) => {
+      const collect = async (messages = [], eventType, { sessionId = null } = {}) => {
         const scopedMessages = configuredGroupJids ? messages.filter((message) => configuredGroupJids.has(message.key?.remoteJid)) : messages;
         const boundedMessages = scopedMessages.slice(0, 5_000);
         sock.historyDiagnostics.messages += boundedMessages.length;
@@ -255,7 +255,7 @@ export async function connectWhatsApp(authPath, {
           });
         }
         try {
-          onMessages?.(boundedMessages, sock);
+          await onMessages?.(boundedMessages, sock);
         } catch (error) {
           sock.ingressError = error;
           try { onIngressError?.(error, sock); }
@@ -271,18 +271,18 @@ export async function connectWhatsApp(authPath, {
         }
       };
 
-      sock.ev.on('messaging-history.set', ({ messages, chats, peerDataRequestSessionId }) => {
-        collect(messages, 'history', { sessionId: peerDataRequestSessionId });
+      sock.ev.on('messaging-history.set', async ({ messages, chats, peerDataRequestSessionId }) => {
+        await collect(messages, 'history', { sessionId: peerDataRequestSessionId });
         collectChats(chats);
       });
-      sock.ev.on('messages.upsert', ({ messages }) => {
+      sock.ev.on('messages.upsert', async ({ messages }) => {
         // Before scoping to the configured groups: the failures that wake the
         // phone can come from any chat.
         const failures = summarizeDecryptFailures(messages, { ownJid: sock.user?.id, trackedGroupJids: configuredGroupJids });
         if (failures.length) {
-          try { onDecryptFailures?.(failures); } catch { /* diagnostics must never break collection */ }
+          try { await onDecryptFailures?.(failures); } catch { /* diagnostics must never break collection */ }
         }
-        collect(messages, 'upsert');
+        await collect(messages, 'upsert');
       });
       sock.ev.on('chats.upsert', collectChats);
       sock.ev.on('chats.update', collectChats);

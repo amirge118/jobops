@@ -59,7 +59,7 @@ export function hasContinuityGap(previousHeartbeatAt, heartbeatAt, staleAfterMs 
   return Number(heartbeatAt) - Number(previousHeartbeatAt) > Math.max(10_000, Number(staleAfterMs) || 20_000);
 }
 
-export function discardExpiredWhatsAppBacklog({ store, retentionDays = 7, now = Date.now } = {}) {
+export async function discardExpiredWhatsAppBacklog({ store, retentionDays = 7, now = Date.now } = {}) {
   const days = Number(retentionDays);
   if (!Number.isFinite(days) || days < 1 || days > 365) {
     throw new Error('WhatsApp backlogRetentionDays must be between 1 and 365');
@@ -67,7 +67,7 @@ export function discardExpiredWhatsAppBacklog({ store, retentionDays = 7, now = 
   const discardedAt = Number(now());
   const beforeTs = discardedAt - days * DAY_MS;
   return {
-    discarded: store.discardOldWhatsAppMessages({ beforeTs, discardedAt }),
+    discarded: await store.discardOldWhatsAppMessages({ beforeTs, discardedAt }),
     beforeTs,
     retentionDays: days,
   };
@@ -93,12 +93,12 @@ export async function processNextHistoryRequest({
   sock,
   collectorRunId,
   fetchHistory = fetchGroupMessagesSince,
-  recordEvent = (stage, status, options = {}) => store.recordCollectorEvent(collectorRunId, {
+  recordEvent = async (stage, status, options = {}) => await store.recordCollectorEvent(collectorRunId, {
     stage, status, count: options.count, details: options.details,
   }),
   now = Date.now,
 } = {}) {
-  const request = store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: now() });
+  const request = await store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: now() });
   if (!request) return null;
   const groups = config.sources.whatsapp?.groups || [];
   const groupJids = new Set(groups.map((group) => group.jid));
@@ -112,7 +112,7 @@ export async function processNextHistoryRequest({
   for (const group of groups) {
     const requestedGroup = request.groups.find((item) => item.name === group.name);
     const requestedFrom = requestedGroup?.requestedFrom ?? request.fromTs;
-    store.updateWhatsAppHistoryRequest(request.id, { currentGroup: group.name, groupsCompleted: completedGroups + failedGroups });
+    await store.updateWhatsAppHistoryRequest(request.id, { currentGroup: group.name, groupsCompleted: completedGroups + failedGroups });
     recordEvent('history-request-sent', 'started', { details: { requestId: request.id, group: group.name, requestedFrom } });
     try {
       const messages = await fetchHistory(sock, group, requestedFrom, {
@@ -122,7 +122,7 @@ export async function processNextHistoryRequest({
         maxBatches: 20,
         totalTimeoutMs: 180_000,
       });
-      const ingress = queueIncomingMessages({ messages, configuredGroupJids: groupJids, store, sinceMs: requestedFrom });
+      const ingress = await queueIncomingMessages({ messages, configuredGroupJids: groupJids, store, sinceMs: requestedFrom });
       const coverage = sock.groupHistoryDiagnostics?.get(group.jid) || {};
       const status = coverage.status === 'complete' ? 'complete' : messages.length > 0 ? 'partial' : 'failed';
       if (status === 'complete') completedGroups += 1;
@@ -132,7 +132,7 @@ export async function processNextHistoryRequest({
       totals.duplicates += ingress.duplicates;
       totals.ignored += ingress.ignored;
       totals.rejected += ingress.rejected;
-      store.recordWhatsAppHistoryGroup(request.id, {
+      await store.recordWhatsAppHistoryGroup(request.id, {
         name: group.name,
         status,
         delivered: messages.length,
@@ -157,12 +157,12 @@ export async function processNextHistoryRequest({
     } catch (error) {
       failedGroups += 1;
       const failure = describeFailure(error, 'collection_failed');
-      store.recordWhatsAppHistoryGroup(request.id, { name: group.name, status: 'failed', reason: failure.code, requestedFrom });
+      await store.recordWhatsAppHistoryGroup(request.id, { name: group.name, status: 'failed', reason: failure.code, requestedFrom });
       recordEvent('history-request-failed', 'failed', { details: { requestId: request.id, group: group.name, ...failure } });
     }
     const finishedGroups = completedGroups + failedGroups;
     totals.completed = finishedGroups;
-    store.updateWhatsAppHistoryRequest(request.id, {
+    await store.updateWhatsAppHistoryRequest(request.id, {
       groupsCompleted: finishedGroups,
       messagesReceived: totals.received,
       messagesQueued: totals.queued,
@@ -174,12 +174,12 @@ export async function processNextHistoryRequest({
 
   const status = failedGroups === 0 ? 'complete' : completedGroups === 0 ? 'failed' : 'partial';
   const failure = status === 'failed' ? describeFailure(null, 'history_not_delivered') : null;
-  store.finishWhatsAppHistoryRequest(request.id, { status, failure, finishedAt: now() });
+  await store.finishWhatsAppHistoryRequest(request.id, { status, failure, finishedAt: now() });
   recordEvent('history-backfill', status, {
     count: totals.received,
     details: { requestId: request.id, groupsCompleted: totals.completed, groupsFailed: failedGroups, queued: totals.queued },
   });
-  return store.getWhatsAppHistoryRequest(request.id);
+  return await store.getWhatsAppHistoryRequest(request.id);
 }
 
 export async function runWhatsAppCollector({
@@ -199,8 +199,8 @@ export async function runWhatsAppCollector({
   const notify = notificationSettings(config).enabled;
   const groups = whatsapp.groups || [];
   const groupJids = new Set(groups.map((group) => group.jid));
-  const runId = Number(store.startCollectorRun({ groupsExpected: groups.length }));
-  store.requeueInterruptedWhatsAppHistoryRequests?.();
+  const runId = Number(await store.startCollectorRun({ groupsExpected: groups.length }));
+  await store.requeueInterruptedWhatsAppHistoryRequests?.();
   let stopping = false;
   let activeSock = null;
   let stopResolve;
@@ -212,16 +212,16 @@ export async function runWhatsAppCollector({
   let connectionActive = false;
   let lastHeartbeatTick = now();
 
-  const heartbeat = setInterval(() => {
+  const heartbeat = setInterval(async () => {
     try {
       const heartbeatAt = now();
       const staleAfterMs = Math.max(10_000, Number(collectorConfig.staleAfterMs || 20_000));
       if (connectionActive && hasContinuityGap(lastHeartbeatTick, heartbeatAt, staleAfterMs)) {
-        store.updateCollectorRun(runId, { status: 'connected', stage: 'connected', connectedAt: heartbeatAt });
-        store.recordCollectorEvent(runId, { stage: 'continuity-gap', status: 'warning',
+        await store.updateCollectorRun(runId, { status: 'connected', stage: 'connected', connectedAt: heartbeatAt });
+        await store.recordCollectorEvent(runId, { stage: 'continuity-gap', status: 'warning',
           details: { ...describeFailure(null, 'collector_gap'), gapMs: heartbeatAt - lastHeartbeatTick } });
       } else {
-        store.updateCollectorRun(runId);
+        await store.updateCollectorRun(runId);
       }
       lastHeartbeatTick = heartbeatAt;
     }
@@ -238,20 +238,20 @@ export async function runWhatsAppCollector({
     : [];
   for (const [signal, handler] of signalHandlers) process.on(signal, handler);
 
-  const record = (stage, status, options = {}) => {
-    store.updateCollectorRun(runId, { status, stage, ...(options.update || {}) });
-    store.recordCollectorEvent(runId, { stage, status, count: options.count, details: options.details });
+  const record = async (stage, status, options = {}) => {
+    await store.updateCollectorRun(runId, { status, stage, ...(options.update || {}) });
+    await store.recordCollectorEvent(runId, { stage, status, count: options.count, details: options.details });
   };
 
   try {
-    record('startup', 'starting');
-    const startupRetention = discardExpiredWhatsAppBacklog({
+    await record('startup', 'starting');
+    const startupRetention = await discardExpiredWhatsAppBacklog({
       store,
       retentionDays: collectorConfig.backlogRetentionDays ?? 7,
       now,
     });
     if (startupRetention.discarded > 0) {
-      store.recordCollectorEvent(runId, {
+      await store.recordCollectorEvent(runId, {
         stage: 'backlog-retention',
         status: 'complete',
         count: startupRetention.discarded,
@@ -259,7 +259,7 @@ export async function runWhatsAppCollector({
       });
     }
     while (!stopping) {
-      record(reconnects ? 'reconnect' : 'connecting', reconnects ? 'reconnecting' : 'connecting');
+      await record(reconnects ? 'reconnect' : 'connecting', reconnects ? 'reconnecting' : 'connecting');
       let closeResolve;
       const closePromise = new Promise((resolve) => { closeResolve = resolve; });
 
@@ -267,8 +267,8 @@ export async function runWhatsAppCollector({
         const connectPromise = connect(whatsapp.authAbsPath, {
           configuredGroupJids: groupJids,
           waitForHistory: false,
-          onQr() {
-            record('pairing', 'pairing_required', { details: describeFailure(null, 'pairing_required') });
+          async onQr() {
+            await record('pairing', 'pairing_required', { details: describeFailure(null, 'pairing_required') });
           },
           onConnectionUpdate(update, sock) {
             activeSock = sock;
@@ -277,18 +277,18 @@ export async function runWhatsAppCollector({
           onIngressError(error) {
             closeResolve({ error });
           },
-          onDecryptFailures(failures) {
-            store.recordCollectorEvent(runId, { stage: 'decrypt-failure', status: 'warning', count: failures.length, details: { failures } });
+          async onDecryptFailures(failures) {
+            await store.recordCollectorEvent(runId, { stage: 'decrypt-failure', status: 'warning', count: failures.length, details: { failures } });
           },
-          onMessages(messages, sock) {
-            const batch = queueIncomingMessages({ messages, configuredGroupJids: groupJids, store, sinceMs: 0 });
-            const retention = discardExpiredWhatsAppBacklog({
+          async onMessages(messages, sock) {
+            const batch = await queueIncomingMessages({ messages, configuredGroupJids: groupJids, store, sinceMs: 0 });
+            const retention = await discardExpiredWhatsAppBacklog({
               store,
               retentionDays: collectorConfig.backlogRetentionDays ?? 7,
               now,
             });
             if (retention.discarded > 0) {
-              store.recordCollectorEvent(runId, {
+              await store.recordCollectorEvent(runId, {
                 stage: 'backlog-retention',
                 status: 'complete',
                 count: retention.discarded,
@@ -298,7 +298,7 @@ export async function runWhatsAppCollector({
             const received = batch.queued + batch.duplicates + batch.ignored + batch.rejected;
             if (received === 0) return;
             const lastMessageAt = messages.reduce((latest, message) => Math.max(latest, Number(message.messageTimestamp || 0) * 1_000), 0);
-            store.updateCollectorRun(runId, {
+            await store.updateCollectorRun(runId, {
               messagesReceived: received,
               messagesQueued: batch.queued,
               duplicates: batch.duplicates,
@@ -306,7 +306,7 @@ export async function runWhatsAppCollector({
               rejected: batch.rejected,
               ...(lastMessageAt ? { lastMessageAt } : {}),
             });
-            store.recordCollectorEvent(runId, {
+            await store.recordCollectorEvent(runId, {
               stage: 'message-ingress',
               status: batch.rejected ? 'partial' : 'complete',
               count: received,
@@ -314,11 +314,11 @@ export async function runWhatsAppCollector({
             });
 
             if (!whatsapp.markRead) return;
-            const keys = messages.filter((message) =>
-              groupJids.has(message.key?.remoteJid) &&
-              message.key?.id && !message.key?.fromMe &&
-              ['pending', 'done'].includes(store.getMessageState(message.key.id)?.status),
-            ).map((message) => message.key);
+            const keys = [];
+            for (const message of messages) {
+              if (!groupJids.has(message.key?.remoteJid) || !message.key?.id || message.key?.fromMe) continue;
+              if (['pending', 'done'].includes((await store.getMessageState(message.key.id))?.status)) keys.push(message.key);
+            }
             if (!keys.length) return;
             receiptQueue = receiptQueue.then(async () => {
               let sent = 0;
@@ -326,13 +326,13 @@ export async function runWhatsAppCollector({
                 for (let offset = 0; offset < keys.length; offset += RECEIPT_BATCH_SIZE) {
                   const receiptBatch = keys.slice(offset, offset + RECEIPT_BATCH_SIZE);
                   await sock.readMessages(receiptBatch);
-                  store.markWhatsAppMessagesRead?.(receiptBatch, { readAt: now() });
+                  await store.markWhatsAppMessagesRead?.(receiptBatch, { readAt: now() });
                   sent += receiptBatch.length;
                 }
-                store.updateCollectorRun(runId, { receiptsSent: sent });
-                store.recordCollectorEvent(runId, { stage: 'read-receipts', status: 'complete', count: sent });
+                await store.updateCollectorRun(runId, { receiptsSent: sent });
+                await store.recordCollectorEvent(runId, { stage: 'read-receipts', status: 'complete', count: sent });
               } catch (error) {
-                store.recordCollectorEvent(runId, { stage: 'read-receipts', status: 'failed', count: sent, details: describeFailure(error, 'read_failed') });
+                await store.recordCollectorEvent(runId, { stage: 'read-receipts', status: 'failed', count: sent, details: describeFailure(error, 'read_failed') });
               }
             });
           },
@@ -344,12 +344,12 @@ export async function runWhatsAppCollector({
         connectionActive = true;
         const connectedAt = now();
         lastConnectedAt = connectedAt;
-        record('connected', 'connected', { update: { connectedAt } });
+        await record('connected', 'connected', { update: { connectedAt } });
 
         const verification = await verifyConfiguredGroups(config, connected);
         const safeGroups = verification.map(({ name, found, liveName, participants }) => ({ name, found, liveName, participants }));
         const found = safeGroups.filter((group) => group.found).length;
-        record('group-verification', found === groups.length ? 'complete' : 'partial', {
+        await record('group-verification', found === groups.length ? 'complete' : 'partial', {
           count: found,
           update: { status: 'connected', groupsFound: found, groupsExpected: groups.length },
           details: { groups: safeGroups },
@@ -368,7 +368,7 @@ export async function runWhatsAppCollector({
           if (notify) {
             const result = await sendPendingNotifications({ store, sock: connected, ownJid: ownJidOf(connected), now });
             if (result.sent || result.failed) {
-              store.recordCollectorEvent(runId, { stage: 'notifications', status: result.failed ? 'partial' : 'complete', count: result.sent, details: result });
+              await store.recordCollectorEvent(runId, { stage: 'notifications', status: result.failed ? 'partial' : 'complete', count: result.sent, details: result });
             }
           }
         }
@@ -382,31 +382,31 @@ export async function runWhatsAppCollector({
           'network_error',
         );
         const retryable = shouldRetryWhatsAppConnection(statusCode, lastDisconnect?.error);
-        store.recordCollectorEvent(runId, {
+        await store.recordCollectorEvent(runId, {
           stage: 'connection-closed', status: retryable ? 'warning' : 'failed',
           details: { ...failure, ...(statusCode ? { statusCode } : {}), retryable, stream: streamErrorSummary(lastDisconnect?.error) },
         });
 
         if (statusCode === DisconnectReason.loggedOut) {
-          record('pairing', 'pairing_required', { details: describeFailure(null, 'pairing_required') });
+          await record('pairing', 'pairing_required', { details: describeFailure(null, 'pairing_required') });
           break;
         }
         if (statusCode === DisconnectReason.connectionReplaced) {
           const replaced = describeFailure(new Error('connection replaced'));
-          store.finishCollectorRun(runId, { status: 'failed', failure: replaced });
+          await store.finishCollectorRun(runId, { status: 'failed', failure: replaced });
           return { id: runId, status: 'failed', failure: replaced };
         }
         if (!retryable) {
-          store.finishCollectorRun(runId, { status: 'failed', failure });
+          await store.finishCollectorRun(runId, { status: 'failed', failure });
           return { id: runId, status: 'failed', failure };
         }
       } catch (error) {
         connectionActive = false;
         if (stopping) break;
         const failure = describeFailure(error, 'network_error');
-        store.recordCollectorEvent(runId, { stage: 'connect', status: 'failed', details: failure });
+        await store.recordCollectorEvent(runId, { stage: 'connect', status: 'failed', details: failure });
         if (['pairing_required', 'connection_replaced', 'collector_already_running'].includes(failure.code)) {
-          store.finishCollectorRun(runId, { status: failure.code === 'pairing_required' ? 'pairing_required' : 'failed', failure });
+          await store.finishCollectorRun(runId, { status: failure.code === 'pairing_required' ? 'pairing_required' : 'failed', failure });
           return { id: runId, status: failure.code === 'pairing_required' ? 'pairing_required' : 'failed', failure };
         }
       } finally {
@@ -418,24 +418,24 @@ export async function runWhatsAppCollector({
       reconnects += 1;
       failureStreak = nextFailureStreak(failureStreak, lastConnectedAt == null ? null : now() - lastConnectedAt);
       lastConnectedAt = null;
-      store.updateCollectorRun(runId, { reconnects: 1 });
+      await store.updateCollectorRun(runId, { reconnects: 1 });
       const delayMs = reconnectDelay(failureStreak, {
         baseMs: Number(collectorConfig.reconnectBaseMs || 1_000),
         maxMs: Number(collectorConfig.reconnectMaxMs || 30_000),
       });
-      store.recordCollectorEvent(runId, { stage: 'reconnect-wait', status: 'started', details: { attempt: reconnects, failureStreak, delayMs } });
+      await store.recordCollectorEvent(runId, { stage: 'reconnect-wait', status: 'started', details: { attempt: reconnects, failureStreak, delayMs } });
       await Promise.race([sleep(delayMs), stopPromise]);
     }
 
     await receiptQueue;
-    store.recordCollectorEvent(runId, { stage: 'shutdown', status: 'complete' });
-    store.finishCollectorRun(runId, { status: 'stopped' });
+    await store.recordCollectorEvent(runId, { stage: 'shutdown', status: 'complete' });
+    await store.finishCollectorRun(runId, { status: 'stopped' });
     return { id: runId, status: 'stopped' };
   } catch (error) {
     const failure = describeFailure(error);
     try {
-      store.recordCollectorEvent(runId, { stage: 'collector', status: 'failed', details: failure });
-      store.finishCollectorRun(runId, { status: 'failed', failure });
+      await store.recordCollectorEvent(runId, { stage: 'collector', status: 'failed', details: failure });
+      await store.finishCollectorRun(runId, { status: 'failed', failure });
     } catch { /* The original durable-storage failure is still returned. */ }
     return { id: runId, status: 'failed', failure };
   } finally {
@@ -454,7 +454,7 @@ export async function startWhatsAppCollector() {
     console.log(`WhatsApp collector #${result.id}: ${result.status}`);
     if (result.status === 'failed' && result.failure?.code !== 'connection_replaced') process.exitCode = 1;
   } finally {
-    try { store.pruneDiagnostics(); }
+    try { await store.pruneDiagnostics(); }
     catch { console.error('JobOps diagnostic retention unavailable; existing records were preserved.'); }
     store.close();
     lock.release();

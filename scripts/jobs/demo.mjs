@@ -70,7 +70,7 @@ const DEMO_DECISIONS = [
   { company: 'Northwind Bank', title: 'Senior Backend Engineer', score: 4.7, decision: 'company_candidate', daysAgo: 12, source: 'ATS: demo', fit: { cvMatch: 5, seniority: 5, roleScope: 5, location: 4, sector: 5 } },
 ];
 
-export function createDemoEnvironment({ rootDir, now = Date.now() }) {
+export async function createDemoEnvironment({ rootDir, now = Date.now() }) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-demo-'));
   const config = {
     rootDir,
@@ -91,22 +91,22 @@ export function createDemoEnvironment({ rootDir, now = Date.now() }) {
     browser: { application: 'Google Chrome' },
   };
   const store = createJobStore(config.jobsDbPath);
-  store.syncLinkedInSearches(config.sources.linkedin.searches, now);
-  const [backendSearch, analystSearch] = store.listLinkedInSearches();
+  await store.syncLinkedInSearches(config.sources.linkedin.searches, now);
+  const [backendSearch, analystSearch] = await store.listLinkedInSearches();
   const backendSummary = {
     status: 'complete', reason: null, endedBy: 'end_of_results', capped: false, pages: 2,
     window: { from: now - 5 * 60 * 60 * 1000, to: now - 60_000, basis: 'progress', mode: 'auto' },
     found: 14, new: 3, known: 10, filtered: 1,
   };
-  store.recordLinkedInSearchAttempt({ searchId: backendSearch.id, queryHash: backendSearch.queryHash, status: 'complete',
+  await store.recordLinkedInSearchAttempt({ searchId: backendSearch.id, queryHash: backendSearch.queryHash, status: 'complete',
     summary: backendSummary, coveredUntil: now - 60_000, attemptedAt: now - 60_000 });
   const analystSummary = { ...backendSummary, endedBy: 'no_matches_fallback', pages: 0, found: 0, new: 0, known: 0, filtered: 0 };
-  store.recordLinkedInSearchAttempt({ searchId: analystSearch.id, queryHash: analystSearch.queryHash, status: 'complete',
+  await store.recordLinkedInSearchAttempt({ searchId: analystSearch.id, queryHash: analystSearch.queryHash, status: 'complete',
     summary: analystSummary, coveredUntil: now - 60_000, attemptedAt: now - 60_000 });
 
-  DEMO_JOBS.forEach((job, index) => {
+  for (const [index, job] of DEMO_JOBS.entries()) {
     const linkedin = index === 1;
-    const sighting = store.recordSighting({
+    const sighting = await store.recordSighting({
       // Synthetic URL even for the LinkedIn-sourced row: demo data never points at a real posting.
       url: `https://example.com/jobs/demo-${index + 1}`,
       company: job.company,
@@ -114,7 +114,7 @@ export function createDemoEnvironment({ rootDir, now = Date.now() }) {
       source: linkedin ? 'LinkedIn: Backend' : index % 2 === 0 ? `WhatsApp: ${GROUPS[0]}` : 'ATS: demo',
       seenAt: now - index * 60 * 60 * 1000,
     });
-    store.saveEvaluation(sighting.jobKey, {
+    await store.saveEvaluation(sighting.jobKey, {
       company: job.company,
       title: job.title,
       summary: job.summary,
@@ -130,31 +130,31 @@ export function createDemoEnvironment({ rootDir, now = Date.now() }) {
       criteriaVersion: 'demo-v1',
       evaluatedAt: now - index * 60 * 60 * 1000,
     });
-  });
+  }
 
   // Past decisions, so the statistics page has something to show.
-  DEMO_DECISIONS.forEach((item, index) => {
+  for (const [index, item] of DEMO_DECISIONS.entries()) {
     const url = `https://example.com/jobs/demo-decided-${index + 1}`;
-    const sighting = store.recordSighting({
+    const sighting = await store.recordSighting({
       url, company: item.company, title: item.title, source: item.source, seenAt: now - item.daysAgo * DAY_MS,
     });
-    store.saveEvaluation(sighting.jobKey, {
+    await store.saveEvaluation(sighting.jobKey, {
       company: item.company, title: item.title, summary: '', score: item.score, fitLabel: 'מתאים',
       decisionReason: '', fitBreakdown: item.fit, suitable: true, applyUrl: url, activeStatus: 'active',
       contentHash: `demo-decided-${index}`, profileHash: 'demo-profile', criteriaVersion: 'demo-v1',
       evaluatedAt: now - item.daysAgo * DAY_MS,
     });
-    store.decideJob(sighting.jobKey, item.decision, now - item.daysAgo * DAY_MS + 60_000);
-  });
+    await store.decideJob(sighting.jobKey, item.decision, now - item.daysAgo * DAY_MS + 60_000);
+  }
 
-  const rejected = store.recordSighting({
+  const rejected = await store.recordSighting({
     url: 'https://example.com/jobs/demo-frontend',
     company: 'Canvas Studio',
     title: 'Frontend Engineer',
     source: 'whatsapp',
     seenAt: now - 5 * 60 * 60 * 1000,
   });
-  store.saveEvaluation(rejected.jobKey, {
+  await store.saveEvaluation(rejected.jobKey, {
     company: 'Canvas Studio', title: 'Frontend Engineer', summary: 'פיתוח ממשקי Web.',
     score: 2.7, fitLabel: 'לא מתאים', decisionReason: 'התפקיד מחוץ לתחומי המטרה.',
     fitBreakdown: null, suitable: false, applyUrl: rejected.canonicalUrl,
@@ -162,13 +162,13 @@ export function createDemoEnvironment({ rootDir, now = Date.now() }) {
     criteriaVersion: 'demo-v1', evaluatedAt: now - 5 * 60 * 60 * 1000,
   });
 
-  const runId = store.startRun({
+  const runId = await store.startRun({
     fromTs: now - 24 * 60 * 60 * 1000,
     toTs: now,
     sources: ['ats', 'whatsapp', 'linkedin'],
     startedAt: now - 90_000,
   });
-  store.finishRun(runId, {
+  await store.finishRun(runId, {
     status: 'success',
     finishedAt: now - 30_000,
     details: {

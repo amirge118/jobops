@@ -19,13 +19,13 @@ export function formatJobNotification(job, { dashboardUrl = DEFAULTS.dashboardUr
 }
 
 // Returns how many were newly queued; a job already queued is skipped.
-export function queueJobNotifications({ store, jobs, config, now = Date.now() }) {
+export async function queueJobNotifications({ store, jobs, config, now = Date.now() }) {
   const settings = notificationSettings(config);
   if (!settings.enabled) return 0;
   let queued = 0;
   for (const job of jobs) {
     if (!(Number(job.score) >= settings.minScore)) continue;
-    if (store.enqueueJobNotification({ jobKey: job.jobKey, text: formatJobNotification(job, settings), at: now })) queued += 1;
+    if (await store.enqueueJobNotification({ jobKey: job.jobKey, text: formatJobNotification(job, settings), at: now })) queued += 1;
   }
   return queued;
 }
@@ -36,13 +36,13 @@ export async function sendPendingNotifications({ store, sock, ownJid, now = Date
   if (!ownJid) return { sent: 0, failed: 0 };
   let sent = 0;
   let failed = 0;
-  for (const item of store.listPendingNotifications({ now: now() })) {
+  for (const item of await store.listPendingNotifications({ now: now() })) {
     try {
       await sock.sendMessage(ownJid, { text: item.text });
-      store.markNotificationSent(item.id, now());
+      await store.markNotificationSent(item.id, now());
       sent += 1;
     } catch (error) {
-      store.markNotificationFailed(item.id, error?.message);
+      await store.markNotificationFailed(item.id, error?.message);
       failed += 1;
     }
   }

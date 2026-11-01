@@ -16,9 +16,9 @@ function temporaryDb(context) {
   return path.join(dir, 'jobs.db');
 }
 
-function suitableJob(store, { url, company, title = 'Backend Engineer', source = 'ATS: greenhouse-api' }) {
-  const sighting = store.recordSighting({ url, company, title, source });
-  store.saveEvaluation(sighting.jobKey, {
+async function suitableJob(store, { url, company, title = 'Backend Engineer', source = 'ATS: greenhouse-api' }) {
+  const sighting = await store.recordSighting({ url, company, title, source });
+  await store.saveEvaluation(sighting.jobKey, {
     company, title, summary: 's', score: 4.2, fitLabel: 'מתאים', decisionReason: 'r', suitable: true,
     applyUrl: url, activeStatus: 'active', contentHash: 'c', profileHash: 'p1', criteriaVersion: 'v1', evaluatedAt: 1,
   });
@@ -29,24 +29,24 @@ const scorerCounting = (calls) => ({
   profileHash: 'p1',
   scoreBatchSettled: async (items, { onProgress }) => {
     calls.push(...items.map((item) => item.candidate.jobKey));
-    onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
+    await onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
   },
 });
 
-test('"company not interesting" blocks that company from now on; other decisions do not', (context) => {
+test('"company not interesting" blocks that company from now on; other decisions do not', async (context) => {
   const store = createJobStore(temporaryDb(context));
   context.after(() => store.close());
-  const blocked = suitableJob(store, { url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme Ltd' });
-  const liked = suitableJob(store, { url: 'https://boards.greenhouse.io/beta/jobs/1', company: 'Beta' });
+  const blocked = await suitableJob(store, { url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme Ltd' });
+  const liked = await suitableJob(store, { url: 'https://boards.greenhouse.io/beta/jobs/1', company: 'Beta' });
 
-  assert.equal(store.decideJob(blocked, 'company_not_interesting'), true);
-  assert.equal(store.decideJob(liked, 'not_relevant'), true);
-  assert.equal(store.isCompanyBlocked('Acme Technologies'), true, 'matched on the same normalized company key');
-  assert.equal(store.isCompanyBlocked('Beta'), false);
-  assert.equal(store.isCompanyBlocked(''), false);
+  assert.equal(await store.decideJob(blocked, 'company_not_interesting'), true);
+  assert.equal(await store.decideJob(liked, 'not_relevant'), true);
+  assert.equal(await store.isCompanyBlocked('Acme Technologies'), true, 'matched on the same normalized company key');
+  assert.equal(await store.isCompanyBlocked('Beta'), false);
+  assert.equal(await store.isCompanyBlocked(''), false);
 });
 
-test('decisions made before the block existed are not backfilled', (context) => {
+test('decisions made before the block existed are not backfilled', async (context) => {
   const dbPath = temporaryDb(context);
   const raw = new Database(dbPath);
   raw.exec(`CREATE TABLE job_decisions (job_key TEXT PRIMARY KEY, decision TEXT NOT NULL, decided_at INTEGER NOT NULL,
@@ -56,19 +56,19 @@ test('decisions made before the block existed are not backfilled', (context) => 
   raw.close();
   const store = createJobStore(dbPath);
   context.after(() => store.close());
-  assert.equal(store.isCompanyBlocked('Palo Alto Networks'), false);
+  assert.equal(await store.isCompanyBlocked('Palo Alto Networks'), false);
 });
 
 test('a blocked company is rejected before fetch when listed, and before scoring when only its page names it', async (context) => {
   const store = createJobStore(temporaryDb(context));
   context.after(() => store.close());
-  store.decideJob(suitableJob(store, { url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme' }), 'company_not_interesting');
+  await store.decideJob(await suitableJob(store, { url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme' }), 'company_not_interesting');
 
-  const listed = { ...store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/2', company: 'Acme', title: 'Platform Engineer', source: 'ATS: greenhouse-api' }),
+  const listed = { ...await store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/2', company: 'Acme', title: 'Platform Engineer', source: 'ATS: greenhouse-api' }),
     url: 'https://boards.greenhouse.io/acme/jobs/2', company: 'Acme', title: 'Platform Engineer', source: 'ATS: greenhouse-api' };
-  const shared = { ...store.recordSighting({ url: 'https://hiremetech.com/job/9', source: 'WhatsApp: Group A' }),
+  const shared = { ...await store.recordSighting({ url: 'https://hiremetech.com/job/9', source: 'WhatsApp: Group A' }),
     url: 'https://hiremetech.com/job/9', source: 'WhatsApp: Group A' };
-  const other = { ...store.recordSighting({ url: 'https://hiremetech.com/job/10', source: 'WhatsApp: Group A' }),
+  const other = { ...await store.recordSighting({ url: 'https://hiremetech.com/job/10', source: 'WhatsApp: Group A' }),
     url: 'https://hiremetech.com/job/10', source: 'WhatsApp: Group A' };
   const fetched = [];
   const scored = [];
@@ -91,7 +91,7 @@ test('a blocked company is rejected before fetch when listed, and before scoring
   assert.equal(outcomes.get(listed.jobKey).status, 'filtered');
   assert.equal(outcomes.get(shared.jobKey).status, 'filtered');
   assert.deepEqual(scored, [other.jobKey]);
-  assert.equal(store.getJob(shared.jobKey).suitable, 0);
+  assert.equal((await store.getJob(shared.jobKey)).suitable, 0);
 });
 
 test('data roles are filtered out by title, backend roles still pass', () => {

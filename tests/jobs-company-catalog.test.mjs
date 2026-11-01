@@ -15,12 +15,12 @@ test('company catalogue loads tracked companies and treats a missing file as emp
   assert.deepEqual(loadConfiguredCompanyEntries(rootDir, 'missing.yml'), []);
 });
 
-test('catalogue sync delegates to the store without making the file authoritative', (context) => {
+test('catalogue sync delegates to the store without making the file authoritative', async (context) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-company-sync-'));
   context.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(rootDir, 'portals.yml'), `tracked_companies:\n  - name: Example\n    careers_url: https://jobs.lever.co/example\n`);
   const calls = [];
-  const result = syncConfiguredCompanyEntries({
+  const result = await syncConfiguredCompanyEntries({
     importConfiguredCompanies(entries) {
       calls.push(entries);
       return { imported: entries.length };

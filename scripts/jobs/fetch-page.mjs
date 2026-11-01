@@ -331,15 +331,15 @@ export function createJobPageFetcher({
     if (!listed.masked && listed.targetUrl) return apiResult;
     let target = null;
     if (!target) {
-      const cached = store.getHireMeTechTarget?.(jobId);
+      const cached = await store.getHireMeTechTarget?.(jobId);
       const retryDue = cached && !cached.target_url && now() - Number(cached.resolved_at) >= HIREMETECH_RETRY_MS;
       if (cached && !retryDue) {
         target = { company: cached.company || listed.company, targetUrl: cached.target_url, method: cached.method };
       } else if (hireMeTech) {
         const resolved = await hireMeTech.resolve(jobId);
-        onHireMeTechResolve(resolved);
+        await onHireMeTechResolve(resolved);
         if (['resolved', 'masked', 'failed'].includes(resolved.status)) {
-          store.saveHireMeTechTarget?.(jobId, {
+          await store.saveHireMeTechTarget?.(jobId, {
             company: resolved.company || null, targetUrl: resolved.targetUrl || null, method: resolved.method || null,
             error: resolved.status === 'resolved' ? null : resolved.error || resolved.status, at: now(),
           });
@@ -377,7 +377,7 @@ export function createJobPageFetcher({
     const canonicalUrl = canonicalizeJobUrl(url);
     if (!canonicalUrl) throw new Error(`Invalid job URL: ${url}`);
 
-    const cached = store.getFreshPage(canonicalUrl, { ttlMs: cacheTtlMs });
+    const cached = await store.getFreshPage(canonicalUrl, { ttlMs: cacheTtlMs });
     // Uncertain pages are dependency failures, not final decisions. Retry them on the next run.
     if (cached && cached.status !== 'uncertain') {
       return {
@@ -401,7 +401,7 @@ export function createJobPageFetcher({
         content: '',
       };
       const contentHash = hashContent(result.content);
-      store.savePage({ canonicalUrl, ...result, contentHash });
+      await store.savePage({ canonicalUrl, ...result, contentHash });
       return { canonicalUrl, ...result, contentHash, fromCache: false };
     }
 
@@ -461,7 +461,7 @@ export function createJobPageFetcher({
       }
 
       const contentHash = hashContent(result.content);
-      store.savePage({ canonicalUrl, ...result, contentHash });
+      await store.savePage({ canonicalUrl, ...result, contentHash });
       return { canonicalUrl, ...result, contentHash, fromCache: false };
     }
 
@@ -502,7 +502,7 @@ export function createJobPageFetcher({
         clearTimeout(timer);
       }
       const contentHash = hashContent(result.content);
-      store.savePage({ canonicalUrl, ...result, contentHash });
+      await store.savePage({ canonicalUrl, ...result, contentHash });
       return { canonicalUrl, ...result, contentHash, fromCache: false };
     }
 
@@ -543,7 +543,7 @@ export function createJobPageFetcher({
         clearTimeout(timer);
       }
       const contentHash = hashContent(result.content);
-      store.savePage({ canonicalUrl, ...result, contentHash });
+      await store.savePage({ canonicalUrl, ...result, contentHash });
       return { canonicalUrl, ...result, contentHash, fromCache: false };
     }
 
@@ -576,16 +576,16 @@ export function createJobPageFetcher({
           reason: 'The hourly LinkedIn request limit shared by all runs was reached; reading was postponed.',
         };
       };
-      if (linkedin.hourlyFull || (linkedinGate && !linkedinGate.allow())) return hourlyFull();
+      if (linkedin.hourlyFull || (linkedinGate && !await linkedinGate.allow())) return hourlyFull();
       if (linkedin.fetched > 0) {
         const [min, max] = linkedin.detailDelayMs || [2_000, 4_000];
         await sleep(Math.round(min + Math.random() * Math.max(0, max - min)));
         // Another process may have used the hour while this one waited.
-        if (linkedinGate && !linkedinGate.allow()) return hourlyFull();
+        if (linkedinGate && !await linkedinGate.allow()) return hourlyFull();
       }
       linkedin.fetched += 1;
-      linkedinGate?.record('posting');
-      onLinkedInRequest();
+      await linkedinGate?.record('posting');
+      await onLinkedInRequest();
       let result;
       try {
         const postingUrl = `${LINKEDIN_POSTING_ENDPOINT}/${linkedinId}`;
@@ -598,15 +598,15 @@ export function createJobPageFetcher({
           const waitedMs = retryAfterMs(response.retryAfter);
           const firstRefusal = { status: 429, retryAfter: response.retryAfter, waitedMs };
           await sleep(waitedMs);
-          if (linkedinGate && !linkedinGate.allow()) {
-            onLinkedInRefusal({ ...firstRefusal, recovered: false, deferred: 'hourly_limit' });
+          if (linkedinGate && !await linkedinGate.allow()) {
+            await onLinkedInRefusal({ ...firstRefusal, recovered: false, deferred: 'hourly_limit' });
             return hourlyFull();
           }
-          linkedinGate?.record('posting');
-          onLinkedInRequest();
+          await linkedinGate?.record('posting');
+          await onLinkedInRequest();
           response = await fetchWithTimeout(fetchImpl, postingUrl, { timeoutMs: FETCH_TIMEOUT_MS });
           linkedin.lastRefusal = { ...firstRefusal, retryStatus: response.status };
-          if (response.status !== 429) onLinkedInRefusal({ ...firstRefusal, recovered: true, retryStatus: response.status });
+          if (response.status !== 429) await onLinkedInRefusal({ ...firstRefusal, recovered: true, retryStatus: response.status });
         }
         const posting = response.status === 200 ? parsePostingPage(response.html) : null;
         if (response.status === 404 || response.status === 410) {
@@ -615,8 +615,8 @@ export function createJobPageFetcher({
           result = { status: 'expired', code: 'linkedin_closed', reason: 'LinkedIn marks the posting as no longer accepting applications.', content: '' };
         } else if (posting && posting.description.length >= 200) {
           if (posting.applyUrl) {
-            const twin = store.recordLinkedInExternalUrl?.(linkedinId, posting.applyUrl);
-            if (twin) store.markDuplicateUrl?.(canonicalUrl, twin);
+            const twin = await store.recordLinkedInExternalUrl?.(linkedinId, posting.applyUrl);
+            if (twin) await store.markDuplicateUrl?.(canonicalUrl, twin);
           }
           result = {
             status: 'active', code: 'linkedin_posting_api', reason: 'Loaded from the LinkedIn public posting page.', content: linkedinContent(posting),
@@ -651,7 +651,7 @@ export function createJobPageFetcher({
       }
       result.finalUrl = canonicalUrl;
       const contentHash = hashContent(result.content);
-      store.savePage({ canonicalUrl, ...result, contentHash });
+      await store.savePage({ canonicalUrl, ...result, contentHash });
       return { canonicalUrl, ...result, contentHash, fromCache: false };
     }
 
@@ -691,7 +691,7 @@ export function createJobPageFetcher({
     }
 
     const contentHash = hashContent(content);
-    store.savePage({
+    await store.savePage({
       canonicalUrl,
       finalUrl,
       status: liveness.result,

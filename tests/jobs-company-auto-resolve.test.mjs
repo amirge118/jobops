@@ -125,16 +125,16 @@ test('a candidate that only has someone else\'s board, or only job boards, gets 
   assert.deepEqual(platform, { status: 'unscannable', reason: 'unsupported_platform', detail: 'Oracle Recruiting' });
 });
 
-test('the store lists due candidates and records outcomes with a retry time', () => {
+test('the store lists due candidates and records outcomes with a retry time', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-auto-resolve-'));
   const store = createJobStore(path.join(dir, 'jobs.db'));
-  const { company } = store.upsertCompanyCandidate({ name: 'Acme', jobUrl: 'https://acme.example/careers', discoverySource: 'manual' });
-  assert.deepEqual(store.listCompaniesDueForAutoResolve({ now: 1_000 }).map((item) => item.name), ['Acme']);
+  const { company } = await store.upsertCompanyCandidate({ name: 'Acme', jobUrl: 'https://acme.example/careers', discoverySource: 'manual' });
+  assert.deepEqual((await store.listCompaniesDueForAutoResolve({ now: 1_000 })).map((item) => item.name), ['Acme']);
 
-  store.recordAutoResolve(company.id, { status: 'unscannable', reason: 'no_jobs_found', detail: 'https://acme.example/careers', at: 1_000, nextAt: 5_000 });
-  assert.deepEqual(store.listCompaniesDueForAutoResolve({ now: 2_000 }), []);
-  assert.equal(store.listCompaniesDueForAutoResolve({ now: 6_000 }).length, 1);
-  assert.deepEqual(store.getCompany(company.id).autoResolve, {
+  await store.recordAutoResolve(company.id, { status: 'unscannable', reason: 'no_jobs_found', detail: 'https://acme.example/careers', at: 1_000, nextAt: 5_000 });
+  assert.deepEqual(await store.listCompaniesDueForAutoResolve({ now: 2_000 }), []);
+  assert.equal((await store.listCompaniesDueForAutoResolve({ now: 6_000 })).length, 1);
+  assert.deepEqual((await store.getCompany(company.id)).autoResolve, {
     status: 'unscannable', reason: 'no_jobs_found', detail: 'https://acme.example/careers', checkedAt: 1_000, nextAt: 5_000,
   });
   store.close();

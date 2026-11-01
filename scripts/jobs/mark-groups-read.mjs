@@ -14,7 +14,7 @@ async function main() {
     if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
 
     store = createJobStore(config.jobsDbPath);
-    const collector = store.getCollectorStatus();
+    const collector = await store.getCollectorStatus();
     if (collector && ['starting', 'connecting', 'connected', 'reconnecting', 'pairing_required', 'unconfirmed'].includes(collector.status)) {
       console.log(`Collector #${collector.id} מנהל אישורי קריאה לאחר שמירת ההודעות; לא נפתח חיבור WhatsApp נוסף.`);
       return;

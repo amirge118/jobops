@@ -24,6 +24,9 @@ function tempDb(context) {
   return db;
 }
 
+// The tests seed through a writable handle and read through a read-only store, like /pulse does.
+const readStore = (db) => createJobStore(db.name, { readonly: true });
+
 const keys = (signals) => signals.map((signal) => signal.key);
 
 test('launchd rows are matched to the expected agents', () => {
@@ -110,7 +113,7 @@ test('a logged-out collector says pairing is required; night-time silence is not
   assert.deepEqual(keys(deriveSignals({ collector: { status: 'connected', heartbeatMinutesAgo: 1 }, whatsapp: { lastGroupMessageMinutesAgo: 400 } }, { now: night })), []);
 });
 
-test('the snapshot reads the real schema: LinkedIn requests, deliverable vs expired alerts, reads per source', (context) => {
+test('the snapshot reads the real schema: LinkedIn requests, deliverable vs expired alerts, reads per source', async (context) => {
   const db = tempDb(context);
   const now = NOON;
   db.prepare('INSERT INTO linkedin_requests (at, kind) VALUES (?, ?)').run(now - 10 * MIN, 'posting');
@@ -122,7 +125,7 @@ test('the snapshot reads the real schema: LinkedIn requests, deliverable vs expi
   insertJob.run('li', 'https://www.linkedin.com/jobs/view/4400000001', 'https://www.linkedin.com/jobs/view/4400000001', '[]', now - HOUR, now - HOUR, now - HOUR, now - HOUR);
   insertJob.run('ats', 'https://boards.greenhouse.io/x/jobs/1', 'https://boards.greenhouse.io/x/jobs/1', '["ATS: greenhouse"]', now - HOUR, now - HOUR, now - HOUR, null);
 
-  const pulse = collectPulse({ db, config: { sources: { linkedin: { limits: { maxRequestsPerHour: 10 } } } }, now, launchctlText: '', egress: { warp: 'off' } });
+  const pulse = await collectPulse({ store: readStore(db), config: { sources: { linkedin: { limits: { maxRequestsPerHour: 10 } } } }, now, launchctlText: '', egress: { warp: 'off' } });
   assert.deepEqual(pulse.linkedin.requests.last1h, [{ kind: 'posting', n: 1 }]);
   assert.equal(pulse.linkedin.postingsEvaluated24h, 1);
   assert.deepEqual(pulse.alerts, { unsent: 1, oldestUnsentMinutes: 120, expiredUnsentLast7d: 1 });
@@ -137,25 +140,23 @@ test('the snapshot reads the real schema: LinkedIn requests, deliverable vs expi
   }
 });
 
-test('LinkedIn refusals are kept with the load before them, and do not count toward the cap', (context) => {
+test('LinkedIn refusals are kept with the load before them, and do not count toward the cap', async (context) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-pulse-refusal-'));
   context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const store = createJobStore(path.join(dir, 'jobs.db'));
   context.after(() => store.close());
   const at = NOON - 30 * MIN;
   // A posting 7 hours earlier: the request log covers enough time to judge searches.
-  store.recordLinkedInRequest({ kind: 'posting', at: at - 7 * HOUR });
-  for (const offset of [9, 6, 3]) store.recordLinkedInRequest({ kind: 'posting', at: at - offset * MIN });
-  store.noteLinkedInBlock('rate_limited', { at, cooldownMs: 20 * MIN });
-  assert.equal(store.countLinkedInRequests({ since: 0 }), 4, 'the refusal is history, not a request');
+  await store.recordLinkedInRequest({ kind: 'posting', at: at - 7 * HOUR });
+  for (const offset of [9, 6, 3]) await store.recordLinkedInRequest({ kind: 'posting', at: at - offset * MIN });
+  await store.noteLinkedInBlock('rate_limited', { at, cooldownMs: 20 * MIN });
+  assert.equal(await store.countLinkedInRequests({ since: 0 }), 4, 'the refusal is history, not a request');
 
-  const db = new Database(path.join(dir, 'jobs.db'), { readonly: true });
-  context.after(() => db.close());
-  const pulse = collectPulse({ db, config: { sources: { linkedin: { limits: { maxRequestsPerHour: 10 } } } }, now: NOON, launchctlText: '' });
+  const pulse = await collectPulse({ store, config: { sources: { linkedin: { limits: { maxRequestsPerHour: 10 } } } }, now: NOON, launchctlText: '' });
   assert.deepEqual(pulse.linkedin.requests.refusals, [{ at: new Date(at).toISOString(), reason: 'rate_limited', lastHour: 3, last10min: 3 }]);
   // A 429 the run recovered from is history, not a problem.
-  store.recordLinkedInRefusal({ reason: 'rate_limited', detail: { status: 429, retryAfter: '30', recovered: true }, at: at + MIN });
-  const later = collectPulse({ db, config: { sources: { linkedin: { limits: { maxRequestsPerHour: 10 } } } }, now: NOON, launchctlText: '' });
+  await store.recordLinkedInRefusal({ reason: 'rate_limited', detail: { status: 429, retryAfter: '30', recovered: true }, at: at + MIN });
+  const later = await collectPulse({ store, config: { sources: { linkedin: { limits: { maxRequestsPerHour: 10 } } } }, now: NOON, launchctlText: '' });
   assert.equal(later.linkedin.requests.refusals[1].recovered, true);
   assert.ok(later.signals.some((item) => item.key === 'linkedin.refusals_recovered'));
   assert.match(later.signals.find((item) => item.key === 'linkedin.refused_under_cap').evidence, /^1 refusals/);

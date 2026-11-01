@@ -15,7 +15,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { WANTED_JOB_DECISIONS } from './decisions.mjs';
@@ -29,35 +28,7 @@ const FOLLOW_UP_DAYS = 7;
 // shares too many of those days for a difference to mean a week-over-week change.
 const MIN_COMPARABLE_AGE_DAYS = 6;
 
-// What `prune` may touch. Everything else — job identities, decisions,
-// sightings, WhatsApp message dedup, HireMeTech targets, the tracker — is
-// never deleted: dedup and every statistic depend on it.
-export const RETENTION_CATEGORIES = Object.freeze({
-  page_content: {
-    label: 'תוכן עמודי משרות שנדחו או הועברו לארכיון (נקרא שוב אם צריך)',
-    olderThanDays: 30,
-    count: `SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(p.content)), 0) AS bytes FROM job_pages p
-      JOIN jobs j ON j.canonical_url = p.canonical_url
-      WHERE p.content <> '' AND p.fetched_at < @cutoff AND (j.archived_at IS NOT NULL OR (j.evaluated_at IS NOT NULL AND j.suitable = 0))`,
-    apply: `UPDATE job_pages SET content = '' WHERE canonical_url IN (
-      SELECT p.canonical_url FROM job_pages p JOIN jobs j ON j.canonical_url = p.canonical_url
-      WHERE p.content <> '' AND p.fetched_at < @cutoff AND (j.archived_at IS NOT NULL OR (j.evaluated_at IS NOT NULL AND j.suitable = 0)))`,
-  },
-  linkedin_postings: {
-    label: 'רשומות פרסום LinkedIn של משרות בארכיון',
-    olderThanDays: 60,
-    count: `SELECT COUNT(*) AS rows, 0 AS bytes FROM linkedin_postings l JOIN jobs j ON j.job_key = l.job_key
-      WHERE j.archived_at IS NOT NULL AND j.archived_at < @cutoff`,
-    apply: `DELETE FROM linkedin_postings WHERE job_key IN (
-      SELECT job_key FROM jobs WHERE archived_at IS NOT NULL AND archived_at < @cutoff)`,
-  },
-  collector_events: {
-    label: 'אירועי חיבור של ה-Collector',
-    olderThanDays: 30,
-    count: 'SELECT COUNT(*) AS rows, 0 AS bytes FROM collector_events WHERE created_at < @cutoff',
-    apply: 'DELETE FROM collector_events WHERE created_at < @cutoff',
-  },
-});
+export { RETENTION_CATEGORIES } from './store/repositories/weekly-stats.mjs';
 
 // The Sunday (Israel time) that starts the week `now` falls in, YYYY-MM-DD.
 export function weekStartOf(now = Date.now()) {
@@ -99,23 +70,6 @@ export function labelYield(rows, decisions, { now, configuredLabels = [] }) {
     entry.lastJobAt = Math.max(entry.lastJobAt || 0, Number(row.first_seen_at));
   }
   return [...byLabel.values()].sort((a, b) => b.month.interesting - a.month.interesting || b.month.suitable - a.month.suitable);
-}
-
-export function retentionProposal(db, { now = Date.now() } = {}) {
-  return Object.entries(RETENTION_CATEGORIES).map(([category, rule]) => {
-    const { rows, bytes } = db.prepare(rule.count).get({ cutoff: now - rule.olderThanDays * DAY });
-    return { category, label: rule.label, olderThanDays: rule.olderThanDays, rows, mb: Math.round((bytes / 1_048_576) * 10) / 10 };
-  });
-}
-
-export function applyRetention(db, categories, { now = Date.now() } = {}) {
-  const unknown = categories.filter((category) => !RETENTION_CATEGORIES[category]);
-  if (unknown.length) throw new Error(`Unknown retention categories: ${unknown.join(', ')}`);
-  const run = db.transaction(() => categories.map((category) => {
-    const rule = RETENTION_CATEGORIES[category];
-    return { category, changed: db.prepare(rule.apply).run({ cutoff: now - rule.olderThanDays * DAY }).changes };
-  }));
-  return run();
 }
 
 export function parseTrackerOutcomes(markdown, { now = Date.now() } = {}) {
@@ -176,64 +130,19 @@ function trimDecisionStats(stats) {
 
 // Plain JSON for the analysis. Every input is injected so tests need no
 // dashboard, launchctl or files.
-export function buildWeeklySnapshot({ db, config, now = Date.now(), decisionStats = null, trackerMarkdown = '', gaps = [], signals = [], previous = null }) {
+export async function buildWeeklySnapshot({ store, config, now = Date.now(), decisionStats = null, trackerMarkdown = '', gaps = [], signals = [], previous = null }) {
   const weekAgo = now - 7 * DAY;
-  const decisions = new Map(db.prepare('SELECT job_key, decision FROM job_decisions').all().map((row) => [row.job_key, row.decision]));
-  const rows = db.prepare(`
-    SELECT l.job_key, l.label, l.first_seen_at, j.first_suitable_at IS NOT NULL AS suitable
-    FROM job_source_labels l LEFT JOIN jobs j ON j.job_key = l.job_key WHERE l.first_seen_at >= ?
-  `).all(now - 30 * DAY);
-  const labelsSince = db.prepare('SELECT MIN(first_seen_at) AS at FROM job_source_labels').get()?.at ?? null;
-  const messages = new Map(db.prepare(`
-    SELECT group_jid AS jid, SUM(wa_timestamp >= ?) AS week, COUNT(*) AS month
-    FROM processed_messages WHERE wa_timestamp >= ? GROUP BY group_jid
-  `).all(weekAgo, now - 30 * DAY).map((row) => [row.jid, row]));
+  const facts = await store.weeklySnapshotFacts(now);
+  const decisions = new Map(facts.decisions.map((row) => [row.job_key, row.decision]));
+  const rows = facts.labels;
+  const { labelsSince, searchProgress, seen, scanned, week, named, failureCodes, hiremetech, codexRows, findings } = facts;
+  const messages = new Map(facts.messages.map((row) => [row.jid, row]));
   const groupByLabel = new Map((config.sources?.whatsapp?.groups || []).map((group) => [`WhatsApp: ${group.name}`, group.jid]));
   const groups = [...groupByLabel.keys()];
   const searches = (config.sources?.linkedin?.searches || []).filter((search) => search.enabled !== false).map((search) => `LinkedIn: ${search.label}`);
   const labels = labelYield(rows, decisions, { now, configuredLabels: [...groups, ...searches] });
 
-  const searchProgress = db.prepare(`
-    SELECT s.label, p.last_status AS lastStatus, p.last_reason AS lastReason, p.last_success_at AS lastSuccessAt, p.gaps_json AS gaps
-    FROM linkedin_searches s
-    LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.last_attempt_at = (
-      SELECT MAX(last_attempt_at) FROM linkedin_search_progress WHERE search_id = s.id)
-    WHERE s.enabled = 1
-  `).all();
-
-  // Rejected and decided jobs keep only their identity, so "scored" comes
-  // from the per-run scan counts and "suitable" from first_suitable_at.
-  const seen = db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE first_seen_at >= ?').get(weekAgo).n;
-  const scanned = db.prepare('SELECT SUM(scored) AS scored, SUM(suitable) AS suitable FROM source_scan_stats WHERE scanned_at >= ?').get(weekAgo);
-  const week = db.prepare(`
-    SELECT COUNT(*) AS suitable,
-      SUM(NOT EXISTS (SELECT 1 FROM job_source_sightings s WHERE s.job_key = jobs.job_key)) AS noSource
-    FROM jobs WHERE first_suitable_at >= ?
-  `).get(weekAgo);
-  // An archived job loses its company; the decision keeps it.
-  const UNKNOWN = "(company IS NULL OR LOWER(TRIM(company)) IN ('', 'unknown', 'unknown company', 'חברה לא ידועה', 'לא ידוע', 'לא צוין'))";
-  const named = db.prepare(`
-    SELECT COUNT(*) AS total, SUM(${UNKNOWN}) AS unknown FROM (
-      SELECT company FROM job_decisions WHERE decided_at >= @since
-      UNION ALL
-      SELECT company FROM jobs WHERE first_suitable_at >= @since AND archived_at IS NULL AND suitable = 1
-    )
-  `).get({ since: weekAgo });
-  const failureCodes = db.prepare(`
-    SELECT last_error_code AS code, COUNT(*) AS count FROM jobs
-    WHERE last_error_code IS NOT NULL AND archived_at IS NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 6
-  `).all();
-  const hiremetech = db.prepare(`
-    SELECT COUNT(*) AS total, SUM(target_url IS NOT NULL) AS resolved, SUM(target_url IS NULL) AS failed,
-      SUM(resolved_at >= ?) AS thisWeek FROM hiremetech_targets
-  `).get(weekAgo);
-  const checkpoint = (key) => db.prepare('SELECT last_timestamp FROM checkpoints WHERE source_key = ?').get(key)?.last_timestamp ?? null;
-  const codexRows = db.prepare(`
-    SELECT purpose, COUNT(*) AS calls, SUM(ok) AS ok,
-      SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS tokens
-    FROM codex_calls WHERE created_at >= ? GROUP BY purpose
-  `).all(weekAgo);
-  const findings = db.prepare('SELECT finding_key AS key, severity, title, first_seen_at AS firstSeenAt, resolved_at AS resolvedAt FROM health_findings').all();
+  const checkpoint = async (key) => await store.getCheckpoint(key);
 
   const snapshot = {
     weekStart: weekStartOf(now),
@@ -257,8 +166,8 @@ export function buildWeeklySnapshot({ db, config, now = Date.now(), decisionStat
     }),
     hiremetech: {
       ...hiremetech,
-      signedOutAt: checkpoint('hiremetech:logged_out'),
-      lastResolvedAt: checkpoint('hiremetech:resolved'),
+      signedOutAt: await checkpoint('hiremetech:logged_out'),
+      lastResolvedAt: await checkpoint('hiremetech:resolved'),
     },
     quality: {
       unknownCompanyShare: named.total ? Math.round((100 * (named.unknown || 0)) / named.total) : 0,
@@ -278,7 +187,7 @@ export function buildWeeklySnapshot({ db, config, now = Date.now(), decisionStat
     },
     outcomes: parseTrackerOutcomes(trackerMarkdown, { now }),
     gaps: gaps.slice(0, 8),
-    retention: retentionProposal(db, { now }),
+    retention: await store.retentionProposal({ now }),
   };
   snapshot.previous = previousSummary(previous, now);
   return snapshot;
@@ -366,14 +275,14 @@ export function formatWeeklyMessage(snapshot, analysis, { status = 'analyzed' } 
 // The scheduled run. Idempotent per week: once this week's report was sent,
 // a later run does nothing, unless Codex failed. Then a later slot retries the
 // analysis, and only a success replaces the report and sends one more message.
-export async function runWeeklyStats({ store, db, config, now = Date.now(), collect, analyze, send = true }) {
+export async function runWeeklyStats({ store, config, now = Date.now(), collect, analyze, send = true }) {
   const weekStart = weekStartOf(now);
-  const existing = store.getWeeklyReport();
+  const existing = await store.getWeeklyReport();
   const alreadySent = send && existing?.weekStart === weekStart && Boolean(existing.sentAt);
   if (alreadySent && existing.status !== 'fallback') return { skipped: true, weekStart };
 
-  const previous = store.getWeeklyReport({ before: weekStart });
-  const snapshot = buildWeeklySnapshot({ db, config, now, previous, ...(await collect()) });
+  const previous = await store.getWeeklyReport({ before: weekStart });
+  const snapshot = await buildWeeklySnapshot({ store, config, now, previous, ...(await collect()) });
   let analysis = null;
   let status = 'analyzed';
   try {
@@ -387,27 +296,27 @@ export async function runWeeklyStats({ store, db, config, now = Date.now(), coll
     analysis = fallbackAnalysis(snapshot);
   }
   if (alreadySent && status === 'fallback') return { skipped: true, weekStart, status };
-  store.saveWeeklyReport({ weekStart, snapshot, analysis, status, at: now });
+  await store.saveWeeklyReport({ weekStart, snapshot, analysis, status, at: now });
   const text = formatWeeklyMessage(snapshot, analysis, { status });
   let queued = false;
   if (send) {
-    queued = store.enqueueJobNotification({ jobKey: `weekly:${weekStart}${alreadySent ? ':analysis' : ''}`, text, at: now });
-    store.markWeeklyReportSent(weekStart, now);
+    queued = await store.enqueueJobNotification({ jobKey: `weekly:${weekStart}${alreadySent ? ':analysis' : ''}`, text, at: now });
+    await store.markWeeklyReportSent(weekStart, now);
   }
   return { skipped: false, weekStart, status, queued, text, snapshot, analysis };
 }
 
-async function defaultCollectors(config, db) {
+async function defaultCollectors(config, reportStore) {
   const { createDashboardQueries } = await import('../dashboard/queries.mjs');
   const { aggregateGaps } = await import('./gap-insights.mjs');
   const { createJobStore } = await import('./store.mjs');
   const trackerPath = path.join(config.rootDir, 'data', 'applications.md');
   const trackerMarkdown = fs.existsSync(trackerPath) ? fs.readFileSync(trackerPath, 'utf8') : '';
-  const decisionStats = createDashboardQueries(config, null).decisionStats();
+  const decisionStats = await createDashboardQueries(config, null).decisionStats();
   const store = createJobStore(config.jobsDbPath);
   let gaps = [];
   try {
-    const insights = aggregateGaps(store.listGapObservations(), { statuses: store.listGapTermStatuses() });
+    const insights = aggregateGaps(await store.listGapObservations(), { statuses: await store.listGapTermStatuses() });
     gaps = (insights?.focus || []).map((topic) => ({ topic: topic.label, jobs: topic.jobs, terms: topic.terms.slice(0, 4).map((term) => term.term) }));
   } catch { gaps = []; } finally { store.close(); }
   let signals = [];
@@ -415,7 +324,7 @@ async function defaultCollectors(config, db) {
     const { collectPulse, deriveSignals } = await import('./pulse.mjs');
     const { spawnSync } = await import('node:child_process');
     const run = (command, args) => spawnSync(command, args, { encoding: 'utf8', timeout: 20_000 }).stdout || '';
-    const pulse = collectPulse({ db, config, launchctlText: run('launchctl', ['list']), powerLogText: run('pmset', ['-g', 'log']), batteryText: run('pmset', ['-g', 'batt']) });
+    const pulse = await collectPulse({ store: reportStore, config, launchctlText: run('launchctl', ['list']), powerLogText: run('pmset', ['-g', 'log']), batteryText: run('pmset', ['-g', 'batt']) });
     signals = deriveSignals(pulse).map(({ key, severity, evidence }) => ({ key, severity, evidence: String(evidence ?? '').slice(0, 200) }));
   } catch { signals = []; }
   return { decisionStats, trackerMarkdown, gaps, signals };
@@ -425,9 +334,9 @@ async function codexAnalyzer(config, store) {
   const { runCodexExec, resolveCodexBinary } = await import('./score-job.mjs');
   const { checkCodexQuota, readCodexRateLimits, setCodexUsageRecorder } = await import('./llm-usage.mjs');
   return async (snapshot) => {
-    const quota = checkCodexQuota({ store, readRateLimits: () => readCodexRateLimits({ fsModule: fs }) });
+    const quota = await checkCodexQuota({ store, readRateLimits: () => readCodexRateLimits({ fsModule: fs }) });
     if (!quota.available) throw new Error(`Codex quota unavailable until ${new Date(quota.until).toISOString()}`);
-    setCodexUsageRecorder((entry) => store.recordCodexCall(entry));
+    setCodexUsageRecorder(async (entry) => await store.recordCodexCall(entry));
     try {
       return await runCodexExec({
         prompt: weeklyPrompt(snapshot),
@@ -448,24 +357,23 @@ async function codexAnalyzer(config, store) {
 async function main(argv = process.argv.slice(2)) {
   const { loadJobsConfig } = await import('./config.mjs');
   const { createJobStore } = await import('./store.mjs');
-  const Database = createRequire(import.meta.url)('better-sqlite3');
   const config = loadJobsConfig();
 
   if (argv[0] === 'prune') {
     const apply = argv.includes('--apply');
     const onlyIndex = argv.indexOf('--only');
     const only = onlyIndex >= 0 ? String(argv[onlyIndex + 1] || '').split(',').filter(Boolean) : [];
-    const db = new Database(config.jobsDbPath, apply ? {} : { readonly: true, fileMustExist: true });
+    const store = createJobStore(config.jobsDbPath, { readonly: !apply });
     try {
       if (!apply) {
-        for (const entry of retentionProposal(db)) console.log(`${entry.category}: ${entry.rows} שורות, ${entry.mb} MB — ${entry.label} (מעל ${entry.olderThanDays} יום)`);
+        for (const entry of await store.retentionProposal()) console.log(`${entry.category}: ${entry.rows} שורות, ${entry.mb} MB — ${entry.label} (מעל ${entry.olderThanDays} יום)`);
         console.log('\nלביצוע אחרי אישור: npm run jobs:stats:prune -- --apply --only <categories>');
         return;
       }
       if (!only.length) throw new Error('--apply requires --only <categories>');
-      for (const result of applyRetention(db, only)) console.log(`${result.category}: ${result.changed} שורות`);
+      for (const result of await store.applyRetention(only)) console.log(`${result.category}: ${result.changed} שורות`);
     } finally {
-      db.close();
+      store.close();
     }
     return;
   }
@@ -473,33 +381,28 @@ async function main(argv = process.argv.slice(2)) {
   const store = createJobStore(config.jobsDbPath);
   try {
     if (argv.includes('--print') && !argv.includes('--fresh')) {
-      const report = store.getWeeklyReport();
+      const report = await store.getWeeklyReport();
       if (!report) throw new Error('אין עדיין דוח שבועי. הרץ עם --fresh --print.');
       console.log(JSON.stringify(report, null, 2));
       return;
     }
-    const db = new Database(config.jobsDbPath, { readonly: true, fileMustExist: true });
-    try {
-      if (argv.includes('--fresh')) {
-        const previous = store.getWeeklyReport({ before: weekStartOf() });
-        const snapshot = buildWeeklySnapshot({ db, config, previous, ...(await defaultCollectors(config, db)) });
-        console.log(JSON.stringify(snapshot, null, 2));
-        return;
-      }
-      const result = await runWeeklyStats({
-        store, db, config, send: argv.includes('--send'),
-        collect: () => defaultCollectors(config, db),
-        analyze: argv.includes('--no-analysis') ? async () => null : await codexAnalyzer(config, store),
-      });
-      if (result.skipped) {
-        console.log(`הדוח של השבוע (${result.weekStart}) כבר נשלח${result.status === 'fallback' ? '; ניסיון הניתוח החוזר נכשל' : ''}.`);
-        return;
-      }
-      console.log(result.text);
-      console.log(`\n(${result.status}; ${result.queued ? 'נשלח לתור ה-WhatsApp' : 'לא נשלח'})`);
-    } finally {
-      db.close();
+    if (argv.includes('--fresh')) {
+      const previous = await store.getWeeklyReport({ before: weekStartOf() });
+      const snapshot = await buildWeeklySnapshot({ store, config, previous, ...(await defaultCollectors(config, store)) });
+      console.log(JSON.stringify(snapshot, null, 2));
+      return;
     }
+    const result = await runWeeklyStats({
+      store, config, send: argv.includes('--send'),
+      collect: () => defaultCollectors(config, store),
+      analyze: argv.includes('--no-analysis') ? async () => null : await codexAnalyzer(config, store),
+    });
+    if (result.skipped) {
+      console.log(`הדוח של השבוע (${result.weekStart}) כבר נשלח${result.status === 'fallback' ? '; ניסיון הניתוח החוזר נכשל' : ''}.`);
+      return;
+    }
+    console.log(result.text);
+    console.log(`\n(${result.status}; ${result.queued ? 'נשלח לתור ה-WhatsApp' : 'לא נשלח'})`);
   } finally {
     store.close();
   }

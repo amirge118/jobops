@@ -6,9 +6,9 @@
 //   npm run jobs:health                     # JSON digest
 //   npm run jobs:health -- --runs 3         # last 3 runs per source
 
-import Database from 'better-sqlite3';
 import { loadJobsConfig } from './jobs/config.mjs';
 import { createDashboardQueries } from './dashboard/queries.mjs';
+import { createJobStore } from './jobs/store.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
 
 const SOURCES = ['ats', 'whatsapp', 'linkedin'];
@@ -19,8 +19,8 @@ const iso = (ms) => (ms ? new Date(Number(ms)).toISOString() : null);
 const parse = (text) => { try { return JSON.parse(text); } catch { return null; } };
 
 const config = loadJobsConfig();
-const scan = createDashboardQueries(config, { status: 'idle' }).scan();
-const db = new Database(config.jobsDbPath, { readonly: true, fileMustExist: true });
+const scan = await createDashboardQueries(config, { status: 'idle' }).scan();
+const store = createJobStore(config.jobsDbPath, { readonly: true });
 
 // Only the parts of details_json that point at a problem; healthy counters
 // stay as numbers so the digest stays short.
@@ -48,11 +48,7 @@ function problemsOf(details) {
   return problems;
 }
 
-const latestRuns = Object.fromEntries(SOURCES.map((source) => [source, db.prepare(`
-  SELECT * FROM runs
-  WHERE finished_at IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(runs.sources) WHERE value = ?)
-  ORDER BY started_at DESC LIMIT ?
-`).all(source, runsPerSource).map((run) => {
+const latestRuns = Object.fromEntries(await Promise.all(SOURCES.map(async (source) => [source, await Promise.all((await store.listFinishedRunsForSource(source, runsPerSource)).map(async (run) => {
   const details = parse(run.details_json);
   return {
     id: run.id, startedAt: iso(run.started_at), finishedAt: iso(run.finished_at),
@@ -61,19 +57,12 @@ const latestRuns = Object.fromEntries(SOURCES.map((source) => [source, db.prepar
     diagnostic: parse(run.diagnostic_json),
     processing: details?.processing?.totals ?? null,
     problems: problemsOf(details),
-    failedEvents: db.prepare(`SELECT source, scope, scope_key AS scopeKey, stage, status, details_json AS details
-      FROM run_events WHERE run_id = ? AND status IN ('failed', 'error', 'partial') ORDER BY id LIMIT 30`)
-      .all(run.id).map((event) => ({ ...event, details: parse(event.details) })),
+    failedEvents: (await store.listFailedRunEvents(run.id)).map((event) => ({ ...event, details: parse(event.details) })),
   };
-})]));
+}))])));
 
 // The failure list on the scan page: active jobs whose last attempt failed.
-const failedJobs = db.prepare(`
-  SELECT job_key, canonical_url, company, title, sources_json, last_error_code, last_error_reason,
-         last_attempted_at, first_seen_at
-  FROM jobs WHERE archived_at IS NULL AND last_error_code IS NOT NULL
-  ORDER BY last_error_code, last_attempted_at DESC
-`).all().map((job) => ({
+const failedJobs = (await store.listFailedJobs()).map((job) => ({
   code: job.last_error_code,
   retryable: !NON_RETRYABLE_FAILURE_CODES.has(job.last_error_code),
   url: job.canonical_url,
@@ -83,11 +72,8 @@ const failedJobs = db.prepare(`
   lastAttemptAt: iso(job.last_attempted_at), firstSeenAt: iso(job.first_seen_at),
 }));
 
-const resumeGapFailures = db.prepare(`
-  SELECT resume_gap_error_code AS code, COUNT(*) AS count FROM jobs
-  WHERE archived_at IS NULL AND resume_gap_error_code IS NOT NULL GROUP BY resume_gap_error_code
-`).all();
-db.close();
+const resumeGapFailures = await store.countResumeGapFailures();
+store.close();
 
 const linkedin = scan.linkedin && {
   enabled: scan.linkedin.enabled,

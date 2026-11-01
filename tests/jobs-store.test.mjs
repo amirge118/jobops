@@ -15,16 +15,16 @@ function newStore() {
   return createJobStore(lastStorePath);
 }
 
-test('job store deduplicates tracking variants and remembers presentation state', () => {
+test('job store deduplicates tracking variants and remembers presentation state', async () => {
   const store = newStore();
-  const first = store.recordSighting({
+  const first = await store.recordSighting({
     url: 'https://example.com/jobs/42?utm_source=whatsapp',
     company: 'Example',
     title: 'Backend Engineer',
     source: 'whatsapp',
     seenAt: 100,
   });
-  const second = store.recordSighting({
+  const second = await store.recordSighting({
     url: 'https://example.com/jobs/42?utm_source=linkedin',
     company: 'Example',
     title: 'Backend Engineer',
@@ -33,9 +33,9 @@ test('job store deduplicates tracking variants and remembers presentation state'
   });
 
   assert.equal(first.jobKey, second.jobKey);
-  assert.equal(store.countJobs(), 1);
+  assert.equal(await store.countJobs(), 1);
 
-  store.saveEvaluation(first.jobKey, {
+  await store.saveEvaluation(first.jobKey, {
     company: 'Example',
     title: 'Backend Engineer',
     summary: 'Backend services.',
@@ -52,23 +52,23 @@ test('job store deduplicates tracking variants and remembers presentation state'
     evaluatedAt: 300,
   });
 
-  assert.equal(store.listUnpresentedSuitable().length, 1);
-  store.markPresented([first.jobKey], 400);
-  assert.equal(store.listUnpresentedSuitable().length, 0);
+  assert.equal((await store.listUnpresentedSuitable()).length, 1);
+  await store.markPresented([first.jobKey], 400);
+  assert.equal((await store.listUnpresentedSuitable()).length, 0);
   store.close();
 });
 
-test('failed messages remain retryable while completed messages do not', () => {
+test('failed messages remain retryable while completed messages do not', async () => {
   const store = newStore();
-  store.markMessageFailed({ messageId: 'm1', groupJid: 'g1', error: 'network' });
-  assert.equal(store.shouldProcessMessage('m1'), true);
+  await store.markMessageFailed({ messageId: 'm1', groupJid: 'g1', error: 'network' });
+  assert.equal(await store.shouldProcessMessage('m1'), true);
 
-  store.markMessageDone({ messageId: 'm1', groupJid: 'g1', timestamp: 123 });
-  assert.equal(store.shouldProcessMessage('m1'), false);
+  await store.markMessageDone({ messageId: 'm1', groupJid: 'g1', timestamp: 123 });
+  assert.equal(await store.shouldProcessMessage('m1'), false);
   store.close();
 });
 
-test('WhatsApp inbox is idempotent and erases message text after processing', () => {
+test('WhatsApp inbox is idempotent and erases message text after processing', async () => {
   const store = newStore();
   const message = {
     messageId: 'queued-message',
@@ -77,44 +77,44 @@ test('WhatsApp inbox is idempotent and erases message text after processing', ()
     text: 'Backend job https://example.com/jobs/backend',
   };
 
-  assert.equal(store.queueWhatsAppMessage(message), true);
-  assert.equal(store.queueWhatsAppMessage(message), false);
-  assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), [{
+  assert.equal(await store.queueWhatsAppMessage(message), true);
+  assert.equal(await store.queueWhatsAppMessage(message), false);
+  assert.deepEqual(await store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), [{
     messageId: 'queued-message',
     groupJid: 'group-a@g.us',
     timestamp: 1_000,
     text: message.text,
   }]);
-  assert.deepEqual(store.getMessageState('queued-message'), { status: 'pending', hasText: true });
-  assert.deepEqual(store.listWhatsAppMessageKeys('group-a@g.us'), [{
+  assert.deepEqual(await store.getMessageState('queued-message'), { status: 'pending', hasText: true });
+  assert.deepEqual(await store.listWhatsAppMessageKeys('group-a@g.us'), [{
     id: 'queued-message',
     remoteJid: 'group-a@g.us',
     fromMe: false,
   }]);
 
-  store.markMessageDone({ messageId: 'queued-message', groupJid: 'group-a@g.us', timestamp: 1_000 });
-  assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), []);
-  assert.deepEqual(store.getMessageState('queued-message'), { status: 'done', hasText: false });
+  await store.markMessageDone({ messageId: 'queued-message', groupJid: 'group-a@g.us', timestamp: 1_000 });
+  assert.deepEqual(await store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 2_000 }), []);
+  assert.deepEqual(await store.getMessageState('queued-message'), { status: 'done', hasText: false });
   store.close();
 });
 
-test('WhatsApp backlog reports bounded metadata without exposing message bodies', () => {
+test('WhatsApp backlog reports bounded metadata without exposing message bodies', async () => {
   const store = newStore();
-  store.queueWhatsAppMessage({
+  await store.queueWhatsAppMessage({
     messageId: 'older-pending', groupJid: 'group-a@g.us', timestamp: 1_000,
     text: 'private older text https://example.com/older',
   });
-  store.queueWhatsAppMessage({
+  await store.queueWhatsAppMessage({
     messageId: 'newer-failed', groupJid: 'group-a@g.us', timestamp: 2_000,
     text: 'private newer text https://example.com/newer',
   });
-  store.markMessageFailed({ messageId: 'newer-failed', groupJid: 'group-a@g.us', error: 'temporary' });
-  store.queueWhatsAppMessage({
+  await store.markMessageFailed({ messageId: 'newer-failed', groupJid: 'group-a@g.us', error: 'temporary' });
+  await store.queueWhatsAppMessage({
     messageId: 'other-group', groupJid: 'group-b@g.us', timestamp: 3_000,
     text: 'private other text https://example.com/other',
   });
 
-  const backlog = store.getWhatsAppBacklogStats({ sinceMs: 1_500, untilMs: 3_500 });
+  const backlog = await store.getWhatsAppBacklogStats({ sinceMs: 1_500, untilMs: 3_500 });
 
   assert.equal(backlog.total, 2);
   assert.equal(backlog.failed, 1);
@@ -126,71 +126,71 @@ test('WhatsApp backlog reports bounded metadata without exposing message bodies'
   ]);
   assert.doesNotMatch(JSON.stringify(backlog), /private|example\.com/);
   assert.deepEqual(
-    store.listPendingWhatsAppMessages('group-a@g.us', { sinceMs: 0, untilMs: 5_000, order: 'desc' })
+    (await store.listPendingWhatsAppMessages('group-a@g.us', { sinceMs: 0, untilMs: 5_000, order: 'desc' }))
       .map(({ messageId }) => messageId),
     ['newer-failed', 'older-pending'],
   );
   store.close();
 });
 
-test('WhatsApp retention erases expired backlog bodies but keeps terminal deduplication keys', () => {
+test('WhatsApp retention erases expired backlog bodies but keeps terminal deduplication keys', async () => {
   const store = newStore();
-  store.queueWhatsAppMessage({
+  await store.queueWhatsAppMessage({
     messageId: 'expired-pending', groupJid: 'group-a@g.us', timestamp: 1_000,
     text: 'private expired text https://example.com/expired',
   });
-  store.queueWhatsAppMessage({
+  await store.queueWhatsAppMessage({
     messageId: 'expired-failed', groupJid: 'group-a@g.us', timestamp: 2_000,
     text: 'private failed text https://example.com/failed',
   });
-  store.markMessageFailed({ messageId: 'expired-failed', groupJid: 'group-a@g.us', error: 'temporary' });
-  store.queueWhatsAppMessage({
+  await store.markMessageFailed({ messageId: 'expired-failed', groupJid: 'group-a@g.us', error: 'temporary' });
+  await store.queueWhatsAppMessage({
     messageId: 'recent-pending', groupJid: 'group-a@g.us', timestamp: 9_000,
     text: 'recent text https://example.com/recent',
   });
 
-  const discarded = store.discardOldWhatsAppMessages({ beforeTs: 5_000, discardedAt: 10_000 });
+  const discarded = await store.discardOldWhatsAppMessages({ beforeTs: 5_000, discardedAt: 10_000 });
 
   assert.equal(discarded, 2);
-  assert.deepEqual(store.getMessageState('expired-pending'), { status: 'done', hasText: false });
-  assert.deepEqual(store.getMessageState('expired-failed'), { status: 'done', hasText: false });
-  assert.deepEqual(store.getMessageState('recent-pending'), { status: 'pending', hasText: true });
-  assert.equal(store.shouldProcessMessage('expired-pending'), false);
-  assert.equal(store.queueWhatsAppMessage({
+  assert.deepEqual(await store.getMessageState('expired-pending'), { status: 'done', hasText: false });
+  assert.deepEqual(await store.getMessageState('expired-failed'), { status: 'done', hasText: false });
+  assert.deepEqual(await store.getMessageState('recent-pending'), { status: 'pending', hasText: true });
+  assert.equal(await store.shouldProcessMessage('expired-pending'), false);
+  assert.equal(await store.queueWhatsAppMessage({
     messageId: 'expired-pending', groupJid: 'group-a@g.us', timestamp: 1_000,
     text: 'private replayed text',
   }), false);
-  assert.deepEqual(store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 20_000 })
+  assert.deepEqual((await store.listPendingWhatsAppMessages('group-a@g.us', { untilMs: 20_000 }))
     .map(({ messageId }) => messageId), ['recent-pending']);
-  assert.deepEqual(store.listWhatsAppMessageKeys('group-a@g.us').map(({ id }) => id), [
+  assert.deepEqual((await store.listWhatsAppMessageKeys('group-a@g.us')).map(({ id }) => id), [
     'recent-pending', 'expired-failed', 'expired-pending',
   ]);
   store.close();
 });
 
-test('WhatsApp history requests are durable, single-flight and retain safe per-group progress', () => {
+test('WhatsApp history requests are durable, single-flight and retain safe per-group progress', async () => {
   const store = newStore();
-  const first = store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 2, createdAt: 10 });
-  const duplicate = store.requestWhatsAppHistory({ fromTs: 2_000, toTs: 6_000, groupsTotal: 2, createdAt: 11 });
+  const first = await store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 2, createdAt: 10 });
+  const duplicate = await store.requestWhatsAppHistory({ fromTs: 2_000, toTs: 6_000, groupsTotal: 2, createdAt: 11 });
 
   assert.equal(first.created, true);
   assert.equal(duplicate.created, false);
   assert.equal(duplicate.request.id, first.request.id);
 
-  const claimed = store.claimNextWhatsAppHistoryRequest({ ownerPid: 123, startedAt: 20 });
+  const claimed = await store.claimNextWhatsAppHistoryRequest({ ownerPid: 123, startedAt: 20 });
   assert.equal(claimed.status, 'running');
   assert.equal(claimed.ownerPid, 123);
-  store.recordWhatsAppHistoryGroup(claimed.id, {
+  await store.recordWhatsAppHistoryGroup(claimed.id, {
     name: 'Group A', status: 'complete', delivered: 50, queued: 40,
     duplicates: 10, oldestAt: 1_000, newestAt: 5_000, batches: 1,
   });
-  store.updateWhatsAppHistoryRequest(claimed.id, {
+  await store.updateWhatsAppHistoryRequest(claimed.id, {
     currentGroup: 'Group A', groupsCompleted: 1, messagesReceived: 50,
     messagesQueued: 40, duplicates: 10,
   });
-  store.finishWhatsAppHistoryRequest(claimed.id, { status: 'complete', finishedAt: 30 });
+  await store.finishWhatsAppHistoryRequest(claimed.id, { status: 'complete', finishedAt: 30 });
 
-  const completed = store.getLatestWhatsAppHistoryRequest();
+  const completed = await store.getLatestWhatsAppHistoryRequest();
   assert.equal(completed.status, 'complete');
   assert.equal(completed.messagesReceived, 50);
   assert.equal(completed.groups[0].name, 'Group A');
@@ -198,9 +198,9 @@ test('WhatsApp history requests are durable, single-flight and retain safe per-g
   store.close();
 });
 
-test('WhatsApp history keeps the per-group collection cursor captured when the request is created', () => {
+test('WhatsApp history keeps the per-group collection cursor captured when the request is created', async () => {
   const store = newStore();
-  const created = store.requestWhatsAppHistory({
+  const created = await store.requestWhatsAppHistory({
     fromTs: 1_000,
     toTs: 10_000,
     groupsTotal: 2,
@@ -215,24 +215,24 @@ test('WhatsApp history keeps the per-group collection cursor captured when the r
     { name: 'Group A', status: 'pending', requestedFrom: 4_000 },
     { name: 'Group B', status: 'pending', requestedFrom: 7_000 },
   ]);
-  const claimed = store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: 30 });
-  store.recordWhatsAppHistoryGroup(claimed.id, {
+  const claimed = await store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: 30 });
+  await store.recordWhatsAppHistoryGroup(claimed.id, {
     name: 'Group A', status: 'complete', requestedFrom: 4_000, delivered: 3,
   });
-  assert.equal(store.getWhatsAppHistoryRequest(claimed.id).groups[0].requestedFrom, 4_000);
+  assert.equal((await store.getWhatsAppHistoryRequest(claimed.id)).groups[0].requestedFrom, 4_000);
   store.close();
 });
 
-test('WhatsApp group collection stats expose timestamps and counts without message text', () => {
+test('WhatsApp group collection stats expose timestamps and counts without message text', async () => {
   const store = newStore();
-  store.queueWhatsAppMessage({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000, text: 'private done' });
-  store.markMessageDone({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000 });
-  store.queueWhatsAppMessage({ messageId: 'pending', groupJid: 'group-a@g.us', timestamp: 2_000, text: 'private pending' });
-  store.markWhatsAppMessagesRead([{ id: 'pending', remoteJid: 'group-a@g.us' }], { readAt: 2_500 });
-  store.queueWhatsAppMessage({ messageId: 'failed', groupJid: 'group-a@g.us', timestamp: 3_000, text: 'private failed' });
-  store.markMessageFailed({ messageId: 'failed', groupJid: 'group-a@g.us', error: 'temporary' });
+  await store.queueWhatsAppMessage({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000, text: 'private done' });
+  await store.markMessageDone({ messageId: 'done', groupJid: 'group-a@g.us', timestamp: 1_000 });
+  await store.queueWhatsAppMessage({ messageId: 'pending', groupJid: 'group-a@g.us', timestamp: 2_000, text: 'private pending' });
+  await store.markWhatsAppMessagesRead([{ id: 'pending', remoteJid: 'group-a@g.us' }], { readAt: 2_500 });
+  await store.queueWhatsAppMessage({ messageId: 'failed', groupJid: 'group-a@g.us', timestamp: 3_000, text: 'private failed' });
+  await store.markMessageFailed({ messageId: 'failed', groupJid: 'group-a@g.us', error: 'temporary' });
 
-  const stats = store.getWhatsAppGroupCollectionStats('group-a@g.us');
+  const stats = await store.getWhatsAppGroupCollectionStats('group-a@g.us');
   assert.deepEqual(stats, {
     totalCollected: 3,
     pending: 2,
@@ -246,26 +246,26 @@ test('WhatsApp group collection stats expose timestamps and counts without messa
   store.close();
 });
 
-test('an interrupted WhatsApp history request is safely requeued for the next collector', () => {
+test('an interrupted WhatsApp history request is safely requeued for the next collector', async () => {
   const store = newStore();
-  store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
-  const claimed = store.claimNextWhatsAppHistoryRequest({ ownerPid: 99_999_999, startedAt: 20 });
-  store.recordWhatsAppHistoryGroup(claimed.id, { name: 'Group A', status: 'partial', delivered: 10 });
+  await store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
+  const claimed = await store.claimNextWhatsAppHistoryRequest({ ownerPid: 99_999_999, startedAt: 20 });
+  await store.recordWhatsAppHistoryGroup(claimed.id, { name: 'Group A', status: 'partial', delivered: 10 });
 
-  assert.equal(store.requeueInterruptedWhatsAppHistoryRequests(), 1);
-  const requeued = store.getLatestWhatsAppHistoryRequest();
+  assert.equal(await store.requeueInterruptedWhatsAppHistoryRequests(), 1);
+  const requeued = await store.getLatestWhatsAppHistoryRequest();
   assert.equal(requeued.status, 'pending');
   assert.equal(requeued.ownerPid, null);
   assert.deepEqual(requeued.groups.map(({ name, status, delivered }) => ({ name, status, delivered })), [
     { name: 'Group A', status: 'pending', delivered: 0 },
   ]);
-  assert.equal(store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: 30 }).status, 'running');
+  assert.equal((await store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid, startedAt: 30 })).status, 'running');
   store.close();
 });
 
-test('cached pages expire according to TTL', () => {
+test('cached pages expire according to TTL', async () => {
   const store = newStore();
-  store.savePage({
+  await store.savePage({
     canonicalUrl: 'https://example.com/jobs/42',
     finalUrl: 'https://example.com/jobs/42',
     status: 'active',
@@ -274,20 +274,20 @@ test('cached pages expire according to TTL', () => {
     fetchedAt: 1_000,
   });
 
-  assert.ok(store.getFreshPage('https://example.com/jobs/42', { now: 1_500, ttlMs: 1_000 }));
-  assert.equal(store.getFreshPage('https://example.com/jobs/42', { now: 2_001, ttlMs: 1_000 }), null);
+  assert.ok(await store.getFreshPage('https://example.com/jobs/42', { now: 1_500, ttlMs: 1_000 }));
+  assert.equal(await store.getFreshPage('https://example.com/jobs/42', { now: 2_001, ttlMs: 1_000 }), null);
   store.close();
 });
 
-test('jobs whose page or scoring failed remain available for a later retry', () => {
+test('jobs whose page or scoring failed remain available for a later retry', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://example.com/jobs/retry-me',
     source: 'WhatsApp: Group A',
     seenAt: 1_000,
   });
 
-  assert.deepEqual(store.listPendingEvaluation(), [{
+  assert.deepEqual(await store.listPendingEvaluation(), [{
     jobKey: sighting.jobKey,
     canonicalUrl: sighting.canonicalUrl,
     url: 'https://example.com/jobs/retry-me',
@@ -296,34 +296,34 @@ test('jobs whose page or scoring failed remain available for a later retry', () 
     source: 'WhatsApp: Group A',
   }]);
 
-  store.markEvaluationFailure(sighting.jobKey, {
+  await store.markEvaluationFailure(sighting.jobKey, {
     code: 'page_uncertain',
     reason: 'Dynamic page could not be rendered.',
     attemptedAt: 1_500,
   });
-  const failed = store.getJob(sighting.jobKey);
+  const failed = await store.getJob(sighting.jobKey);
   assert.equal(failed.last_error_code, 'page_uncertain');
   assert.equal(failed.last_error_reason, 'Dynamic page could not be rendered.');
   assert.equal(failed.last_attempted_at, 1_500);
-  assert.equal(store.listPendingEvaluation().length, 1);
+  assert.equal((await store.listPendingEvaluation()).length, 1);
 
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Backend role.',
     score: 4.2, fitLabel: 'מתאים', decisionReason: 'Relevant role.', suitable: true,
     applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: 'content-v1',
     profileHash: 'profile-v1', criteriaVersion: 'v1', evaluatedAt: 2_000,
   });
-  const evaluated = store.getJob(sighting.jobKey);
+  const evaluated = await store.getJob(sighting.jobKey);
   assert.equal(evaluated.last_error_code, null);
   assert.equal(evaluated.last_error_reason, null);
-  assert.deepEqual(store.listPendingEvaluation(), []);
+  assert.deepEqual(await store.listPendingEvaluation(), []);
   store.close();
 });
 
-test('a rejected job whose re-check failed is retried under its latest sighting source', () => {
+test('a rejected job whose re-check failed is retried under its latest sighting source', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/1', source: 'LinkedIn: Backend', seenAt: 1_000 });
-  store.saveEvaluation(sighting.jobKey, {
+  const sighting = await store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/1', source: 'LinkedIn: Backend', seenAt: 1_000 });
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'x', score: 2, fitLabel: 'לא מתאים',
     decisionReason: 'x', suitable: false, applyUrl: sighting.canonicalUrl, activeStatus: 'active',
     contentHash: 'c1', profileHash: 'p1', criteriaVersion: 'v1', evaluatedAt: 2_000,
@@ -331,173 +331,173 @@ test('a rejected job whose re-check failed is retried under its latest sighting 
   store.close();
   // Reopening applies the rejected-job cleanup, which empties sources_json.
   const reopened = createJobStore(lastStorePath);
-  reopened.markEvaluationFailure(sighting.jobKey, { code: 'timeout', reason: 'x', attemptedAt: 3_000 });
+  await reopened.markEvaluationFailure(sighting.jobKey, { code: 'timeout', reason: 'x', attemptedAt: 3_000 });
 
-  assert.equal(reopened.getJob(sighting.jobKey).sources_json, '[]');
-  assert.deepEqual(reopened.listPendingEvaluation().map((job) => job.source), ['LinkedIn: retry']);
+  assert.equal((await reopened.getJob(sighting.jobKey)).sources_json, '[]');
+  assert.deepEqual((await reopened.listPendingEvaluation()).map((job) => job.source), ['LinkedIn: retry']);
   reopened.close();
 });
 
-test('a failed re-evaluation keeps the previous decision and remains retryable', () => {
+test('a failed re-evaluation keeps the previous decision and remains retryable', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://example.com/jobs/recheck-me',
     company: 'Example',
     title: 'Backend Engineer',
     source: 'ATS: example',
     seenAt: 1_000,
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Previous evaluation.',
     score: 3.2, fitLabel: 'לא מתאים', decisionReason: 'Previous decision.', suitable: false,
     applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: 'old-content',
     profileHash: 'old-profile', criteriaVersion: 'old-criteria', evaluatedAt: 2_000,
   });
 
-  store.markEvaluationFailure(sighting.jobKey, {
+  await store.markEvaluationFailure(sighting.jobKey, {
     code: 'page_fetch_failed',
     reason: 'Temporary upstream failure.',
     attemptedAt: 3_000,
   });
 
-  const failed = store.getJob(sighting.jobKey);
+  const failed = await store.getJob(sighting.jobKey);
   assert.equal(failed.evaluated_at, 2_000);
   assert.equal(failed.last_error_code, 'page_fetch_failed');
-  assert.equal(store.listPendingEvaluation().some((job) => job.jobKey === sighting.jobKey), true);
+  assert.equal((await store.listPendingEvaluation()).some((job) => job.jobKey === sighting.jobKey), true);
   store.close();
 });
 
-test('listPendingEvaluation excludes chosen error codes but keeps brand-new and other-failed candidates', () => {
+test('listPendingEvaluation excludes chosen error codes but keeps brand-new and other-failed candidates', async () => {
   const store = newStore();
-  const fresh = store.recordSighting({ url: 'https://example.com/jobs/fresh', source: 'ATS: example', seenAt: 100 });
-  const blocked = store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ATS: example', seenAt: 200 });
-  const timedOut = store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ATS: example', seenAt: 300 });
-  store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 400 });
-  store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 500 });
+  const fresh = await store.recordSighting({ url: 'https://example.com/jobs/fresh', source: 'ATS: example', seenAt: 100 });
+  const blocked = await store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ATS: example', seenAt: 200 });
+  const timedOut = await store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ATS: example', seenAt: 300 });
+  await store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 400 });
+  await store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 500 });
 
-  const all = store.listPendingEvaluation();
+  const all = await store.listPendingEvaluation();
   assert.deepEqual(all.map((job) => job.jobKey).sort(), [blocked.jobKey, fresh.jobKey, timedOut.jobKey].sort());
 
-  const excluding = store.listPendingEvaluation({ excludeErrorCodes: ['bot_challenge', 'access_blocked'] });
+  const excluding = await store.listPendingEvaluation({ excludeErrorCodes: ['bot_challenge', 'access_blocked'] });
   assert.deepEqual(excluding.map((job) => job.jobKey).sort(), [fresh.jobKey, timedOut.jobKey].sort());
   store.close();
 });
 
-test('getFailureBreakdown groups outstanding failures by code and ignores archived jobs', () => {
+test('getFailureBreakdown groups outstanding failures by code and ignores archived jobs', async () => {
   const store = newStore();
-  const a = store.recordSighting({ url: 'https://example.com/jobs/a', source: 'ATS: example', seenAt: 100 });
-  const b = store.recordSighting({ url: 'https://example.com/jobs/b', source: 'ATS: example', seenAt: 200 });
-  const c = store.recordSighting({ url: 'https://example.com/jobs/c', source: 'ATS: example', seenAt: 300 });
-  store.markEvaluationFailure(a.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 400 });
-  store.markEvaluationFailure(b.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 500 });
-  store.markEvaluationFailure(c.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 600 });
+  const a = await store.recordSighting({ url: 'https://example.com/jobs/a', source: 'ATS: example', seenAt: 100 });
+  const b = await store.recordSighting({ url: 'https://example.com/jobs/b', source: 'ATS: example', seenAt: 200 });
+  const c = await store.recordSighting({ url: 'https://example.com/jobs/c', source: 'ATS: example', seenAt: 300 });
+  await store.markEvaluationFailure(a.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 400 });
+  await store.markEvaluationFailure(b.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 500 });
+  await store.markEvaluationFailure(c.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 600 });
 
-  assert.deepEqual(store.getFailureBreakdown(), [
+  assert.deepEqual(await store.getFailureBreakdown(), [
     { code: 'bot_challenge', count: 2 },
     { code: 'timeout', count: 1 },
   ]);
 
-  assert.equal(store.archiveJob(a.jobKey, 700), true);
+  assert.equal(await store.archiveJob(a.jobKey, 700), true);
   // Both codes are tied at 1 now; the query breaks ties alphabetically by code.
-  assert.deepEqual(store.getFailureBreakdown(), [
+  assert.deepEqual(await store.getFailureBreakdown(), [
     { code: 'bot_challenge', count: 1 },
     { code: 'timeout', count: 1 },
   ]);
   store.close();
 });
 
-test('archiveJobsByErrorCode clears only the matching outstanding failures and no-ops on an empty list', () => {
+test('archiveJobsByErrorCode clears only the matching outstanding failures and no-ops on an empty list', async () => {
   const store = newStore();
-  const a = store.recordSighting({ url: 'https://example.com/jobs/a', source: 'ATS: example', seenAt: 100 });
-  const b = store.recordSighting({ url: 'https://example.com/jobs/b', source: 'ATS: example', seenAt: 200 });
-  store.markEvaluationFailure(a.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 300 });
-  store.markEvaluationFailure(b.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 400 });
+  const a = await store.recordSighting({ url: 'https://example.com/jobs/a', source: 'ATS: example', seenAt: 100 });
+  const b = await store.recordSighting({ url: 'https://example.com/jobs/b', source: 'ATS: example', seenAt: 200 });
+  await store.markEvaluationFailure(a.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.', attemptedAt: 300 });
+  await store.markEvaluationFailure(b.jobKey, { code: 'timeout', reason: 'Slow host.', attemptedAt: 400 });
 
-  assert.deepEqual(store.archiveJobsByErrorCode([], 500), { archived: 0 });
-  assert.equal(store.getJob(a.jobKey).archived_at, null);
+  assert.deepEqual(await store.archiveJobsByErrorCode([], 500), { archived: 0 });
+  assert.equal((await store.getJob(a.jobKey)).archived_at, null);
 
-  assert.deepEqual(store.archiveJobsByErrorCode(['bot_challenge', 'access_blocked'], 600), { archived: 1 });
-  assert.equal(store.getJob(a.jobKey).archived_at, 600);
-  assert.equal(store.getJob(b.jobKey).archived_at, null);
-  assert.deepEqual(store.getFailureBreakdown(), [{ code: 'timeout', count: 1 }]);
-  assert.equal(store.listPendingEvaluation().some((job) => job.jobKey === a.jobKey), false);
+  assert.deepEqual(await store.archiveJobsByErrorCode(['bot_challenge', 'access_blocked'], 600), { archived: 1 });
+  assert.equal((await store.getJob(a.jobKey)).archived_at, 600);
+  assert.equal((await store.getJob(b.jobKey)).archived_at, null);
+  assert.deepEqual(await store.getFailureBreakdown(), [{ code: 'timeout', count: 1 }]);
+  assert.equal((await store.listPendingEvaluation()).some((job) => job.jobKey === a.jobKey), false);
 
   // Idempotent: nothing left to archive for that code.
-  assert.deepEqual(store.archiveJobsByErrorCode(['bot_challenge'], 700), { archived: 0 });
+  assert.deepEqual(await store.archiveJobsByErrorCode(['bot_challenge'], 700), { archived: 0 });
   store.close();
 });
 
-test('last successful run must cover every requested source', () => {
+test('last successful run must cover every requested source', async () => {
   const store = newStore();
-  const atsOnly = store.startRun({ fromTs: 0, toTs: 10, sources: ['ats'], startedAt: 10 });
-  store.finishRun(atsOnly, { status: 'success', finishedAt: 20 });
-  const full = store.startRun({ fromTs: 0, toTs: 30, sources: ['ats', 'whatsapp'], startedAt: 30 });
-  store.finishRun(full, { status: 'success', finishedAt: 40 });
-  const newerAts = store.startRun({ fromTs: 0, toTs: 50, sources: ['ats'], startedAt: 50 });
-  store.finishRun(newerAts, { status: 'success', finishedAt: 60 });
+  const atsOnly = await store.startRun({ fromTs: 0, toTs: 10, sources: ['ats'], startedAt: 10 });
+  await store.finishRun(atsOnly, { status: 'success', finishedAt: 20 });
+  const full = await store.startRun({ fromTs: 0, toTs: 30, sources: ['ats', 'whatsapp'], startedAt: 30 });
+  await store.finishRun(full, { status: 'success', finishedAt: 40 });
+  const newerAts = await store.startRun({ fromTs: 0, toTs: 50, sources: ['ats'], startedAt: 50 });
+  await store.finishRun(newerAts, { status: 'success', finishedAt: 60 });
 
-  assert.equal(store.getLastSuccessfulRun(['ats']).id, Number(newerAts));
-  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp']).id, Number(full));
+  assert.equal((await store.getLastSuccessfulRun(['ats'])).id, Number(newerAts));
+  assert.equal((await store.getLastSuccessfulRun(['ats', 'whatsapp'])).id, Number(full));
   store.close();
 });
 
-test('diagnostic retention keeps only recent evidence and durable success checkpoints', () => {
+test('diagnostic retention keeps only recent evidence and durable success checkpoints', async () => {
   const store = newStore();
   const runIds = [];
   for (let index = 0; index < 6; index += 1) {
-    const runId = store.startRun({
+    const runId = await store.startRun({
       fromTs: index,
       toTs: index + 1,
       sources: index === 0 ? ['whatsapp'] : ['ats'],
       startedAt: 100 + index,
     });
-    store.recordRunEvent(runId, { source: 'system', scope: 'run', stage: 'run', status: 'started', createdAt: 100 + index });
-    store.finishRun(runId, { status: index === 0 || index === 2 ? 'success' : 'failed', finishedAt: 200 + index });
+    await store.recordRunEvent(runId, { source: 'system', scope: 'run', stage: 'run', status: 'started', createdAt: 100 + index });
+    await store.finishRun(runId, { status: index === 0 || index === 2 ? 'success' : 'failed', finishedAt: 200 + index });
     runIds.push(Number(runId));
   }
 
   for (let index = 0; index < 5; index += 1) {
-    const actionId = store.startAction(`action-${index}`, { ownerPid: 1 });
-    store.updateAction(actionId, { status: 'success', finishedAt: 300 + index });
-    const collectorId = store.startCollectorRun({ ownerPid: 1, startedAt: 400 + index });
-    store.recordCollectorEvent(collectorId, { stage: 'connected', status: 'complete', createdAt: 400 + index });
-    store.finishCollectorRun(collectorId, { status: 'stopped', finishedAt: 500 + index });
+    const actionId = await store.startAction(`action-${index}`, { ownerPid: 1 });
+    await store.updateAction(actionId, { status: 'success', finishedAt: 300 + index });
+    const collectorId = await store.startCollectorRun({ ownerPid: 1, startedAt: 400 + index });
+    await store.recordCollectorEvent(collectorId, { stage: 'connected', status: 'complete', createdAt: 400 + index });
+    await store.finishCollectorRun(collectorId, { status: 'stopped', finishedAt: 500 + index });
   }
 
-  const result = store.pruneDiagnostics({ keepRecent: 3 });
+  const result = await store.pruneDiagnostics({ keepRecent: 3 });
 
-  assert.equal(store.getRun(runIds[0]).events.length, 0, 'old WhatsApp success survives only as a compact checkpoint');
-  assert.equal(store.getRun(runIds[1]), null, 'old failed run is deleted');
-  assert.equal(store.getLastSuccessfulRun(['whatsapp']).id, runIds[0]);
-  assert.equal(store.getLastSuccessfulRun(['ats']).id, runIds[2]);
-  assert.equal(store.diagnosticHistory().filter((item) => item.kind === 'runs').length, 3);
-  assert.equal(store.diagnosticHistory().filter((item) => item.kind === 'actions').length, 3);
-  assert.equal(store.diagnosticHistory().filter((item) => item.kind === 'collectors').length, 3);
+  assert.equal((await store.getRun(runIds[0])).events.length, 0, 'old WhatsApp success survives only as a compact checkpoint');
+  assert.equal(await store.getRun(runIds[1]), null, 'old failed run is deleted');
+  assert.equal((await store.getLastSuccessfulRun(['whatsapp'])).id, runIds[0]);
+  assert.equal((await store.getLastSuccessfulRun(['ats'])).id, runIds[2]);
+  assert.equal((await store.diagnosticHistory()).filter((item) => item.kind === 'runs').length, 3);
+  assert.equal((await store.diagnosticHistory()).filter((item) => item.kind === 'actions').length, 3);
+  assert.equal((await store.diagnosticHistory()).filter((item) => item.kind === 'collectors').length, 3);
   assert.ok(result.runsDeleted >= 1);
   assert.ok(result.eventsDeleted >= 1);
   store.close();
 });
 
-test('run source summary is persisted for the dashboard', () => {
+test('run source summary is persisted for the dashboard', async () => {
   const store = newStore();
-  const runId = store.startRun({ fromTs: 10, toTs: 20, sources: ['ats', 'whatsapp'], startedAt: 30 });
+  const runId = await store.startRun({ fromTs: 10, toTs: 20, sources: ['ats', 'whatsapp'], startedAt: 30 });
   const details = {
     ats: { candidates: 2, errors: 0 },
     whatsapp: { candidates: 1, messages: 4, warning: null },
   };
-  store.finishRun(runId, { status: 'success', details, finishedAt: 40 });
+  await store.finishRun(runId, { status: 'success', details, finishedAt: 40 });
 
-  const run = store.getLastRun();
+  const run = await store.getLastRun();
   assert.equal(run.id, Number(runId));
   assert.deepEqual(run.details, details);
   store.close();
 });
 
-test('run audit events persist safe structured processing evidence', () => {
+test('run audit events persist safe structured processing evidence', async () => {
   const store = newStore();
-  const runId = store.startRun({ fromTs: 10, toTs: 20, sources: ['whatsapp'], startedAt: 30 });
+  const runId = await store.startRun({ fromTs: 10, toTs: 20, sources: ['whatsapp'], startedAt: 30 });
 
-  store.recordRunEvent(runId, {
+  await store.recordRunEvent(runId, {
     source: 'whatsapp',
     scope: 'group',
     scopeKey: 'Group A',
@@ -507,9 +507,9 @@ test('run audit events persist safe structured processing evidence', () => {
     details: { coverage: 'unknown', candidates: 0 },
     createdAt: 35,
   });
-  store.finishRun(runId, { status: 'incomplete', finishedAt: 40 });
+  await store.finishRun(runId, { status: 'incomplete', finishedAt: 40 });
 
-  const run = store.getLastRun();
+  const run = await store.getLastRun();
   assert.deepEqual(run.events, [{
     id: 1,
     runId: Number(runId),
@@ -522,16 +522,16 @@ test('run audit events persist safe structured processing evidence', () => {
     details: { coverage: 'unknown', candidates: 0 },
     createdAt: 35,
   }]);
-  assert.equal(store.getLastSuccessfulRun(['whatsapp']), null);
+  assert.equal(await store.getLastSuccessfulRun(['whatsapp']), null);
   store.close();
 });
 
-test('legacy WhatsApp state migration imports message dedup without moving checkpoints backwards', () => {
+test('legacy WhatsApp state migration imports message dedup without moving checkpoints backwards', async () => {
   const store = newStore();
-  store.markMessageDone({ messageId: 'existing', groupJid: 'group-a', timestamp: 300 });
-  store.setCheckpoint('whatsapp:group-a', 500);
+  await store.markMessageDone({ messageId: 'existing', groupJid: 'group-a', timestamp: 300 });
+  await store.setCheckpoint('whatsapp:group-a', 500);
 
-  const result = store.importWhatsAppState({
+  const result = await store.importWhatsAppState({
     messages: [
       { message_id: 'existing', group_jid: 'group-a', wa_timestamp: 300, processed_at: 400 },
       { message_id: 'legacy', group_jid: 'group-a', wa_timestamp: 350, processed_at: 450 },
@@ -540,28 +540,28 @@ test('legacy WhatsApp state migration imports message dedup without moving check
   });
 
   assert.deepEqual(result, { messagesImported: 1, checkpointsSeen: 1 });
-  assert.equal(store.shouldProcessMessage('legacy'), false);
-  assert.equal(store.getCheckpoint('whatsapp:group-a'), 500);
+  assert.equal(await store.shouldProcessMessage('legacy'), false);
+  assert.equal(await store.getCheckpoint('whatsapp:group-a'), 500);
   store.close();
 });
 
-test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata only', () => {
+test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata only', async () => {
   const store = newStore();
-  const matching = store.recordSighting({
+  const matching = await store.recordSighting({
     url: 'https://example.com/jobs/backend',
     company: 'Example',
     title: 'Backend Engineer',
     source: 'ats',
     seenAt: 100,
   });
-  const rejected = store.recordSighting({
+  const rejected = await store.recordSighting({
     url: 'https://example.com/jobs/frontend',
     company: 'Example',
     title: 'Frontend Engineer',
     source: 'whatsapp',
     seenAt: 200,
   });
-  store.savePage({
+  await store.savePage({
     canonicalUrl: rejected.canonicalUrl,
     finalUrl: rejected.canonicalUrl,
     status: 'active',
@@ -570,7 +570,7 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     fetchedAt: 250,
   });
 
-  store.saveEvaluation(matching.jobKey, {
+  await store.saveEvaluation(matching.jobKey, {
     company: 'Example',
     title: 'Backend Engineer',
     summary: 'Build reliable backend services.',
@@ -586,7 +586,7 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     criteriaVersion: 'v1',
     evaluatedAt: 300,
   });
-  store.saveEvaluation(rejected.jobKey, {
+  await store.saveEvaluation(rejected.jobKey, {
     company: 'Example',
     title: 'Frontend Engineer',
     summary: 'Build browser interfaces.',
@@ -601,9 +601,9 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     criteriaVersion: 'v1',
     evaluatedAt: 400,
   });
-  store.markOpened([matching.jobKey], 500);
+  await store.markOpened([matching.jobKey], 500);
 
-  const snapshot = store.getDashboardSnapshot();
+  const snapshot = await store.getDashboardSnapshot();
   assert.deepEqual(snapshot.stats, {
     total: 2,
     suitable: 1,
@@ -617,7 +617,7 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
     cvMatch: 5, seniority: 4, roleScope: 4, location: 5, sector: 5, uncertainties: [],
   });
 
-  const rejectedRow = store.getJob(rejected.jobKey);
+  const rejectedRow = await store.getJob(rejected.jobKey);
   assert.equal(rejectedRow.company, null);
   assert.equal(rejectedRow.title, null);
   assert.equal(rejectedRow.summary, null);
@@ -628,29 +628,29 @@ test('dashboard shows only suitable jobs and rejected jobs retain dedup metadata
   assert.equal(rejectedRow.apply_url, rejected.canonicalUrl);
   assert.equal(rejectedRow.sources_json, '[]');
   assert.ok(rejectedRow.company_role_key, 'company-role identity is retained only for dedup');
-  assert.equal(store.getFreshPage(rejected.canonicalUrl, { now: 500, ttlMs: 1_000 }), null);
+  assert.equal(await store.getFreshPage(rejected.canonicalUrl, { now: 500, ttlMs: 1_000 }), null);
 
-  store.recordSighting({
+  await store.recordSighting({
     url: rejected.canonicalUrl,
     company: 'Example',
     title: 'Frontend Engineer',
     source: 'WhatsApp: another group',
     seenAt: 600,
   });
-  assert.equal(store.getJob(rejected.jobKey).sources_json, '[]');
+  assert.equal((await store.getJob(rejected.jobKey)).sources_json, '[]');
   store.close();
 });
 
-test('archived jobs disappear from active queues while retaining only dedup identity', () => {
+test('archived jobs disappear from active queues while retaining only dedup identity', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://example.com/jobs/reviewed?utm_source=whatsapp',
     company: 'Example',
     title: 'Senior Backend Engineer',
     source: 'whatsapp',
     seenAt: 100,
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example',
     title: 'Senior Backend Engineer',
     summary: 'Build distributed services.',
@@ -666,12 +666,12 @@ test('archived jobs disappear from active queues while retaining only dedup iden
     evaluatedAt: 200,
   });
 
-  assert.equal(store.archiveJob(sighting.jobKey, 300), true);
-  assert.equal(store.getDashboardSnapshot().jobs.length, 0);
-  assert.equal(store.listUnpresentedSuitable().length, 0);
-  assert.equal(store.listUnopenedSuitable().length, 0);
+  assert.equal(await store.archiveJob(sighting.jobKey, 300), true);
+  assert.equal((await store.getDashboardSnapshot()).jobs.length, 0);
+  assert.equal((await store.listUnpresentedSuitable()).length, 0);
+  assert.equal((await store.listUnopenedSuitable()).length, 0);
 
-  const archived = store.getJob(sighting.jobKey);
+  const archived = await store.getJob(sighting.jobKey);
   assert.equal(archived.archived_at, 300);
   assert.equal(archived.company, null);
   assert.equal(archived.title, null);
@@ -680,7 +680,7 @@ test('archived jobs disappear from active queues while retaining only dedup iden
   assert.equal(archived.apply_url, sighting.canonicalUrl);
   assert.ok(archived.company_role_key);
 
-  const repeated = store.recordSighting({
+  const repeated = await store.recordSighting({
     url: 'https://example.com/jobs/reviewed?utm_source=ats',
     company: 'Example',
     title: 'Senior Backend Engineer',
@@ -688,82 +688,83 @@ test('archived jobs disappear from active queues while retaining only dedup iden
     seenAt: 400,
   });
   assert.equal(repeated.isNew, false);
-  assert.equal(store.needsEvaluation(repeated.jobKey, {
+  assert.equal(await store.needsEvaluation(repeated.jobKey, {
     contentHash: 'new-content', profileHash: 'new-profile', criteriaVersion: 'v2', activeStatus: 'active',
   }), false);
-  const repeatedRow = store.getJob(repeated.jobKey);
+  const repeatedRow = await store.getJob(repeated.jobKey);
   assert.equal(repeatedRow.sources_json, '[]');
   assert.equal(repeatedRow.apply_url, sighting.canonicalUrl);
   store.close();
 });
 
-test('LinkedIn identity is the posting id across subdomains, slugs and tracking params', () => {
+test('LinkedIn identity is the posting id across subdomains, slugs and tracking params', async () => {
   const store = newStore();
-  const first = store.recordSighting({ url: 'https://il.linkedin.com/jobs/view/backend-engineer-at-acme-4425439971?refId=a&trackingId=b',
+  const first = await store.recordSighting({ url: 'https://il.linkedin.com/jobs/view/backend-engineer-at-acme-4425439971?refId=a&trackingId=b',
     company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Backend' });
-  const second = store.recordSighting({ url: 'https://www.linkedin.com/jobs/search/?currentJobId=4425439971&geoId=101620260',
+  const second = await store.recordSighting({ url: 'https://www.linkedin.com/jobs/search/?currentJobId=4425439971&geoId=101620260',
     company: 'Acme', title: 'Backend Engineer', source: 'LinkedIn: Data' });
-  const shared = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4425439971/', source: 'WhatsApp: Group A' });
+  const shared = await store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4425439971/', source: 'WhatsApp: Group A' });
 
   assert.equal(first.isNew, true);
   assert.equal(second.jobKey, first.jobKey);
   assert.equal(shared.jobKey, first.jobKey);
-  const job = store.getJob(first.jobKey);
+  const job = await store.getJob(first.jobKey);
   assert.equal(job.canonical_url, 'https://www.linkedin.com/jobs/view/4425439971');
   assert.deepEqual(JSON.parse(job.sources_json), ['LinkedIn: Backend', 'LinkedIn: Data', 'WhatsApp: Group A']);
   store.close();
 });
 
-test('LinkedIn merges with a known job on company and role, like every other source', () => {
+test('LinkedIn merges with a known job on company and role, like every other source', async () => {
   const store = newStore();
-  const ats = store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme', title: 'Data Analyst', source: 'ATS: greenhouse-api' });
-  const linkedin = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000001', company: 'Acme Ltd', title: 'Data Analyst',
+  const ats = await store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme', title: 'Data Analyst', source: 'ATS: greenhouse-api' });
+  const linkedin = await store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000001', company: 'Acme Ltd', title: 'Data Analyst',
     source: 'LinkedIn: Analyst' });
   assert.equal(linkedin.jobKey, ats.jobKey);
   assert.equal(linkedin.isNew, false);
-  const atsTwin = store.recordSighting({ url: 'https://jobs.lever.co/acme/2', company: 'Acme', title: 'Data Analyst', source: 'ATS: lever-api' });
+  const atsTwin = await store.recordSighting({ url: 'https://jobs.lever.co/acme/2', company: 'Acme', title: 'Data Analyst', source: 'ATS: lever-api' });
   assert.equal(atsTwin.jobKey, ats.jobKey);
-  assert.deepEqual(JSON.parse(store.getJob(ats.jobKey).sources_json), ['ATS: greenhouse-api', 'LinkedIn: Analyst', 'ATS: lever-api']);
+  assert.deepEqual(JSON.parse((await store.getJob(ats.jobKey)).sources_json), ['ATS: greenhouse-api', 'LinkedIn: Analyst', 'ATS: lever-api']);
   store.close();
 });
 
-test('an archived or rejected LinkedIn posting is not revived by a new sighting', () => {
+test('an archived or rejected LinkedIn posting is not revived by a new sighting', async () => {
   const store = newStore();
   const url = 'https://www.linkedin.com/jobs/view/4000000002';
-  const archived = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend' });
-  store.archiveJob(archived.jobKey);
-  const again = store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend' });
+  const archived = await store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend' });
+  await store.archiveJob(archived.jobKey);
+  const again = await store.recordSighting({ url, company: 'Acme', title: 'Backend', source: 'LinkedIn: Backend' });
   assert.equal(again.isNew, false);
-  assert.ok(store.getJob(archived.jobKey).archived_at);
-  assert.equal(store.listPendingEvaluation().length, 0);
+  assert.ok((await store.getJob(archived.jobKey)).archived_at);
+  assert.equal((await store.listPendingEvaluation()).length, 0);
   store.close();
 });
 
-test('rejected LinkedIn postings keep only technical dedup identity', () => {
+test('rejected LinkedIn postings keep only technical dedup identity', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000003', company: 'Acme', title: 'Backend',
+  const sighting = await store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4000000003', company: 'Acme', title: 'Backend',
     source: 'LinkedIn: Backend' });
-  store.recordLinkedInPosting({ linkedinId: '4000000003', jobKey: sighting.jobKey, listedAt: '2026-09-28' });
-  store.recordLinkedInExternalUrl('4000000003', 'https://boards.greenhouse.io/acme/jobs/9');
-  store.saveEvaluation(sighting.jobKey, {
+  await store.recordLinkedInPosting({ linkedinId: '4000000003', jobKey: sighting.jobKey, listedAt: '2026-09-28' });
+  await store.recordLinkedInExternalUrl('4000000003', 'https://boards.greenhouse.io/acme/jobs/9');
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Acme', title: 'Backend', summary: 's', score: 2, fitLabel: 'לא מתאים', decisionReason: 'r', suitable: false,
     applyUrl: 'https://www.linkedin.com/jobs/view/4000000003', activeStatus: 'active', contentHash: 'c', profileHash: 'p',
     criteriaVersion: 'v', evaluatedAt: 1,
   });
-  const job = store.getJob(sighting.jobKey);
+  const job = await store.getJob(sighting.jobKey);
   assert.equal(job.company, null);
   assert.equal(job.sources_json, '[]');
-  assert.equal(store.getLinkedInPosting('4000000003').external_canonical_url, null);
-  assert.equal(store.getLinkedInPosting('4000000003').linkedin_id, '4000000003');
+  assert.equal((await store.getLinkedInPosting('4000000003')).external_canonical_url, null);
+  assert.equal((await store.getLinkedInPosting('4000000003')).linkedin_id, '4000000003');
   store.close();
 });
 
-test('opening the store re-keys legacy LinkedIn URLs to the posting id without deleting collisions', () => {
+test('opening the store re-keys legacy LinkedIn URLs to the posting id without deleting collisions', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-store-'));
   const dbPath = path.join(dir, 'jobs.db');
   const store = createJobStore(dbPath);
   store.close();
   const raw = new Database(dbPath);
+  raw.exec('DROP TABLE schema_migrations'); // A database from before versioned migrations.
   const insert = raw.prepare(`INSERT INTO jobs (job_key, canonical_url, apply_url, company_role_key, sources_json, first_seen_at, last_seen_at)
     VALUES (?, ?, ?, '::', '[]', 1, 1)`);
   insert.run('legacy1', 'https://il.linkedin.com/jobs/view/backend-at-acme-4100000001?refId=x', 'https://il.linkedin.com/jobs/view/backend-at-acme-4100000001');
@@ -772,60 +773,60 @@ test('opening the store re-keys legacy LinkedIn URLs to the posting id without d
   raw.close();
 
   const reopened = createJobStore(dbPath);
-  assert.equal(reopened.getJob('legacy1').canonical_url, 'https://www.linkedin.com/jobs/view/4100000001');
-  assert.equal(reopened.getJob('legacy2').canonical_url, 'https://www.linkedin.com/jobs/view/4100000002');
-  assert.equal(reopened.getJob('legacy3').canonical_url, 'https://il.linkedin.com/jobs/view/4100000002?trackingId=y');
-  assert.equal(reopened.countJobs(), 3);
+  assert.equal((await reopened.getJob('legacy1')).canonical_url, 'https://www.linkedin.com/jobs/view/4100000001');
+  assert.equal((await reopened.getJob('legacy2')).canonical_url, 'https://www.linkedin.com/jobs/view/4100000002');
+  assert.equal((await reopened.getJob('legacy3')).canonical_url, 'https://il.linkedin.com/jobs/view/4100000002?trackingId=y');
+  assert.equal(await reopened.countJobs(), 3);
   reopened.close();
 });
 
-test('config/jobs.yml is the only source of LinkedIn searches and query changes restart coverage', () => {
+test('config/jobs.yml is the only source of LinkedIn searches and query changes restart coverage', async () => {
   const store = newStore();
-  store.syncLinkedInSearches([{ key: 'analyst', label: 'Analyst', keywords: '"data analyst"', location: 'Israel' }]);
-  const [seeded] = store.listLinkedInSearches();
-  store.recordLinkedInSearchAttempt({ searchId: seeded.id, queryHash: seeded.queryHash, status: 'complete', coveredUntil: 500 });
+  await store.syncLinkedInSearches([{ key: 'analyst', label: 'Analyst', keywords: '"data analyst"', location: 'Israel' }]);
+  const [seeded] = await store.listLinkedInSearches();
+  await store.recordLinkedInSearchAttempt({ searchId: seeded.id, queryHash: seeded.queryHash, status: 'complete', coveredUntil: 500 });
 
-  const [relabeled] = store.syncLinkedInSearches([{ key: 'analyst', label: 'Analytics', keywords: '"Data  Analyst"', location: 'israel' }]);
+  const [relabeled] = await store.syncLinkedInSearches([{ key: 'analyst', label: 'Analytics', keywords: '"Data  Analyst"', location: 'israel' }]);
   assert.equal(relabeled.label, 'Analytics');
   assert.equal(relabeled.coveredUntil, 500, 'a cosmetic config edit keeps coverage');
-  const [changed] = store.syncLinkedInSearches([{ key: 'analyst', label: 'Analytics', keywords: '"data analyst" OR "bi analyst"', location: 'Israel' }]);
+  const [changed] = await store.syncLinkedInSearches([{ key: 'analyst', label: 'Analytics', keywords: '"data analyst" OR "bi analyst"', location: 'Israel' }]);
   assert.equal(changed.id, seeded.id);
   assert.equal(changed.coveredUntil, null, 'a changed query starts fresh');
 
-  const afterRemoval = store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: 'backend', location: 'Israel' }]);
+  const afterRemoval = await store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: 'backend', location: 'Israel' }]);
   assert.deepEqual(afterRemoval.map(({ key, enabled }) => ({ key, enabled })), [
     { key: 'analyst', enabled: false },
     { key: 'backend', enabled: true },
   ], 'a search removed from config is disabled, not deleted');
 
-  assert.throws(() => store.syncLinkedInSearches([{ key: 'x', keywords: 'x; DROP TABLE jobs', location: 'Israel' }]), /keywords/);
-  assert.throws(() => store.syncLinkedInSearches([{ key: 'x', keywords: 'backend' }]), /location or geoId/);
-  assert.throws(() => store.syncLinkedInSearches([{ keywords: 'backend', location: 'Israel' }]), /needs a key/);
-  assert.throws(() => store.syncLinkedInSearches([
+  await assert.rejects(async () => await store.syncLinkedInSearches([{ key: 'x', keywords: 'x; DROP TABLE jobs', location: 'Israel' }]), /keywords/);
+  await assert.rejects(async () => await store.syncLinkedInSearches([{ key: 'x', keywords: 'backend' }]), /location or geoId/);
+  await assert.rejects(async () => await store.syncLinkedInSearches([{ keywords: 'backend', location: 'Israel' }]), /needs a key/);
+  await assert.rejects(async () => await store.syncLinkedInSearches([
     { key: 'x', keywords: 'backend', location: 'Israel' }, { key: 'x', keywords: 'data', location: 'Israel' },
   ]), /unique/);
-  assert.equal(store.isSourceEnabled('linkedin'), true);
-  assert.equal(store.setSourceEnabled('linkedin', false), false);
+  assert.equal(await store.isSourceEnabled('linkedin'), true);
+  assert.equal(await store.setSourceEnabled('linkedin', false), false);
   store.close();
 });
 
-test('a run that only fell short on LinkedIn still anchors the ATS/WhatsApp window', () => {
+test('a run that only fell short on LinkedIn still anchors the ATS/WhatsApp window', async () => {
   const store = newStore();
-  const runId = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
-  store.finishRun(runId, { status: 'incomplete', windowStatus: 'success', finishedAt: 10 });
-  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp'])?.id, runId);
-  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp', 'linkedin'])?.id, runId);
-  const failed = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
-  store.finishRun(failed, { status: 'incomplete', windowStatus: 'incomplete', finishedAt: 20 });
-  assert.equal(store.getLastSuccessfulRun(['ats', 'whatsapp'])?.id, runId);
+  const runId = await store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
+  await store.finishRun(runId, { status: 'incomplete', windowStatus: 'success', finishedAt: 10 });
+  assert.equal((await store.getLastSuccessfulRun(['ats', 'whatsapp']))?.id, runId);
+  assert.equal((await store.getLastSuccessfulRun(['ats', 'whatsapp', 'linkedin']))?.id, runId);
+  const failed = await store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp', 'linkedin'] });
+  await store.finishRun(failed, { status: 'incomplete', windowStatus: 'incomplete', finishedAt: 20 });
+  assert.equal((await store.getLastSuccessfulRun(['ats', 'whatsapp']))?.id, runId);
   store.close();
 });
 
-test('an interesting job suggests its company as a candidate, never demoting a watched one', () => {
+test('an interesting job suggests its company as a candidate, never demoting a watched one', async () => {
   const store = newStore();
-  const evaluate = (url, company) => {
-    const sighting = store.recordSighting({ url, company, title: 'Backend Engineer', source: 'LinkedIn: Backend', seenAt: 1_000 });
-    store.saveEvaluation(sighting.jobKey, {
+  const evaluate = async (url, company) => {
+    const sighting = await store.recordSighting({ url, company, title: 'Backend Engineer', source: 'LinkedIn: Backend', seenAt: 1_000 });
+    await store.saveEvaluation(sighting.jobKey, {
       company, title: 'Backend Engineer', summary: 'x', score: 4.2, fitLabel: 'מתאים', decisionReason: 'x',
       suitable: true, applyUrl: url, activeStatus: 'active', contentHash: 'c', profileHash: 'p',
       criteriaVersion: 'v1', evaluatedAt: 2_000,
@@ -833,15 +834,15 @@ test('an interesting job suggests its company as a candidate, never demoting a w
     return sighting.jobKey;
   };
 
-  const suggested = store.suggestCompanyForJob(evaluate('https://jobs.lever.co/acme/1', 'Acme'));
+  const suggested = await store.suggestCompanyForJob(await evaluate('https://jobs.lever.co/acme/1', 'Acme'));
   assert.equal(suggested.name, 'Acme');
   assert.equal(suggested.status, 'candidate');
 
-  store.approveCompany(suggested.id);
-  const again = store.suggestCompanyForJob(evaluate('https://jobs.lever.co/acme/2', 'Acme'));
+  await store.approveCompany(suggested.id);
+  const again = await store.suggestCompanyForJob(await evaluate('https://jobs.lever.co/acme/2', 'Acme'));
   assert.equal(again.status, 'watched');
 
   // A job that cannot resolve a company is skipped, not an error.
-  assert.equal(store.suggestCompanyForJob('0'.repeat(24)), null);
+  assert.equal(await store.suggestCompanyForJob('0'.repeat(24)), null);
   store.close();
 });

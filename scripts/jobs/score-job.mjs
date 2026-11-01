@@ -351,7 +351,7 @@ export function createJobScorer(config, {
         })));
         failures.push(...batchFailures);
       }
-      onProgress?.({
+      await onProgress?.({
         completed: Math.min(start + batch.length, items.length),
         total: items.length,
         failed: failures.length,

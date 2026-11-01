@@ -13,7 +13,7 @@ export function loadConfiguredCompanyEntries(rootDir, portalsPath = process.env.
   return Array.isArray(parsed?.tracked_companies) ? parsed.tracked_companies : [];
 }
 
-export function syncConfiguredCompanyEntries(store, rootDir, portalsPath) {
+export async function syncConfiguredCompanyEntries(store, rootDir, portalsPath) {
   if (typeof store.importConfiguredCompanies !== 'function') return { imported: 0 };
-  return store.importConfiguredCompanies(loadConfiguredCompanyEntries(rootDir, portalsPath));
+  return await store.importConfiguredCompanies(loadConfiguredCompanyEntries(rootDir, portalsPath));
 }

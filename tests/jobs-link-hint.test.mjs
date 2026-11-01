@@ -36,38 +36,38 @@ test('a link hint comes from the URL slug, else a bold first line, else the text
   assert.equal(extractLinkHint('https://www.linkedin.com/jobs/view/1111111111', 'https://www.linkedin.com/jobs/view/1111111111'), null, 'no text, no hint');
 });
 
-test('a hint is kept until the job is decided, and a stronger hint replaces a weaker one only', (context) => {
+test('a hint is kept until the job is decided, and a stronger hint replaces a weaker one only', async (context) => {
   const store = tempStore(context);
-  const { jobKey } = store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4458840528', source: 'WhatsApp: G' });
-  assert.equal(store.setLinkHint(jobKey, { source: 'text', text: 'hiring' }), true);
-  assert.equal(store.setLinkHint(jobKey, { source: 'slug', title: 'backend engineer', company: 'acme' }), true);
-  assert.equal(store.setLinkHint(jobKey, { source: 'bold', title: 'x' }), false, 'weaker than the slug');
-  assert.equal(JSON.parse(store.getJob(jobKey).link_hint).source, 'slug');
-  store.archiveJob(jobKey);
-  assert.equal(store.getJob(jobKey).link_hint, null, 'archiving clears it');
+  const { jobKey } = await store.recordSighting({ url: 'https://www.linkedin.com/jobs/view/4458840528', source: 'WhatsApp: G' });
+  assert.equal(await store.setLinkHint(jobKey, { source: 'text', text: 'hiring' }), true);
+  assert.equal(await store.setLinkHint(jobKey, { source: 'slug', title: 'backend engineer', company: 'acme' }), true);
+  assert.equal(await store.setLinkHint(jobKey, { source: 'bold', title: 'x' }), false, 'weaker than the slug');
+  assert.equal(JSON.parse((await store.getJob(jobKey)).link_hint).source, 'slug');
+  await store.archiveJob(jobKey);
+  assert.equal((await store.getJob(jobKey)).link_hint, null, 'archiving clears it');
 });
 
 test('shared LinkedIn links are screened by their hint before any LinkedIn request', async (context) => {
   const store = tempStore(context);
-  store.decideJob((() => {
-    const { jobKey } = store.recordSighting({ url: 'https://boards.greenhouse.io/blockedco/jobs/1', company: 'BlockedCo', title: 'Backend Engineer', source: 'ATS: g' });
-    store.saveEvaluation(jobKey, { company: 'BlockedCo', title: 'Backend Engineer', summary: 's', score: 4, fitLabel: 'מתאים', decisionReason: 'r',
+  await store.decideJob(await (async () => {
+    const { jobKey } = await store.recordSighting({ url: 'https://boards.greenhouse.io/blockedco/jobs/1', company: 'BlockedCo', title: 'Backend Engineer', source: 'ATS: g' });
+    await store.saveEvaluation(jobKey, { company: 'BlockedCo', title: 'Backend Engineer', summary: 's', score: 4, fitLabel: 'מתאים', decisionReason: 'r',
       suitable: true, applyUrl: 'x', activeStatus: 'active', contentHash: 'c', profileHash: 'p1', criteriaVersion: 'v1', evaluatedAt: 1 });
     return jobKey;
   })(), 'company_not_interesting');
 
-  const shared = (id, hint) => {
+  const shared = async (id, hint) => {
     const url = `https://www.linkedin.com/jobs/view/${id}`;
-    const sighting = store.recordSighting({ url, source: 'WhatsApp: G' });
-    if (hint) store.setLinkHint(sighting.jobKey, hint);
+    const sighting = await store.recordSighting({ url, source: 'WhatsApp: G' });
+    if (hint) await store.setLinkHint(sighting.jobKey, hint);
     return { ...sighting, url, source: 'WhatsApp: G' };
   };
-  const negative = shared(4400000001, { source: 'bold', title: 'Senior Data Analyst' });
-  const offTarget = shared(4400000002, { source: 'slug', title: 'office manager', company: 'acme' });
-  const blocked = shared(4400000003, { source: 'slug', title: 'backend engineer', company: 'BlockedCo' });
-  const looseText = shared(4400000004, { source: 'text', text: 'Great team, ping me' });
-  const backend = shared(4400000005, { source: 'slug', title: 'senior backend engineer', company: 'acme' });
-  const noHint = shared(4400000006, null);
+  const negative = await shared(4400000001, { source: 'bold', title: 'Senior Data Analyst' });
+  const offTarget = await shared(4400000002, { source: 'slug', title: 'office manager', company: 'acme' });
+  const blocked = await shared(4400000003, { source: 'slug', title: 'backend engineer', company: 'BlockedCo' });
+  const looseText = await shared(4400000004, { source: 'text', text: 'Great team, ping me' });
+  const backend = await shared(4400000005, { source: 'slug', title: 'senior backend engineer', company: 'acme' });
+  const noHint = await shared(4400000006, null);
   const fetched = [];
 
   const outcomes = await evaluateCandidates({
@@ -80,7 +80,7 @@ test('shared LinkedIn links are screened by their hint before any LinkedIn reque
         return { status: 'active', finalUrl: url, contentHash: url, content: 'Senior Backend Engineer\nCompany: Acme\nBuild services.', identity: { company: 'Acme', title: 'Senior Backend Engineer' } };
       },
     },
-    scorer: { profileHash: 'p1', scoreBatchSettled: async (items, { onProgress }) => onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] }) },
+    scorer: { profileHash: 'p1', scoreBatchSettled: async (items, { onProgress }) => await onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] }) },
   });
 
   for (const job of [negative, offTarget, blocked]) {

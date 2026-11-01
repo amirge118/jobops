@@ -15,9 +15,9 @@ function tempStore(context) {
   return createJobStore(path.join(dir, 'jobs.db'));
 }
 
-function saveSuitable(store, { url, company = 'Acme', title = 'Backend Engineer', score = 4.2, source = 'WhatsApp: Jobs' }) {
-  const sighting = store.recordSighting({ url, company, title, source, seenAt: 1_000 });
-  store.saveEvaluation(sighting.jobKey, {
+async function saveSuitable(store, { url, company = 'Acme', title = 'Backend Engineer', score = 4.2, source = 'WhatsApp: Jobs' }) {
+  const sighting = await store.recordSighting({ url, company, title, source, seenAt: 1_000 });
+  await store.saveEvaluation(sighting.jobKey, {
     company, title, summary: 'Backend work.', score, fitLabel: 'מתאים', decisionReason: 'Fits.',
     fitBreakdown: {
       cvMatch: 4, seniority: 5, roleScope: 4, location: 5, sector: 3,
@@ -29,13 +29,13 @@ function saveSuitable(store, { url, company = 'Acme', title = 'Backend Engineer'
   return sighting.jobKey;
 }
 
-test('a decision keeps a minimal snapshot, archives the job, and still deduplicates it', (context) => {
+test('a decision keeps a minimal snapshot, archives the job, and still deduplicates it', async (context) => {
   const store = tempStore(context);
-  const jobKey = saveSuitable(store, { url: 'https://example.com/jobs/1' });
+  const jobKey = await saveSuitable(store, { url: 'https://example.com/jobs/1' });
 
-  assert.equal(store.decideJob(jobKey, 'too_senior', 5_000), true);
+  assert.equal(await store.decideJob(jobKey, 'too_senior', 5_000), true);
 
-  const [decision] = store.listJobDecisions();
+  const [decision] = await store.listJobDecisions();
   assert.equal(decision.decision, 'too_senior');
   assert.equal(decision.decidedAt, 5_000);
   assert.equal(decision.company, 'Acme');
@@ -45,25 +45,25 @@ test('a decision keeps a minimal snapshot, archives the job, and still deduplica
   assert.deepEqual(decision.sourceKinds, ['whatsapp']);
   assert.equal(decision.criteriaVersion, 'anchored-v4-evidence');
 
-  const job = store.getJob(jobKey);
+  const job = await store.getJob(jobKey);
   assert.ok(job.archived_at);
   assert.equal(job.company, null, 'the job itself is still wiped by archiving');
-  assert.equal(store.getDashboardStats().suitable, 0);
+  assert.equal((await store.getDashboardStats()).suitable, 0);
 
-  const again = store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: x' });
+  const again = await store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: x' });
   assert.equal(again.isNew, false);
-  assert.equal(store.decideJob(jobKey, 'interested'), false, 'a decided job cannot be decided twice');
-  assert.equal(store.listJobDecisions().length, 1);
+  assert.equal(await store.decideJob(jobKey, 'interested'), false, 'a decided job cannot be decided twice');
+  assert.equal((await store.listJobDecisions()).length, 1);
   store.close();
 });
 
-test('an unknown decision is rejected without archiving anything', (context) => {
+test('an unknown decision is rejected without archiving anything', async (context) => {
   const store = tempStore(context);
-  const jobKey = saveSuitable(store, { url: 'https://example.com/jobs/2' });
-  assert.throws(() => store.decideJob(jobKey, 'archive'), /Unknown decision/);
-  assert.equal(store.getJob(jobKey).archived_at, null);
-  assert.equal(store.listJobDecisions().length, 0);
-  assert.equal(store.decideJob('aaaaaaaaaaaaaaaaaaaaaaaa', 'interested'), false);
+  const jobKey = await saveSuitable(store, { url: 'https://example.com/jobs/2' });
+  await assert.rejects(async () => await store.decideJob(jobKey, 'archive'), /Unknown decision/);
+  assert.equal((await store.getJob(jobKey)).archived_at, null);
+  assert.equal((await store.listJobDecisions()).length, 0);
+  assert.equal(await store.decideJob('aaaaaaaaaaaaaaaaaaaaaaaa', 'interested'), false);
   store.close();
 });
 

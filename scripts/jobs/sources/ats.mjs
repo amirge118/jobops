@@ -28,10 +28,10 @@ export async function scanAts({ store, lookbackHours, companyWindow = null, runS
   if (Number.isFinite(lookbackHours)) args.push(`--max-age=${lookbackHours}`);
 
   const watchedCompanies = typeof store.listWatchedCompanySources === 'function'
-    ? store.listWatchedCompanySources()
+    ? await store.listWatchedCompanySources()
     : [];
   const lastSuccess = companyWindow && typeof store.getCompanyLastSuccessTimes === 'function'
-    ? store.getCompanyLastSuccessTimes()
+    ? await store.getCompanyLastSuccessTimes()
     : null;
   const catchUp = new Map();
   const skipped = new Set();
@@ -52,14 +52,14 @@ export async function scanAts({ store, lookbackHours, companyWindow = null, runS
   }
   const result = await runScan(args, options);
   if (typeof store.recordCompanyScanResults === 'function') {
-    store.recordCompanyScanResults({
+    await store.recordCompanyScanResults({
       scannedNames: watchedCompanies.map((company) => company.name).filter((name) => !skipped.has(name)),
       errorNames: (result.errors || []).map((error) => error.company),
     });
   }
   const candidates = [];
   for (const offer of result.offers) {
-    const sighting = store.recordSighting({
+    const sighting = await store.recordSighting({
       url: offer.url,
       company: offer.company,
       title: offer.title,

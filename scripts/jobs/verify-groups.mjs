@@ -15,7 +15,7 @@ async function main() {
   if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
 
   const store = createJobStore(config.jobsDbPath);
-  const collector = store.getCollectorStatus();
+  const collector = await store.getCollectorStatus();
   store.close();
   if (collector && ['starting', 'connecting', 'connected', 'reconnecting', 'pairing_required', 'unconfirmed'].includes(collector.status)) {
     const verification = [...(collector.events || [])].reverse().find((event) => event.stage === 'group-verification')?.details?.groups;

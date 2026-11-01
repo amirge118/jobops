@@ -74,9 +74,9 @@ export function createGapCoverageChecker({ config = {}, runCodex = runCodexExec 
 export async function refreshGapCoverage({ store, checker, candidateContext, now = Date.now() }) {
   if (!candidateContext.resumeAvailable) return { status: 'skipped', reason: 'resume_unavailable', checked: 0, covered: 0 };
   const coverageKey = coverageKeyOf(candidateContext.resumeHash);
-  const judged = store.listGapTermCoverage(coverageKey);
-  const { topics } = aggregateGaps(store.listGapObservations(), {
-    currentResumeText: candidateContext.currentResume, statuses: store.listGapTermStatuses(),
+  const judged = await store.listGapTermCoverage(coverageKey);
+  const { topics } = aggregateGaps(await store.listGapObservations(), {
+    currentResumeText: candidateContext.currentResume, statuses: await store.listGapTermStatuses(),
   });
   const pending = topics.flatMap((topic) => topic.rows)
     .filter((row) => !judged.has(row.key))
@@ -84,7 +84,7 @@ export async function refreshGapCoverage({ store, checker, candidateContext, now
   if (pending.length === 0) return { status: 'complete', checked: 0, covered: 0 };
 
   const answers = await checker.check({ terms: pending, currentResume: candidateContext.currentResume });
-  store.saveGapTermCoverage(coverageKey, [...answers].map(([termKey, covered]) => ({ termKey, covered })), now);
+  await store.saveGapTermCoverage(coverageKey, [...answers].map(([termKey, covered]) => ({ termKey, covered })), now);
   const covered = [...answers.values()].filter(Boolean).length;
   return { status: answers.size < pending.length ? 'partial' : 'complete', checked: answers.size, covered };
 }

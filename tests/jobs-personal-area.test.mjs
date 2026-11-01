@@ -11,26 +11,26 @@ function newStore() {
   return createJobStore(path.join(dir, 'jobs.db'));
 }
 
-test('gap term statuses: set, keyed by the aggregation term key, and cleared', () => {
+test('gap term statuses: set, keyed by the aggregation term key, and cleared', async () => {
   const store = newStore();
-  store.setGapTermStatus('Prompt Engineering', 'in_progress', 100);
-  store.setGapTermStatus('IVR', 'hidden', 200);
+  await store.setGapTermStatus('Prompt Engineering', 'in_progress', 100);
+  await store.setGapTermStatus('IVR', 'hidden', 200);
   // Another spelling of the same term updates the one row.
-  store.setGapTermStatus('prompt-engineering', 'hidden', 300);
+  await store.setGapTermStatus('prompt-engineering', 'hidden', 300);
 
-  assert.deepEqual(store.listGapTermStatuses().map(({ termKey, status }) => [termKey, status]).sort(), [
+  assert.deepEqual((await store.listGapTermStatuses()).map(({ termKey, status }) => [termKey, status]).sort(), [
     ['ivr', 'hidden'],
     ['promptengineering', 'hidden'],
   ]);
 
-  assert.equal(store.setGapTermStatus('IVR', null), null);
-  assert.deepEqual(store.listGapTermStatuses().map((row) => row.termKey), ['promptengineering']);
+  assert.equal(await store.setGapTermStatus('IVR', null), null);
+  assert.deepEqual((await store.listGapTermStatuses()).map((row) => row.termKey), ['promptengineering']);
   store.close();
 });
 
-test('gap term statuses: reject unknown statuses and empty terms', () => {
+test('gap term statuses: reject unknown statuses and empty terms', async () => {
   const store = newStore();
-  assert.throws(() => store.setGapTermStatus('Go', 'done'), /Unknown gap term status/);
-  assert.throws(() => store.setGapTermStatus(' / ', 'hidden'), /term is required/);
+  await assert.rejects(async () => await store.setGapTermStatus('Go', 'done'), /Unknown gap term status/);
+  await assert.rejects(async () => await store.setGapTermStatus(' / ', 'hidden'), /term is required/);
   store.close();
 });

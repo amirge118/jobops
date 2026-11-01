@@ -90,7 +90,7 @@ function fakeStore({ pending = [] } = {}) {
   };
 }
 
-test('scanCollectedWhatsApp reports complete coverage for a brief blip and marks reads accordingly', () => {
+test('scanCollectedWhatsApp reports complete coverage for a brief blip and marks reads accordingly', async () => {
   const config = { sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'a@g.us' }], markRead: true } } };
   const collector = {
     id: 1,
@@ -99,13 +99,13 @@ test('scanCollectedWhatsApp reports complete coverage for a brief blip and marks
     events: [connectedEvent(0), closedEvent(5_000), connectedEvent(5_200)],
   };
 
-  const result = scanCollectedWhatsApp({ config, store: fakeStore(), sinceMs: 0, untilMs: 10_000, collector });
+  const result = await scanCollectedWhatsApp({ config, store: fakeStore(), sinceMs: 0, untilMs: 10_000, collector });
 
   assert.equal(result.groups[0].coverage.status, 'complete');
   assert.equal(result.groups[0].coverage.downtimeMs, 200);
 });
 
-test('scanCollectedWhatsApp still reports collector_gap for a genuinely long outage', () => {
+test('scanCollectedWhatsApp still reports collector_gap for a genuinely long outage', async () => {
   const config = { sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'a@g.us' }], markRead: true } } };
   const collector = {
     id: 1,
@@ -114,7 +114,7 @@ test('scanCollectedWhatsApp still reports collector_gap for a genuinely long out
     events: [connectedEvent(0), closedEvent(5_000), connectedEvent(400_000)],
   };
 
-  const result = scanCollectedWhatsApp({ config, store: fakeStore(), sinceMs: 0, untilMs: 500_000, collector });
+  const result = await scanCollectedWhatsApp({ config, store: fakeStore(), sinceMs: 0, untilMs: 500_000, collector });
 
   assert.equal(result.groups[0].coverage.status, 'partial');
   assert.equal(result.groups[0].coverage.reason, 'collector_gap');
@@ -122,7 +122,7 @@ test('scanCollectedWhatsApp still reports collector_gap for a genuinely long out
   assert.equal(result.groups[0].read.status, 'skipped');
 });
 
-test('a configured gapToleranceMs overrides the default', () => {
+test('a configured gapToleranceMs overrides the default', async () => {
   const config = {
     sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'a@g.us' }], markRead: true, collector: { gapToleranceMs: 100 } } },
   };
@@ -133,7 +133,7 @@ test('a configured gapToleranceMs overrides the default', () => {
     events: [connectedEvent(0), closedEvent(5_000), connectedEvent(5_500)], // 500ms gap > 100ms tolerance
   };
 
-  const result = scanCollectedWhatsApp({ config, store: fakeStore(), sinceMs: 0, untilMs: 10_000, collector });
+  const result = await scanCollectedWhatsApp({ config, store: fakeStore(), sinceMs: 0, untilMs: 10_000, collector });
 
   assert.equal(result.groups[0].coverage.status, 'partial');
 });

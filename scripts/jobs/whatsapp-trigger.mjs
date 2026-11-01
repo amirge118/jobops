@@ -42,18 +42,18 @@ export function triggerSettings(config) {
 }
 
 // Read-only: nothing is marked, recorded, or fetched.
-export function inspectWhatsAppBacklog({ config, store, now = Date.now() }) {
+export async function inspectWhatsAppBacklog({ config, store, now = Date.now() }) {
   const settings = triggerSettings(config);
   const sinceMs = now - settings.lookbackDays * 24 * 60 * 60 * 1000;
   const newJobs = new Map(); // canonical URL -> earliest message timestamp
   let pendingMessages = 0;
   for (const group of config.sources.whatsapp?.groups || []) {
-    const messages = store.listPendingWhatsAppMessages(group.jid, { sinceMs, untilMs: now, limit: 5_000 });
+    const messages = await store.listPendingWhatsAppMessages(group.jid, { sinceMs, untilMs: now, limit: 5_000 });
     pendingMessages += messages.length;
     for (const message of messages) {
       for (const url of messageJobUrls(message.text)) {
         const canonical = canonicalizeJobUrl(url);
-        if (!canonical || knownNonJobReason(url) || store.isKnownJobUrl(canonical)) continue;
+        if (!canonical || knownNonJobReason(url) || await store.isKnownJobUrl(canonical)) continue;
         const seenAt = Number(message.timestamp) || now;
         newJobs.set(canonical, Math.min(newJobs.get(canonical) ?? Infinity, seenAt));
       }
@@ -91,8 +91,8 @@ export async function runWhatsAppTrigger({ now = Date.now(), run = runBacklogPro
   let state;
   let quota;
   try {
-    state = inspectWhatsAppBacklog({ config, store, now });
-    quota = store.getLlmQuota();
+    state = await inspectWhatsAppBacklog({ config, store, now });
+    quota = await store.getLlmQuota();
   } finally { store.close(); }
   let decision = shouldProcess(state);
   // Without Codex quota nothing could be scored; the backlog simply keeps.

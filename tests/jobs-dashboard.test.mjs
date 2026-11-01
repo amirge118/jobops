@@ -52,7 +52,7 @@ test('dashboard LinkedIn API shows config searches read-only and only toggles th
     },
   };
   fs.mkdirSync(path.dirname(config.jobsDbPath), { recursive: true });
-  const server = createDashboardServer({ config, readiness: readyService });
+  const server = await createDashboardServer({ config, readiness: readyService });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -129,23 +129,23 @@ test('dashboard exposes WhatsApp backlog and queues one durable history request'
     sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'group-a@g.us' }] } },
   };
   const store = createJobStore(config.jobsDbPath);
-  store.queueWhatsAppMessage({ messageId: 'pending-1', groupJid: 'group-a@g.us', timestamp: Date.now(), text: 'https://example.com/job' });
-  store.markWhatsAppMessagesRead([{ id: 'pending-1', remoteJid: 'group-a@g.us' }], { readAt: Date.now() });
-  const collectorId = store.startCollectorRun({ ownerPid: process.pid, groupsExpected: 1 });
-  store.updateCollectorRun(collectorId, { status: 'connected', stage: 'connected', connectedAt: Date.now(), groupsFound: 1 });
+  await store.queueWhatsAppMessage({ messageId: 'pending-1', groupJid: 'group-a@g.us', timestamp: Date.now(), text: 'https://example.com/job' });
+  await store.markWhatsAppMessagesRead([{ id: 'pending-1', remoteJid: 'group-a@g.us' }], { readAt: Date.now() });
+  const collectorId = await store.startCollectorRun({ ownerPid: process.pid, groupsExpected: 1 });
+  await store.updateCollectorRun(collectorId, { status: 'connected', stage: 'connected', connectedAt: Date.now(), groupsFound: 1 });
   const missingFrom = Date.now() - 24 * 60 * 60 * 1_000;
-  const missing = store.requestWhatsAppHistory({
+  const missing = await store.requestWhatsAppHistory({
     fromTs: missingFrom, toTs: Date.now(), groupsTotal: 1,
     groups: [{ name: 'Group A', requestedFrom: missingFrom }],
   });
-  store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid });
-  store.recordWhatsAppHistoryGroup(missing.request.id, {
+  await store.claimNextWhatsAppHistoryRequest({ ownerPid: process.pid });
+  await store.recordWhatsAppHistoryGroup(missing.request.id, {
     name: 'Group A', status: 'failed', requestedFrom: missingFrom,
     reason: 'history_no_response',
   });
-  store.finishWhatsAppHistoryRequest(missing.request.id, { status: 'failed' });
+  await store.finishWhatsAppHistoryRequest(missing.request.id, { status: 'failed' });
   store.close();
-  const server = createDashboardServer({ config, readiness: readyService });
+  const server = await createDashboardServer({ config, readiness: readyService });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -195,12 +195,12 @@ test('dashboard exposes rolling 36h/7d group stats and ATS-vs-WhatsApp source pe
   };
   const store = createJobStore(config.jobsDbPath);
   const now = Date.now();
-  const seedRun = (finishedAt, details) => {
-    const runId = store.startRun({ fromTs: finishedAt - 1_000, toTs: finishedAt, sources: ['ats', 'whatsapp'], startedAt: finishedAt - 1_000 });
-    store.finishRun(runId, { status: 'success', details, finishedAt });
+  const seedRun = async (finishedAt, details) => {
+    const runId = await store.startRun({ fromTs: finishedAt - 1_000, toTs: finishedAt, sources: ['ats', 'whatsapp'], startedAt: finishedAt - 1_000 });
+    await store.finishRun(runId, { status: 'success', details, finishedAt });
   };
   // Inside both windows.
-  seedRun(now - 60 * 60 * 1_000, {
+  await seedRun(now - 60 * 60 * 1_000, {
     whatsapp: { groups: [{ name: 'Group A', coverage: { delivered: 5 } }] },
     processing: { scopes: [
       { source: 'whatsapp', name: 'Group A', processed: 2, suitable: 1, notSuitable: 1, filtered: 2, failed: 0 },
@@ -208,17 +208,17 @@ test('dashboard exposes rolling 36h/7d group stats and ATS-vs-WhatsApp source pe
     ] },
   });
   // Inside the 7-day window only.
-  seedRun(now - 3 * 24 * 60 * 60 * 1_000, {
+  await seedRun(now - 3 * 24 * 60 * 60 * 1_000, {
     whatsapp: { groups: [{ name: 'Group A', coverage: { delivered: 3 } }] },
     processing: { scopes: [{ source: 'whatsapp', name: 'Group A', processed: 1, suitable: 0, notSuitable: 1, filtered: 0, failed: 0 }] },
   });
   // Older than both windows — must not be counted anywhere.
-  seedRun(now - 10 * 24 * 60 * 60 * 1_000, {
+  await seedRun(now - 10 * 24 * 60 * 60 * 1_000, {
     whatsapp: { groups: [{ name: 'Group A', coverage: { delivered: 100 } }] },
     processing: { scopes: [{ source: 'whatsapp', name: 'Group A', processed: 100, suitable: 100, notSuitable: 0, filtered: 0, failed: 0 }] },
   });
   store.close();
-  const server = createDashboardServer({ config, readiness: readyService });
+  const server = await createDashboardServer({ config, readiness: readyService });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -258,7 +258,7 @@ test('dashboard API exposes state and prevents overlapping actions', async (cont
     scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
     sources: { whatsapp: { groups: [{ name: 'Group A' }] } },
   };
-  const server = createDashboardServer({
+  const server = await createDashboardServer({
     config,
     readiness: readyService,
     execute(command, rootDir, onOutput) {
@@ -307,13 +307,13 @@ test('dashboard API records a decision, archives the job, and rejects unknown de
     sources: { whatsapp: { groups: [] } },
   };
   const store = createJobStore(config.jobsDbPath);
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://example.com/jobs/42',
     company: 'Example',
     title: 'Backend Engineer',
     source: 'ats',
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Backend systems.',
     score: 4.5, fitLabel: 'בול מתאים', decisionReason: 'Strong match.', suitable: true,
     applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: 'v1',
@@ -321,7 +321,7 @@ test('dashboard API records a decision, archives the job, and rejects unknown de
   });
   store.close();
 
-  const server = createDashboardServer({ config });
+  const server = await createDashboardServer({ config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -363,17 +363,17 @@ test('"applied" records the decision and adds the job to the tracker once', asyn
     sources: { whatsapp: { groups: [] } },
   };
   const store = createJobStore(config.jobsDbPath);
-  const addJob = (url, title) => {
-    const sighting = store.recordSighting({ url, company: 'Example', title, source: 'ats' });
-    store.saveEvaluation(sighting.jobKey, {
+  const addJob = async (url, title) => {
+    const sighting = await store.recordSighting({ url, company: 'Example', title, source: 'ats' });
+    await store.saveEvaluation(sighting.jobKey, {
       company: 'Example', title, summary: 's', score: 4.25, fitLabel: 'מתאים', decisionReason: 'r', suitable: true,
       applyUrl: sighting.canonicalUrl, activeStatus: 'active', contentHash: url, profileHash: 'p', criteriaVersion: 'v1',
       evaluatedAt: Date.now(),
     });
     return sighting.jobKey;
   };
-  const first = addJob('https://example.com/jobs/1', 'Backend Engineer');
-  const second = addJob('https://example.com/jobs/2', 'Data Engineer');
+  const first = await addJob('https://example.com/jobs/1', 'Backend Engineer');
+  const second = await addJob('https://example.com/jobs/2', 'Data Engineer');
   store.close();
   fs.writeFileSync(path.join(tempDir, 'data', 'applications.md'), [
     '# Applications Tracker', '',
@@ -383,7 +383,7 @@ test('"applied" records the decision and adds the job to the tracker once', asyn
     '',
   ].join('\n'));
 
-  const server = createDashboardServer({ config });
+  const server = await createDashboardServer({ config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const decide = (jobKey) => fetch(`http://127.0.0.1:${server.address().port}/api/jobs/${jobKey}/decision`, {
@@ -399,7 +399,7 @@ test('"applied" records the decision and adds the job to the tracker once', asyn
 
   const store2 = createJobStore(config.jobsDbPath);
   context.after(() => store2.close());
-  assert.deepEqual(store2.listJobDecisions().map((item) => item.decision), ['applied', 'applied']);
+  assert.deepEqual((await store2.listJobDecisions()).map((item) => item.decision), ['applied', 'applied']);
 });
 
 test('dashboard reports a failure breakdown with retryable flags and can bulk-archive the unretryable ones', async (context) => {
@@ -413,17 +413,17 @@ test('dashboard reports a failure breakdown with retryable flags and can bulk-ar
     sources: { whatsapp: { groups: [] } },
   };
   const store = createJobStore(config.jobsDbPath);
-  const blocked = store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ats' });
-  const timedOut = store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ats' });
-  store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.' });
-  store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.' });
+  const blocked = await store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ats' });
+  const timedOut = await store.recordSighting({ url: 'https://example.com/jobs/timeout', source: 'ats' });
+  await store.markEvaluationFailure(blocked.jobKey, { code: 'bot_challenge', reason: 'Anti-bot wall.' });
+  await store.markEvaluationFailure(timedOut.jobKey, { code: 'timeout', reason: 'Slow host.' });
   for (const [id, code] of [['4400000001', 'linkedin_deferred'], ['4400000002', 'linkedin_cooldown']]) {
-    const queued = store.recordSighting({ url: `https://www.linkedin.com/jobs/view/${id}`, source: 'WhatsApp: G' });
-    store.markEvaluationFailure(queued.jobKey, { code, reason: 'waiting' });
+    const queued = await store.recordSighting({ url: `https://www.linkedin.com/jobs/view/${id}`, source: 'WhatsApp: G' });
+    await store.markEvaluationFailure(queued.jobKey, { code, reason: 'waiting' });
   }
   store.close();
 
-  const server = createDashboardServer({ config });
+  const server = await createDashboardServer({ config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -460,7 +460,7 @@ test('dashboard serves three real pages and focused page APIs', async (context) 
     decision: { minimumScore: 4, exactMatchScore: 4.5 },
     sources: { whatsapp: { groups: [{ name: 'Group A' }] } },
   };
-  const server = createDashboardServer({ config });
+  const server = await createDashboardServer({ config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -515,7 +515,7 @@ test('dashboard blocks an impossible scan and returns an actionable readiness re
     decision: { minimumScore: 4, exactMatchScore: 4.5 },
     sources: { whatsapp: { groups: [] } },
   };
-  const server = createDashboardServer({
+  const server = await createDashboardServer({
     config,
     readiness: { inspect: async () => blockedState },
     execute: async () => { executed = true; },
@@ -562,12 +562,12 @@ test('polling APIs keep detailed event timelines behind the diagnostic detail ro
     sources: { whatsapp: { groups: [] } },
   };
   const store = createJobStore(config.jobsDbPath);
-  const runId = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'] });
-  store.recordRunEvent(runId, { source: 'ats', scope: 'source', stage: 'collection', status: 'complete', count: 1 });
-  store.finishRun(runId, { status: 'success', details: { ats: { found: 1, candidates: 1, errors: 0 } } });
+  const runId = await store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'] });
+  await store.recordRunEvent(runId, { source: 'ats', scope: 'source', stage: 'collection', status: 'complete', count: 1 });
+  await store.finishRun(runId, { status: 'success', details: { ats: { found: 1, candidates: 1, errors: 0 } } });
   store.close();
 
-  const server = createDashboardServer({ config });
+  const server = await createDashboardServer({ config });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -595,19 +595,19 @@ test('personal-area insights API aggregates stored gap analyses against the curr
   fs.mkdirSync(path.join(tempDir, 'profile'), { recursive: true });
   fs.writeFileSync(path.join(tempDir, 'profile', '03-current-resume.md'), 'Backend engineer. AWS, Node.js.');
   const store = createJobStore(config.jobsDbPath);
-  const sighting = store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend', source: 'ats', seenAt: 100 });
-  store.saveEvaluation(sighting.jobKey, {
+  const sighting = await store.recordSighting({ url: 'https://example.com/jobs/1', company: 'Acme', title: 'Backend', source: 'ats', seenAt: 100 });
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Acme', title: 'Backend', summary: 's', score: 4.2, fitLabel: 'מתאים', decisionReason: 'r',
     suitable: true, applyUrl: sighting.canonicalUrl, activeStatus: 'active',
     contentHash: 'c', profileHash: 'p', criteriaVersion: 'v1', evaluatedAt: 200,
   });
-  store.saveResumeGap(sighting.jobKey, { inputHash: 'h', analyzedAt: 300, analysis: { items: [
+  await store.saveResumeGap(sighting.jobKey, { inputHash: 'h', analyzedAt: 300, analysis: { items: [
     { keyword: 'Kubernetes', term: 'Kubernetes', category: 'tool', kind: 'experience_gap', importance: 'required', explanation: 'e', suggestion: 's', evidence: null },
     { keyword: 'AWS', term: 'AWS', category: 'tool', kind: 'safe_addition', importance: 'preferred', explanation: 'e', suggestion: 's', evidence: 'x' },
   ], employerPriorities: [] } });
   store.close();
 
-  const server = createDashboardServer({ config, readiness: readyService });
+  const server = await createDashboardServer({ config, readiness: readyService });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   const insights = await fetch(`http://127.0.0.1:${server.address().port}/api/personal-area/insights`).then((response) => response.json());

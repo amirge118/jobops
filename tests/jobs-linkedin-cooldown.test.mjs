@@ -20,22 +20,22 @@ function newStore(context) {
   return store;
 }
 
-test('a block pauses all LinkedIn requests; recent activity pauses only page reads', (context) => {
+test('a block pauses all LinkedIn requests; recent activity pauses only page reads', async (context) => {
   const store = newStore(context);
   const at = 1_000_000;
-  assert.deepEqual(store.getLinkedInCooldown({ now: at }), { scans: null, reads: null });
+  assert.deepEqual(await store.getLinkedInCooldown({ now: at }), { scans: null, reads: null });
 
-  store.noteLinkedInActivity(at);
-  const afterActivity = store.getLinkedInCooldown({ now: at + 5 * MINUTE, afterActivityMs: 15 * MINUTE });
+  await store.noteLinkedInActivity(at);
+  const afterActivity = await store.getLinkedInCooldown({ now: at + 5 * MINUTE, afterActivityMs: 15 * MINUTE });
   assert.equal(afterActivity.scans, null, 'activity alone never stops the scheduled scan');
   assert.deepEqual(afterActivity.reads, { until: at + 15 * MINUTE, reason: 'recent_activity' });
-  assert.equal(store.getLinkedInCooldown({ now: at + 16 * MINUTE, afterActivityMs: 15 * MINUTE }).reads, null);
+  assert.equal((await store.getLinkedInCooldown({ now: at + 16 * MINUTE, afterActivityMs: 15 * MINUTE })).reads, null);
 
-  store.noteLinkedInBlock('rate_limited', { at, cooldownMs: 60 * MINUTE });
-  const blocked = store.getLinkedInCooldown({ now: at + 30 * MINUTE, afterActivityMs: 15 * MINUTE });
+  await store.noteLinkedInBlock('rate_limited', { at, cooldownMs: 60 * MINUTE });
+  const blocked = await store.getLinkedInCooldown({ now: at + 30 * MINUTE, afterActivityMs: 15 * MINUTE });
   assert.deepEqual(blocked.scans, { until: at + 60 * MINUTE, reason: 'rate_limited' });
   assert.deepEqual(blocked.reads, blocked.scans);
-  assert.deepEqual(store.getLinkedInCooldown({ now: at + 61 * MINUTE, afterActivityMs: 15 * MINUTE }), { scans: null, reads: null });
+  assert.deepEqual(await store.getLinkedInCooldown({ now: at + 61 * MINUTE, afterActivityMs: 15 * MINUTE }), { scans: null, reads: null });
 });
 
 test('the fetcher sends nothing to LinkedIn during a cooldown, and reports requests and blocks', async () => {
@@ -66,9 +66,9 @@ test('the fetcher sends nothing to LinkedIn during a cooldown, and reports reque
 
 test('a scan during a block sends no request and keeps coverage for the next run', async (context) => {
   const store = newStore(context);
-  store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: 'backend', location: 'Israel' }]);
-  const [before] = store.listLinkedInSearches();
-  store.recordLinkedInSearchAttempt({ searchId: before.id, queryHash: before.queryHash, status: 'complete', coveredUntil: 1_000 });
+  await store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: 'backend', location: 'Israel' }]);
+  const [before] = await store.listLinkedInSearches();
+  await store.recordLinkedInSearchAttempt({ searchId: before.id, queryHash: before.queryHash, status: 'complete', coveredUntil: 1_000 });
   let requests = 0;
 
   const result = await scanLinkedIn({
@@ -82,13 +82,13 @@ test('a scan during a block sends no request and keeps coverage for the next run
   assert.equal(result.requests, 0);
   assert.equal(result.searches[0].status, 'failed');
   assert.equal(result.errors[0].code, 'linkedin_cooldown');
-  assert.equal(store.listLinkedInSearches()[0].coveredUntil, 1_000);
+  assert.equal((await store.listLinkedInSearches())[0].coveredUntil, 1_000);
 });
 
 test('a job deferred by the cooldown stays pending without an error and does not fail the run', async (context) => {
   const store = newStore(context);
   const url = 'https://www.linkedin.com/jobs/view/3333333333';
-  const candidate = { ...store.recordSighting({ url, source: 'WhatsApp: Group A' }), url, source: 'WhatsApp: Group A' };
+  const candidate = { ...await store.recordSighting({ url, source: 'WhatsApp: Group A' }), url, source: 'WhatsApp: Group A' };
   let scored = 0;
 
   const outcomes = await evaluateCandidates({
@@ -100,8 +100,8 @@ test('a job deferred by the cooldown stays pending without an error and does not
 
   assert.equal(outcomes.get(candidate.jobKey).status, 'deferred');
   assert.equal(scored, 0);
-  assert.equal(store.getJob(candidate.jobKey).last_error_code, null);
-  assert.deepEqual(store.listPendingEvaluation().map((job) => job.jobKey), [candidate.jobKey]);
+  assert.equal((await store.getJob(candidate.jobKey)).last_error_code, null);
+  assert.deepEqual((await store.listPendingEvaluation()).map((job) => job.jobKey), [candidate.jobKey]);
   const processing = summarizeProcessingResults([candidate], outcomes);
   assert.equal(processing.totals.deferred, 1);
   assert.equal(processing.totals.failed, 0);

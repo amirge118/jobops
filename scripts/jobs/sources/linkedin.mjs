@@ -231,8 +231,8 @@ export function createLinkedInGate({ store, limit, now = Date.now }) {
   const HOUR_MS = 60 * 60 * 1000;
   return {
     limit,
-    allow() { return store.countLinkedInRequests({ since: now() - HOUR_MS }) < limit; },
-    record(kind) { store.recordLinkedInRequest({ kind, at: now() }); },
+    async allow() { return await store.countLinkedInRequests({ since: now() - HOUR_MS }) < limit; },
+    async record(kind) { await store.recordLinkedInRequest({ kind, at: now() }); },
   };
 }
 
@@ -286,7 +286,7 @@ export async function runLinkedInSearch({
     if (pages >= budget.limits.maxPagesPerSearch) { capped = true; status = 'partial'; endedBy = 'page_limit'; break; }
     if (!budget.hasRequests()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'request_limit'; reason = 'request_limit'; break; }
     if (budget.timedOut()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'time_limit'; reason = 'time_limit'; break; }
-    if (budget.gate && !budget.gate.allow()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'hourly_limit'; reason = 'hourly_limit'; break; }
+    if (budget.gate && !await budget.gate.allow()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'hourly_limit'; reason = 'hourly_limit'; break; }
     if (start >= MAX_START) { capped = true; status = 'partial'; endedBy = 'result_ceiling'; break; }
 
     if (!isFirstRequest()) await sleep(randomDelay(budget.limits.delayMs));
@@ -294,7 +294,7 @@ export async function runLinkedInSearch({
     let response;
     let classification;
     budget.requests += 1;
-    budget.gate?.record('search');
+    await budget.gate?.record('search');
     try {
       response = await fetchWithTimeout(fetchImpl, url);
       // Same policy as posting reads: one 429 is waited out (Retry-After or
@@ -303,11 +303,11 @@ export async function runLinkedInSearch({
       if (response.status === 429 && budget.limits.retryAfter429 !== false) {
         const waitedMs = retryAfterMs(response.retryAfter);
         await sleep(waitedMs);
-        if (!budget.gate || budget.gate.allow()) {
+        if (!budget.gate || await budget.gate.allow()) {
           budget.requests += 1;
-          budget.gate?.record('search');
+          await budget.gate?.record('search');
           const retried = await fetchWithTimeout(fetchImpl, url);
-          budget.onRefusal?.({ status: 429, retryAfter: response.retryAfter, waitedMs, recovered: retried.status !== 429, retryStatus: retried.status, kind: 'search' });
+          await budget.onRefusal?.({ status: 429, retryAfter: response.retryAfter, waitedMs, recovered: retried.status !== 429, retryStatus: retried.status, kind: 'search' });
           response = retried;
         }
       }
@@ -409,7 +409,7 @@ export async function scanLinkedIn({
   const budget = createLinkedInBudget(linkedin.limits || {}, { gate, onRefusal });
   if (cooldown && now < cooldown.until) budget.haltedBy = 'cooldown';
   const passesArea = buildLinkedInAreaFilter(linkedin.acceptedAreas || DEFAULT_LINKEDIN_AREAS);
-  const searches = store.listLinkedInSearches().filter((search) => search.enabled);
+  const searches = (await store.listLinkedInSearches()).filter((search) => search.enabled);
   // Title scope lives only in config (it filters results, it is not part of
   // what LinkedIn is asked, so it does not change a search's query hash). A
   // title is in scope when it matches ANY search's terms: an analyst role
@@ -428,18 +428,18 @@ export async function scanLinkedIn({
     const counts = { found: outcome.cards.length, new: 0, known: 0, filtered: 0, stale: outcome.stale || 0 };
     const source = `LinkedIn: ${search.label}`;
     for (const card of outcome.cards) {
-      const sighting = store.recordSighting({
+      const sighting = await store.recordSighting({
         url: card.url, company: card.company, title: card.title, source, seenAt: now,
       });
-      store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, postedAgeMs: card.postedAgeMs, seenAt: now });
+      await store.recordLinkedInPosting({ linkedinId: card.linkedinId, jobKey: sighting.jobKey, listedAt: card.listedAt, postedAgeMs: card.postedAgeMs, seenAt: now });
       counts[sighting.isNew ? 'new' : 'known'] += 1;
       if (!sighting.isNew) continue;
       const filterReason = !inScope(card.title) ? 'scope' : !passesTitle(card.title) ? 'title'
         : !passesArea(card.location) ? 'location'
-          : store.isCompanyBlocked?.(card.company) ? 'company' : null;
+          : await store.isCompanyBlocked?.(card.company) ? 'company' : null;
       if (filterReason) {
         counts.filtered += 1;
-        store.saveEvaluation(sighting.jobKey, {
+        await store.saveEvaluation(sighting.jobKey, {
           company: card.company, title: card.title,
           summary: null, score: 1, fitLabel: 'לא מתאים',
           decisionReason: {
@@ -463,7 +463,7 @@ export async function scanLinkedIn({
   // An empty first page is only believable when LinkedIn demonstrably
   // answered other searches in this run; otherwise it may be a soft block.
   const endpointAnswered = results.some(({ outcome }) => outcome.pages > 0 || outcome.endedBy === 'no_matches_fallback');
-  const rows = results.map(({ search, plan, outcome, counts }) => {
+  const rows = await Promise.all(results.map(async ({ search, plan, outcome, counts }) => {
     let status = outcome.status;
     let reason = outcome.reason;
     if (status === 'complete' && outcome.endedBy === 'empty_first_page' && !endpointAnswered) {
@@ -485,13 +485,13 @@ export async function scanLinkedIn({
       pages: outcome.pages, window: { from: plan.from, to: plan.to, basis: plan.basis, mode: plan.mode },
       warning: plan.warning, gap: advanced ? plan.gap : null, advanced, ...counts,
     };
-    store.recordLinkedInSearchAttempt({
+    await store.recordLinkedInSearchAttempt({
       searchId: search.id, queryHash: search.queryHash, status, reason,
       summary: { ...row, id: undefined, label: undefined },
       coveredUntil: advanced ? coveredUntil : null, gap: row.gap, attemptedAt: now,
     });
     return row;
-  });
+  }));
 
   const errors = rows.filter((row) => row.status !== 'complete')
     .map((row) => ({ search: row.label, code: `linkedin_${row.reason || 'failed'}` }));

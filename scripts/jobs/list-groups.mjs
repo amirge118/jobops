@@ -69,7 +69,7 @@ async function main() {
   if (!whatsapp?.enabled) throw new Error('WhatsApp is disabled in config/jobs.yml');
 
   const store = createJobStore(config.jobsDbPath);
-  const collector = store.getCollectorStatus();
+  const collector = await store.getCollectorStatus();
   store.close();
   const collectorActive = Boolean(collector && ACTIVE_COLLECTOR_STATUSES.includes(collector.status));
   const serviceLoaded = isCollectorServiceLoaded();

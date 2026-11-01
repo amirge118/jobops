@@ -17,7 +17,7 @@ function describe(row) {
   return `${state.padEnd(8)} ${row.canonical_url}`;
 }
 
-export function runDedup(argv = process.argv.slice(2)) {
+export async function runDedup(argv = process.argv.slice(2)) {
   const apply = argv.includes('--apply');
   const dbIndex = argv.indexOf('--db');
   const dbPath = dbIndex >= 0 ? argv[dbIndex + 1] : loadJobsConfig().jobsDbPath;
@@ -25,7 +25,7 @@ export function runDedup(argv = process.argv.slice(2)) {
 
   const store = createJobStore(dbPath);
   try {
-    const { rekeys, groups } = store.planIdentityDedup();
+    const { rekeys, groups } = await store.planIdentityDedup();
     for (const { key, representative, duplicates } of groups) {
       console.log(`\n${key}  (${duplicates.length + 1})`);
       console.log(`  keep  ${describe(representative)}`);
@@ -37,7 +37,7 @@ export function runDedup(argv = process.argv.slice(2)) {
       console.log('הרצה יבשה — שום דבר לא נכתב. להחלה: npm run jobs:dedup -- --apply');
       return;
     }
-    const result = store.applyIdentityDedup();
+    const result = await store.applyIdentityDedup();
     console.log(`הוחל: ${result.rekeyed} מפתחות עודכנו, ${result.duplicates} שורות סומנו ככפולות ב-${result.groups} קבוצות.`);
   } finally {
     store.close();
@@ -45,7 +45,7 @@ export function runDedup(argv = process.argv.slice(2)) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  try { runDedup(); }
+  try { await runDedup(); }
   catch (error) {
     console.error(error.message);
     process.exitCode = 1;

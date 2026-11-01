@@ -31,8 +31,8 @@ function evaluation(overrides = {}) {
   };
 }
 
-function whatsAppJob(store, url, seenAt = 500) {
-  return { ...store.recordSighting({ url, source: 'WhatsApp: Group A', seenAt }), url, source: 'WhatsApp: Group A' };
+async function whatsAppJob(store, url, seenAt = 500) {
+  return { ...await store.recordSighting({ url, source: 'WhatsApp: Group A', seenAt }), url, source: 'WhatsApp: Group A' };
 }
 
 test('company keys ignore legal and generic suffixes; titles only expand sr/jr', () => {
@@ -63,9 +63,9 @@ test('placeholder identities never form a key', () => {
 
 test('a WhatsApp link whose page names an already-scored job is never sent to the scorer', async (context) => {
   const store = newStore(context);
-  const ats = store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: greenhouse-api', seenAt: 100 });
-  store.saveEvaluation(ats.jobKey, evaluation());
-  const candidate = whatsAppJob(store, 'https://hiremetech.com/job/555');
+  const ats = await store.recordSighting({ url: 'https://boards.greenhouse.io/acme/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: greenhouse-api', seenAt: 100 });
+  await store.saveEvaluation(ats.jobKey, evaluation());
+  const candidate = await whatsAppJob(store, 'https://hiremetech.com/job/555');
   let scoreCalls = 0;
 
   const outcomes = await evaluateCandidates({
@@ -82,28 +82,28 @@ test('a WhatsApp link whose page names an already-scored job is never sent to th
       profileHash: 'p1',
       scoreBatchSettled: async (items, { onProgress }) => {
         scoreCalls += items.length;
-        onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
+        await onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
       },
     },
   });
 
   assert.equal(scoreCalls, 0);
   assert.equal(outcomes.get(candidate.jobKey).status, 'duplicate');
-  assert.equal(store.getJob(candidate.jobKey).duplicate_of, ats.jobKey);
-  assert.deepEqual(JSON.parse(store.getJob(ats.jobKey).sources_json), ['ATS: greenhouse-api', 'WhatsApp: Group A']);
-  assert.equal(store.listPendingEvaluation().length, 0);
-  assert.deepEqual(store.listDashboardJobs().map((job) => job.jobKey), [ats.jobKey]);
+  assert.equal((await store.getJob(candidate.jobKey)).duplicate_of, ats.jobKey);
+  assert.deepEqual(JSON.parse((await store.getJob(ats.jobKey)).sources_json), ['ATS: greenhouse-api', 'WhatsApp: Group A']);
+  assert.equal((await store.listPendingEvaluation()).length, 0);
+  assert.deepEqual((await store.listDashboardJobs()).map((job) => job.jobKey), [ats.jobKey]);
 
   // The next sighting of the duplicate URL lands on the representative.
-  const again = store.recordSighting({ url: 'https://hiremetech.com/job/555', source: 'WhatsApp: Group B' });
+  const again = await store.recordSighting({ url: 'https://hiremetech.com/job/555', source: 'WhatsApp: Group B' });
   assert.equal(again.jobKey, ats.jobKey);
   assert.equal(again.isNew, false);
 });
 
 test('two links to one job in the same run: the second waits on the first instead of being scored', async (context) => {
   const store = newStore(context);
-  const first = whatsAppJob(store, 'https://example.com/jobs/a');
-  const second = whatsAppJob(store, 'https://other.example/careers/b');
+  const first = await whatsAppJob(store, 'https://example.com/jobs/a');
+  const second = await whatsAppJob(store, 'https://other.example/careers/b');
   let scored = [];
 
   await evaluateCandidates({
@@ -120,93 +120,93 @@ test('two links to one job in the same run: the second waits on the first instea
       profileHash: 'p1',
       scoreBatchSettled: async (items, { onProgress }) => {
         scored = items.map((item) => item.candidate.jobKey);
-        onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
+        await onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
       },
     },
   });
 
   assert.deepEqual(scored, [first.jobKey]);
-  assert.equal(store.getJob(second.jobKey).duplicate_of, first.jobKey);
+  assert.equal((await store.getJob(second.jobKey)).duplicate_of, first.jobKey);
 });
 
-test('a twin revealed only by scoring is merged after the fact and hidden from the dashboard', (context) => {
+test('a twin revealed only by scoring is merged after the fact and hidden from the dashboard', async (context) => {
   const store = newStore(context);
-  const first = whatsAppJob(store, 'https://example.com/jobs/a', 100);
-  const second = whatsAppJob(store, 'https://example.com/jobs/b', 200);
-  store.saveEvaluation(first.jobKey, evaluation({ applyUrl: 'https://example.com/jobs/a' }));
-  store.saveEvaluation(second.jobKey, evaluation({ applyUrl: 'https://example.com/jobs/b', evaluatedAt: 2_000 }));
+  const first = await whatsAppJob(store, 'https://example.com/jobs/a', 100);
+  const second = await whatsAppJob(store, 'https://example.com/jobs/b', 200);
+  await store.saveEvaluation(first.jobKey, evaluation({ applyUrl: 'https://example.com/jobs/a' }));
+  await store.saveEvaluation(second.jobKey, evaluation({ applyUrl: 'https://example.com/jobs/b', evaluatedAt: 2_000 }));
 
-  assert.equal(store.getJob(second.jobKey).duplicate_of, first.jobKey);
-  assert.deepEqual(store.listDashboardJobs().map((job) => job.jobKey), [first.jobKey]);
-  assert.equal(store.getDashboardStats().total, 1);
+  assert.equal((await store.getJob(second.jobKey)).duplicate_of, first.jobKey);
+  assert.deepEqual((await store.listDashboardJobs()).map((job) => job.jobKey), [first.jobKey]);
+  assert.equal((await store.getDashboardStats()).total, 1);
 });
 
-test('a fresh verdict replaces a twin decided under an older profile', (context) => {
+test('a fresh verdict replaces a twin decided under an older profile', async (context) => {
   const store = newStore(context);
-  const old = whatsAppJob(store, 'https://example.com/jobs/old', 100);
-  const fresh = whatsAppJob(store, 'https://example.com/jobs/new', 200);
-  store.saveEvaluation(old.jobKey, evaluation({ profileHash: 'old-profile' }));
-  store.saveEvaluation(fresh.jobKey, evaluation({ profileHash: 'p1', evaluatedAt: 2_000 }));
+  const old = await whatsAppJob(store, 'https://example.com/jobs/old', 100);
+  const fresh = await whatsAppJob(store, 'https://example.com/jobs/new', 200);
+  await store.saveEvaluation(old.jobKey, evaluation({ profileHash: 'old-profile' }));
+  await store.saveEvaluation(fresh.jobKey, evaluation({ profileHash: 'p1', evaluatedAt: 2_000 }));
 
-  assert.equal(store.getJob(old.jobKey).duplicate_of, fresh.jobKey);
-  assert.equal(store.getJob(fresh.jobKey).duplicate_of, null);
+  assert.equal((await store.getJob(old.jobKey)).duplicate_of, fresh.jobKey);
+  assert.equal((await store.getJob(fresh.jobKey)).duplicate_of, null);
 });
 
-test('a stored gap analysis follows its job into the twin it merges with', (context) => {
+test('a stored gap analysis follows its job into the twin it merges with', async (context) => {
   const store = newStore(context);
-  const old = whatsAppJob(store, 'https://example.com/jobs/old', 100);
-  const fresh = whatsAppJob(store, 'https://example.com/jobs/new', 200);
-  store.saveEvaluation(old.jobKey, evaluation({ profileHash: 'old-profile' }));
-  store.saveResumeGap(old.jobKey, { inputHash: 'h', analysis: { items: [], employerPriorities: [] }, analyzedAt: 300 });
-  store.saveEvaluation(fresh.jobKey, evaluation({ profileHash: 'p1', evaluatedAt: 2_000 }));
+  const old = await whatsAppJob(store, 'https://example.com/jobs/old', 100);
+  const fresh = await whatsAppJob(store, 'https://example.com/jobs/new', 200);
+  await store.saveEvaluation(old.jobKey, evaluation({ profileHash: 'old-profile' }));
+  await store.saveResumeGap(old.jobKey, { inputHash: 'h', analysis: { items: [], employerPriorities: [] }, analyzedAt: 300 });
+  await store.saveEvaluation(fresh.jobKey, evaluation({ profileHash: 'p1', evaluatedAt: 2_000 }));
 
-  assert.deepEqual(store.listGapObservations().map((row) => row.jobKey), [fresh.jobKey]);
+  assert.deepEqual((await store.listGapObservations()).map((row) => row.jobKey), [fresh.jobKey]);
 });
 
-test('a dead link never hides a live twin', (context) => {
+test('a dead link never hides a live twin', async (context) => {
   const store = newStore(context);
-  const live = whatsAppJob(store, 'https://example.com/jobs/live', 100);
-  const dead = whatsAppJob(store, 'https://example.com/jobs/dead', 200);
-  store.saveEvaluation(live.jobKey, evaluation({ profileHash: 'old-profile' }));
-  store.saveEvaluation(dead.jobKey, evaluation({ suitable: false, activeStatus: 'expired', evaluatedAt: 2_000 }));
+  const live = await whatsAppJob(store, 'https://example.com/jobs/live', 100);
+  const dead = await whatsAppJob(store, 'https://example.com/jobs/dead', 200);
+  await store.saveEvaluation(live.jobKey, evaluation({ profileHash: 'old-profile' }));
+  await store.saveEvaluation(dead.jobKey, evaluation({ suitable: false, activeStatus: 'expired', evaluatedAt: 2_000 }));
 
-  assert.equal(store.getJob(live.jobKey).duplicate_of, null);
-  assert.equal(store.getJob(dead.jobKey).duplicate_of, live.jobKey);
+  assert.equal((await store.getJob(live.jobKey)).duplicate_of, null);
+  assert.equal((await store.getJob(dead.jobKey)).duplicate_of, live.jobKey);
 });
 
-test('jobs with placeholder identities are never merged with each other', (context) => {
+test('jobs with placeholder identities are never merged with each other', async (context) => {
   const store = newStore(context);
-  const first = whatsAppJob(store, 'https://example.com/jobs/1');
-  const second = whatsAppJob(store, 'https://example.com/jobs/2');
+  const first = await whatsAppJob(store, 'https://example.com/jobs/1');
+  const second = await whatsAppJob(store, 'https://example.com/jobs/2');
   const placeholder = { company: 'חברה לא ידועה', title: 'משרה לא ידועה', suitable: false, activeStatus: 'expired' };
-  store.saveEvaluation(first.jobKey, evaluation(placeholder));
-  store.saveEvaluation(second.jobKey, evaluation(placeholder));
-  assert.equal(store.getJob(first.jobKey).duplicate_of, null);
-  assert.equal(store.getJob(second.jobKey).duplicate_of, null);
-  assert.equal(store.getJob(first.jobKey).company_role_key, '::');
+  await store.saveEvaluation(first.jobKey, evaluation(placeholder));
+  await store.saveEvaluation(second.jobKey, evaluation(placeholder));
+  assert.equal((await store.getJob(first.jobKey)).duplicate_of, null);
+  assert.equal((await store.getJob(second.jobKey)).duplicate_of, null);
+  assert.equal((await store.getJob(first.jobKey)).company_role_key, '::');
 });
 
-test('claiming an identity already queued marks the later job as its duplicate; placeholders are not claimed', (context) => {
+test('claiming an identity already queued marks the later job as its duplicate; placeholders are not claimed', async (context) => {
   const store = newStore(context);
-  const keep = whatsAppJob(store, 'https://example.com/jobs/keep', 100);
-  const merged = whatsAppJob(store, 'https://example.com/jobs/merged', 200);
-  store.claimJobIdentity(keep.jobKey, { company: 'Acme', title: 'Backend Engineer', profileHash: 'p1', criteriaVersion: 'v1' });
-  const result = store.claimJobIdentity(merged.jobKey, { company: 'Acme', title: 'Backend Engineer', profileHash: 'p1', criteriaVersion: 'v1' });
+  const keep = await whatsAppJob(store, 'https://example.com/jobs/keep', 100);
+  const merged = await whatsAppJob(store, 'https://example.com/jobs/merged', 200);
+  await store.claimJobIdentity(keep.jobKey, { company: 'Acme', title: 'Backend Engineer', profileHash: 'p1', criteriaVersion: 'v1' });
+  const result = await store.claimJobIdentity(merged.jobKey, { company: 'Acme', title: 'Backend Engineer', profileHash: 'p1', criteriaVersion: 'v1' });
   assert.equal(result.duplicateOf, keep.jobKey);
   // Placeholder identities are not claimed.
-  const other = whatsAppJob(store, 'https://example.com/jobs/other');
-  assert.deepEqual(store.claimJobIdentity(other.jobKey, { company: '', title: 'Backend' }), { duplicateOf: null });
+  const other = await whatsAppJob(store, 'https://example.com/jobs/other');
+  assert.deepEqual(await store.claimJobIdentity(other.jobKey, { company: '', title: 'Backend' }), { duplicateOf: null });
 });
 
-test('the one-off cleanup re-keys legacy rows and merges each group into one representative', (context) => {
+test('the one-off cleanup re-keys legacy rows and merges each group into one representative', async (context) => {
   const dbPath = temporaryDb(context);
   const store = createJobStore(dbPath);
   context.after(() => store.close());
-  const suitable = whatsAppJob(store, 'https://www.linkedin.com/jobs/view/4471276925', 300);
-  store.saveEvaluation(suitable.jobKey, evaluation({ company: 'Check Point Software', title: 'Backend Software Developer' }));
-  const rejected = whatsAppJob(store, 'https://www.linkedin.com/jobs/view/4473244633', 100);
-  const unknownA = whatsAppJob(store, 'https://example.com/jobs/u1', 50);
-  const unknownB = whatsAppJob(store, 'https://example.com/jobs/u2', 60);
+  const suitable = await whatsAppJob(store, 'https://www.linkedin.com/jobs/view/4471276925', 300);
+  await store.saveEvaluation(suitable.jobKey, evaluation({ company: 'Check Point Software', title: 'Backend Software Developer' }));
+  const rejected = await whatsAppJob(store, 'https://www.linkedin.com/jobs/view/4473244633', 100);
+  const unknownA = await whatsAppJob(store, 'https://example.com/jobs/u1', 50);
+  const unknownB = await whatsAppJob(store, 'https://example.com/jobs/u2', 60);
 
   // Rows as the previous version stored them: a rejected row keeps only its
   // (old-format) key, and dead links share the placeholder key.
@@ -217,16 +217,16 @@ test('the one-off cleanup re-keys legacy rows and merges each group into one rep
     .run('חברה לא ידועה::משרה לא ידועה', unknownA.jobKey, unknownB.jobKey);
   raw.close();
 
-  const plan = store.planIdentityDedup();
+  const plan = await store.planIdentityDedup();
   assert.equal(plan.groups.length, 1);
   assert.equal(plan.groups[0].representative.job_key, suitable.jobKey);
   assert.deepEqual(plan.groups[0].duplicates.map((row) => row.job_key), [rejected.jobKey]);
-  assert.equal(store.getJob(rejected.jobKey).duplicate_of, null, 'planning alone writes nothing');
+  assert.equal((await store.getJob(rejected.jobKey)).duplicate_of, null, 'planning alone writes nothing');
 
-  const result = store.applyIdentityDedup();
+  const result = await store.applyIdentityDedup();
   assert.deepEqual({ groups: result.groups, duplicates: result.duplicates }, { groups: 1, duplicates: 1 });
-  assert.equal(store.getJob(rejected.jobKey).duplicate_of, suitable.jobKey);
-  assert.equal(store.getJob(unknownA.jobKey).duplicate_of, null);
-  assert.equal(store.getJob(unknownA.jobKey).company_role_key, '::');
-  assert.equal(store.planIdentityDedup().groups.length, 0, 'a second run finds nothing');
+  assert.equal((await store.getJob(rejected.jobKey)).duplicate_of, suitable.jobKey);
+  assert.equal((await store.getJob(unknownA.jobKey)).duplicate_of, null);
+  assert.equal((await store.getJob(unknownA.jobKey)).company_role_key, '::');
+  assert.equal((await store.planIdentityDedup()).groups.length, 0, 'a second run finds nothing');
 });

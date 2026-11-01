@@ -34,7 +34,7 @@ function messageText(message) {
     '';
 }
 
-export function queueIncomingMessages({ messages = [], configuredGroupJids, store, sinceMs = 0 }) {
+export async function queueIncomingMessages({ messages = [], configuredGroupJids, store, sinceMs = 0 }) {
   const result = { queued: 0, duplicates: 0, ignored: 0, rejected: 0 };
   const boundedMessages = messages.slice(0, MAX_INGRESS_MESSAGES);
   result.rejected += Math.max(0, messages.length - boundedMessages.length);
@@ -47,7 +47,7 @@ export function queueIncomingMessages({ messages = [], configuredGroupJids, stor
       continue;
     }
 
-    store.saveWhatsAppAnchor?.(groupJid, message);
+    await store.saveWhatsAppAnchor?.(groupJid, message);
     const timestamp = Number(message.messageTimestamp) * 1_000;
     const text = messageText(message);
     if (
@@ -64,7 +64,7 @@ export function queueIncomingMessages({ messages = [], configuredGroupJids, stor
       continue;
     }
 
-    const queued = store.queueWhatsAppMessage({ messageId, groupJid, timestamp, text });
+    const queued = await store.queueWhatsAppMessage({ messageId, groupJid, timestamp, text });
     result[queued ? 'queued' : 'duplicates'] += 1;
   }
 
@@ -158,14 +158,14 @@ export async function markConfiguredGroupsRead(config, sock, { store } = {}) {
       if (messages.length > 0) {
         const keys = messages.map((message) => message.key);
         await sock.readMessages(keys);
-        store?.markWhatsAppMessagesRead?.(keys);
+        await store?.markWhatsAppMessagesRead?.(keys);
         results.push({ name: group.name, marked: true, method: 'message-receipts', messages: messages.length });
         continue;
       }
 
       const chat = sock.chatStore?.get(group.jid);
       const liveTimestamp = Number(chat?.lastMessageRecvTimestamp || 0);
-      const checkpointMs = Number(store?.getCheckpoint(`whatsapp:${group.jid}`) || 0);
+      const checkpointMs = Number(await store?.getCheckpoint(`whatsapp:${group.jid}`) || 0);
       const storedTimestamp = checkpointMs > 0 ? Math.floor(checkpointMs / 1_000) : 0;
       const lastMessageTimestamp = Math.max(liveTimestamp, storedTimestamp);
       if (lastMessageTimestamp > 0) {
@@ -184,12 +184,12 @@ export async function markConfiguredGroupsRead(config, sock, { store } = {}) {
           });
           continue;
         } catch (chatStateError) {
-          const storedKeys = store?.listWhatsAppMessageKeys(group.jid) || [];
+          const storedKeys = await store?.listWhatsAppMessageKeys(group.jid) || [];
           if (storedKeys.length === 0) throw chatStateError;
           for (let index = 0; index < storedKeys.length; index += READ_RECEIPT_BATCH_SIZE) {
             const batch = storedKeys.slice(index, index + READ_RECEIPT_BATCH_SIZE);
             await sock.readMessages(batch);
-            store?.markWhatsAppMessagesRead?.(batch);
+            await store?.markWhatsAppMessagesRead?.(batch);
           }
           results.push({
             name: group.name,
@@ -216,11 +216,11 @@ export async function markConfiguredGroupsRead(config, sock, { store } = {}) {
   return results;
 }
 
-function processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic, limit = 2_000, order = 'asc' }) {
-  const pendingMessages = store.listPendingWhatsAppMessages(group.jid, { sinceMs, untilMs, limit, order });
+async function processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic, limit = 2_000, order = 'asc' }) {
+  const pendingMessages = await store.listPendingWhatsAppMessages(group.jid, { sinceMs, untilMs, limit, order });
   const candidates = [];
   let failedMessages = 0;
-  let latestTimestamp = store.getCheckpoint(`whatsapp:${group.jid}`) ?? 0;
+  let latestTimestamp = await store.getCheckpoint(`whatsapp:${group.jid}`) ?? 0;
 
   for (const message of pendingMessages) {
     const { messageId, timestamp, text } = message;
@@ -229,14 +229,14 @@ function processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic, lim
     try {
       const urls = messageUrls(text);
       for (const url of urls) {
-        const sighting = store.recordSighting({
+        const sighting = await store.recordSighting({
           url,
           source: `WhatsApp: ${group.name}`,
           seenAt: timestamp,
         });
         if (isLinkedInPosting(url)) {
           const hint = extractLinkHint(text, url, { urlCount: urls.length });
-          if (hint) store.setLinkHint?.(sighting.jobKey, hint);
+          if (hint) await store.setLinkHint?.(sighting.jobKey, hint);
         }
         candidates.push({
           ...sighting,
@@ -244,20 +244,20 @@ function processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic, lim
           source: `WhatsApp: ${group.name}`,
         });
       }
-      store.markMessageDone({ messageId, groupJid: group.jid, timestamp });
+      await store.markMessageDone({ messageId, groupJid: group.jid, timestamp });
     } catch (error) {
       const failure = describeFailure(error, 'collection_failed');
-      store.markMessageFailed({ messageId, groupJid: group.jid, error: failure.reason });
+      await store.markMessageFailed({ messageId, groupJid: group.jid, error: failure.reason });
       failedMessages += 1;
-      if (failedMessages <= 20) onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'message-processing', status: 'failed', details: failure });
+      if (failedMessages <= 20) await onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'message-processing', status: 'failed', details: failure });
     }
   }
 
-  if (latestTimestamp) store.setCheckpoint(`whatsapp:${group.jid}`, latestTimestamp);
+  if (latestTimestamp) await store.setCheckpoint(`whatsapp:${group.jid}`, latestTimestamp);
   return { messages: pendingMessages.length, candidates, failedMessages };
 }
 
-export function scanWhatsAppBacklog({
+export async function scanWhatsAppBacklog({
   config,
   store,
   sinceMs = 0,
@@ -269,10 +269,10 @@ export function scanWhatsAppBacklog({
   const groups = config.sources.whatsapp?.groups || [];
   const candidates = [];
   const results = [];
-  onStage('local-backlog');
+  await onStage('local-backlog');
 
   for (const group of groups) {
-    const processed = processPendingGroup({
+    const processed = await processPendingGroup({
       group, store, sinceMs, untilMs, onDiagnostic,
       limit: limitPerGroup, order: 'desc',
     });
@@ -318,20 +318,20 @@ async function scanGroup({ sock, group, store, sinceMs, untilMs, onDiagnostic, h
     status: 'unknown', requestedFrom: sinceMs, oldestAt: null, newestAt: null,
     delivered: messages.length, collected: messages.length, batches: 0,
   };
-  queueIncomingMessages({
+  await queueIncomingMessages({
     messages,
     configuredGroupJids: new Set([group.jid]),
     store,
     sinceMs,
   });
-  const processed = processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic });
-  const successful = new Set();
+  const processed = await processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic });
+  const successful = [];
   for (const message of messages) {
-    if (store.getMessageState(message.key.id)?.status === 'done') successful.add(message.key.id);
+    if ((await store.getMessageState(message.key.id))?.status === 'done') successful.push(message);
   }
   // Scan receipts cover only delivered messages whose links were durably
   // extracted (or were already processed), not arbitrary stored IDs.
-  const keys = messages.filter((message) => successful.has(message.key.id) || store.getMessageState(message.key.id)?.status === 'done')
+  const keys = successful
     .map((message) => normalizeWhatsAppAnchor(message, group.jid)?.key).filter((key) => key && !key.fromMe);
   return { group: group.name, ...processed, coverage, receiptKeys: keys };
 }
@@ -393,7 +393,7 @@ export function computeCollectorCoverage({ collector, sinceMs, untilMs, gapToler
   return { covered: downtimeMs <= gapToleranceMs, downtimeMs };
 }
 
-export function scanCollectedWhatsApp({ config, store, sinceMs, untilMs = Date.now(), collector, onDiagnostic = () => {}, onStage = () => {} }) {
+export async function scanCollectedWhatsApp({ config, store, sinceMs, untilMs = Date.now(), collector, onDiagnostic = () => {}, onStage = () => {} }) {
   const whatsapp = config.sources.whatsapp;
   const verification = new Map(latestGroupVerification(collector).map((group) => [group.name, group]));
   const gapToleranceMs = Number(whatsapp.collector?.gapToleranceMs) || DEFAULT_COLLECTOR_GAP_TOLERANCE_MS;
@@ -403,14 +403,14 @@ export function scanCollectedWhatsApp({ config, store, sinceMs, untilMs = Date.n
     : { status: 'partial', reason: 'collector_gap', requestedFrom: sinceMs, newestAt: collector?.last_message_at || null, delivered: 0, source: 'collector', downtimeMs };
   const candidates = [];
   const groups = [];
-  onStage('collector-inbox');
+  await onStage('collector-inbox');
 
   for (const group of whatsapp.groups) {
-    const result = processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic });
+    const result = await processPendingGroup({ group, store, sinceMs, untilMs, onDiagnostic });
     candidates.push(...result.candidates);
     const known = verification.get(group.name);
     const groupCoverage = { ...coverage, delivered: result.messages };
-    if (!connectedForWindow) onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'collector-coverage', status: 'warning', details: describeFailure(null, 'collector_gap') });
+    if (!connectedForWindow) await onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'collector-coverage', status: 'warning', details: describeFailure(null, 'collector_gap') });
     groups.push({
       name: group.name,
       found: known?.found ?? null,
@@ -441,18 +441,18 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
   if (!whatsapp?.enabled) return { source: 'whatsapp', candidates: [], groups: [] };
   if (!whatsapp.authAbsPath) throw new Error('WhatsApp authPath is not configured');
 
-  const collector = store.getCollectorStatus?.();
+  const collector = await store.getCollectorStatus?.();
   if (collector && ['starting', 'connecting', 'connected', 'reconnecting', 'pairing_required', 'unconfirmed'].includes(collector.status)) {
-    return scanCollectedWhatsApp({ config, store, sinceMs, untilMs, collector, onDiagnostic, onStage });
+    return await scanCollectedWhatsApp({ config, store, sinceMs, untilMs, collector, onDiagnostic, onStage });
   }
 
   const configuredGroupJids = new Set(whatsapp.groups.map((group) => group.jid));
   const ingress = { queued: 0, duplicates: 0, ignored: 0, rejected: 0 };
-  onStage('whatsapp-connect');
+  await onStage('whatsapp-connect');
   const sock = await connect(whatsapp.authAbsPath, {
     configuredGroupJids,
-    onMessages(messages) {
-      const batch = queueIncomingMessages({ messages, configuredGroupJids, store, sinceMs });
+    async onMessages(messages) {
+      const batch = await queueIncomingMessages({ messages, configuredGroupJids, store, sinceMs });
       for (const key of Object.keys(ingress)) ingress[key] += batch[key];
     },
   });
@@ -460,26 +460,26 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
     if (sock.ingressError) {
       throw new Error(`WhatsApp message persistence failed: ${sock.ingressError.message}`);
     }
-    onStage('verify-groups');
+    await onStage('verify-groups');
     const verification = await verifyConfiguredGroups(config, sock);
     const missing = verification.filter((group) => !group.found);
     if (missing.length) {
-      for (const group of missing) onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'verify-groups', status: 'failed', details: describeFailure(null, 'group_unavailable') });
+      for (const group of missing) await onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'verify-groups', status: 'failed', details: describeFailure(null, 'group_unavailable') });
       throw new Error(`Configured WhatsApp groups are unavailable: ${missing.map((group) => group.name).join(', ')}`);
     }
 
-    onStage('history-coverage');
+    await onStage('history-coverage');
     const settled = await Promise.allSettled(
       whatsapp.groups.map(async (group) => {
-        onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'history-coverage', status: 'started' });
+        await onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'history-coverage', status: 'started' });
         try {
           const result = await scanGroup({ sock, group, store, sinceMs, untilMs, onDiagnostic, historyOptions });
-          onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'message-processing',
+          await onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'message-processing',
             status: result.failedMessages ? 'partial' : 'complete', count: result.messages,
             details: { failedMessages: result.failedMessages, candidates: result.candidates.length } });
           return result;
         } catch (error) {
-          onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'history-coverage', status: 'failed', details: describeFailure(error, 'collection_failed') });
+          await onDiagnostic({ scope: 'group', scopeKey: group.name, stage: 'history-coverage', status: 'failed', details: describeFailure(error, 'collection_failed') });
           throw error;
         }
       }),
@@ -516,7 +516,7 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
       sock.historyDiagnostics,
       sock.authDiagnostics,
     );
-    if (whatsapp.markRead) onStage('mark-read');
+    if (whatsapp.markRead) await onStage('mark-read');
     const readResults = [];
     if (whatsapp.markRead) {
       for (let index = 0; index < settled.length; index += 1) {
@@ -526,7 +526,7 @@ export async function scanWhatsApp({ config, store, sinceMs, untilMs = Date.now(
           for (let offset = 0; offset < keys.length; offset += READ_RECEIPT_BATCH_SIZE) {
             const batch = keys.slice(offset, offset + READ_RECEIPT_BATCH_SIZE);
             await sendReceiptBatch(sock, batch, readTimeoutMs);
-            store.markWhatsAppMessagesRead?.(batch);
+            await store.markWhatsAppMessagesRead?.(batch);
             sent += batch.length;
           }
           readResults.push({ name: whatsapp.groups[index].name, marked: keys.length > 0, status: keys.length ? 'sent' : 'skipped',

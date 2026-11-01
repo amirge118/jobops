@@ -26,15 +26,15 @@ function evaluation(overrides = {}) {
   };
 }
 
-test('source sightings and outcome timestamps survive archiving', (context) => {
+test('source sightings and outcome timestamps survive archiving', async (context) => {
   const store = tempStore(context);
-  const ats = store.recordSighting({ url: 'https://acme.com/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: greenhouse-api', seenAt: 1_000 });
-  store.recordSighting({ url: 'https://chat.example/x', company: 'Acme', title: 'Backend Engineer', source: 'WhatsApp: Group', seenAt: 3_000 });
-  store.recordSighting({ url: 'https://acme.com/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: greenhouse-api', seenAt: 9_000 });
-  store.saveEvaluation(ats.jobKey, evaluation());
-  store.decideJob(ats.jobKey, 'interested', 6_000);
+  const ats = await store.recordSighting({ url: 'https://acme.com/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: greenhouse-api', seenAt: 1_000 });
+  await store.recordSighting({ url: 'https://chat.example/x', company: 'Acme', title: 'Backend Engineer', source: 'WhatsApp: Group', seenAt: 3_000 });
+  await store.recordSighting({ url: 'https://acme.com/jobs/1', company: 'Acme', title: 'Backend Engineer', source: 'ATS: greenhouse-api', seenAt: 9_000 });
+  await store.saveEvaluation(ats.jobKey, evaluation());
+  await store.decideJob(ats.jobKey, 'interested', 6_000);
 
-  const facts = store.listSourceValueFacts();
+  const facts = await store.listSourceValueFacts();
   const rows = facts.sightings.filter((row) => row.jobKey === ats.jobKey);
   assert.deepEqual(rows.map(({ source, firstSeenAt, company }) => ({ source, firstSeenAt, company })).sort((a, b) => a.firstSeenAt - b.firstSeenAt), [
     { source: 'ats', firstSeenAt: 1_000, company: 'Acme' },
@@ -45,16 +45,16 @@ test('source sightings and outcome timestamps survive archiving', (context) => {
   store.close();
 });
 
-test('local verdicts are not counted as model scoring', (context) => {
+test('local verdicts are not counted as model scoring', async (context) => {
   const store = tempStore(context);
-  const sighting = store.recordSighting({ url: 'https://acme.com/jobs/2', company: 'Acme', title: 'Frontend', source: 'ATS: x', seenAt: 1_000 });
-  store.saveEvaluation(sighting.jobKey, evaluation({ suitable: false, scoredByModel: false, score: 1 }));
-  assert.equal(store.getJob(sighting.jobKey).first_scored_at, null);
-  assert.equal(store.getJob(sighting.jobKey).first_suitable_at, null);
+  const sighting = await store.recordSighting({ url: 'https://acme.com/jobs/2', company: 'Acme', title: 'Frontend', source: 'ATS: x', seenAt: 1_000 });
+  await store.saveEvaluation(sighting.jobKey, evaluation({ suitable: false, scoredByModel: false, score: 1 }));
+  assert.equal((await store.getJob(sighting.jobKey)).first_scored_at, null);
+  assert.equal((await store.getJob(sighting.jobKey)).first_suitable_at, null);
   store.close();
 });
 
-test('each collected source gets one scan-stats row with its processing outcome', (context) => {
+test('each collected source gets one scan-stats row with its processing outcome', async (context) => {
   const rows = sourceScanStatRows({
     ats: { found: 2229, candidates: 23, errors: 3, filtered: { title: 2017, location: 107, recency: 82 } },
     whatsapp: { candidates: 49 },
@@ -71,8 +71,8 @@ test('each collected source gets one scan-stats row with its processing outcome'
   ]);
 
   const store = tempStore(context);
-  store.recordSourceScanStats(rows, { runId: 7, at: 10_000 });
-  const [ats] = store.listSourceValueFacts().scans;
+  await store.recordSourceScanStats(rows, { runId: 7, at: 10_000 });
+  const [ats] = (await store.listSourceValueFacts()).scans;
   assert.equal(ats.source, 'ats');
   assert.equal(ats.filteredTitle, 2017);
   assert.equal(ats.seconds, 11.2);

@@ -15,7 +15,7 @@ import { createJobStore } from './jobs/store.mjs';
 const config = loadJobsConfig();
 const store = createJobStore(config.jobsDbPath);
 try {
-  const { findings, opened, alerted, desktop } = runHealthCheck({
+  const { findings, opened, alerted, desktop } = await runHealthCheck({
     store, config, notify: !process.argv.includes('--no-notify'), desktopNotify: notifyMacOS,
   });
   if (!findings.length) console.log('הכול תקין: לא נמצאו בעיות שדורשות תשומת לב.');

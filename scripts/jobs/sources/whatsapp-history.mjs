@@ -39,7 +39,7 @@ export async function fetchGroupMessagesSince(sock, group, sinceMs, {
     return [...messages, ...chatMessages.map((message) => ({ message, source: 'current-chat' }))]
       .sort((a, b) => Number(b.message.messageTimestamp) - Number(a.message.messageTimestamp))[0] || null;
   };
-  const saved = normalizeWhatsAppAnchor(store?.getWhatsAppAnchor?.(group.jid), group.jid);
+  const saved = normalizeWhatsAppAnchor(await store?.getWhatsAppAnchor?.(group.jid), group.jid);
   let head = currentHead();
   // A saved cursor within/after the window can recover older messages, but is
   // NOT proof that newer messages since that cursor have been collected.
@@ -54,7 +54,7 @@ export async function fetchGroupMessagesSince(sock, group, sinceMs, {
     if (fresh && (!head || Number(fresh.message.messageTimestamp) >= Number(head.message.messageTimestamp))) head = fresh;
   }
   const actualAnchorWaitMs = Math.min(now() - started, Math.max(0, Math.min(anchorWaitMs, 60_000)));
-  if (head) store?.saveWhatsAppAnchor?.(group.jid, head.message);
+  if (head) await store?.saveWhatsAppAnchor?.(group.jid, head.message);
   const tailConfirmed = hasRecentHead();
   let cursor = head?.message;
   // Always walk backwards from the newest real anchor. The minimum timestamp

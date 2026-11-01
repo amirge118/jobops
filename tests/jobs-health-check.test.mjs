@@ -133,73 +133,73 @@ function tempStore(context) {
 
 const notifying = { notifications: { whatsapp: { enabled: true, dashboardUrl: 'http://127.0.0.1:4177/decisions' } } };
 
-test('a finding alerts once when it opens, stays open while it persists, and closes when gone', (context) => {
+test('a finding alerts once when it opens, stays open while it persists, and closes when gone', async (context) => {
   const store = tempStore(context);
   // An empty database at night: only "the collector never ran" is wrong.
-  const first = runHealthCheck({ store, config: notifying, now: NIGHT });
+  const first = await runHealthCheck({ store, config: notifying, now: NIGHT });
   assert.deepEqual(keys(first.findings), ['whatsapp:collector']);
   assert.equal(first.alerted, true);
-  const [alert] = store.listPendingNotifications({ now: NIGHT });
+  const [alert] = await store.listPendingNotifications({ now: NIGHT });
   assert.match(alert.text, /^⚠️ jobOps: בעיה חדשה\n• אוסף ה-WhatsApp לא מחובר\nלפרטים: http:\/\/127\.0\.0\.1:4177\/scan$/);
 
-  const again = runHealthCheck({ store, config: notifying, now: NIGHT + HOUR });
+  const again = await runHealthCheck({ store, config: notifying, now: NIGHT + HOUR });
   assert.equal(again.opened.length, 0);
   assert.equal(again.alerted, false, 'a persisting problem is not re-sent');
-  assert.equal(store.listHealthFindings()[0].firstSeenAt, NIGHT);
-  assert.equal(store.getHealthCheckedAt(), NIGHT + HOUR);
+  assert.equal((await store.listHealthFindings())[0].firstSeenAt, NIGHT);
+  assert.equal(await store.getHealthCheckedAt(), NIGHT + HOUR);
 
-  const resolved = store.saveHealthFindings([], NIGHT + 2 * HOUR);
+  const resolved = await store.saveHealthFindings([], NIGHT + 2 * HOUR);
   assert.deepEqual(resolved, []);
-  assert.deepEqual(store.listHealthFindings(), []);
-  assert.equal(store.listHealthFindings({ includeResolved: true })[0].resolvedAt, NIGHT + 2 * HOUR);
+  assert.deepEqual(await store.listHealthFindings(), []);
+  assert.equal((await store.listHealthFindings({ includeResolved: true }))[0].resolvedAt, NIGHT + 2 * HOUR);
 });
 
-test('no alert when notifications are off or the finding is only informational', (context) => {
+test('no alert when notifications are off or the finding is only informational', async (context) => {
   const store = tempStore(context);
-  assert.equal(runHealthCheck({ store, config: {}, now: NIGHT }).alerted, false);
-  assert.equal(runHealthCheck({ store, config: notifying, now: NIGHT, notify: false }).alerted, false);
-  assert.deepEqual(store.listPendingNotifications({ now: NIGHT }), []);
+  assert.equal((await runHealthCheck({ store, config: {}, now: NIGHT })).alerted, false);
+  assert.equal((await runHealthCheck({ store, config: notifying, now: NIGHT, notify: false })).alerted, false);
+  assert.deepEqual(await store.listPendingNotifications({ now: NIGHT }), []);
 });
 
-test('a new finding also shows on the Mac while the collector cannot send WhatsApp', (context) => {
+test('a new finding also shows on the Mac while the collector cannot send WhatsApp', async (context) => {
   const store = tempStore(context);
   const shown = [];
   const desktopNotify = (title, body) => { shown.push([title, body]); return true; };
   // The empty store has no collector: it cannot deliver the WhatsApp alert.
-  const first = runHealthCheck({ store, config: notifying, now: NIGHT, desktopNotify });
+  const first = await runHealthCheck({ store, config: notifying, now: NIGHT, desktopNotify });
   assert.equal(first.desktop, true);
   assert.deepEqual(shown, [['⚠️ jobOps', 'אוסף ה-WhatsApp לא מחובר']]);
   // A persisting finding is not shown again; --no-notify shows nothing.
-  assert.equal(runHealthCheck({ store, config: notifying, now: NIGHT + HOUR, desktopNotify }).desktop, false);
-  store.saveHealthFindings([], NIGHT + 2 * HOUR);
-  assert.equal(runHealthCheck({ store, config: notifying, now: NIGHT + 3 * HOUR, notify: false, desktopNotify }).desktop, false);
+  assert.equal((await runHealthCheck({ store, config: notifying, now: NIGHT + HOUR, desktopNotify })).desktop, false);
+  await store.saveHealthFindings([], NIGHT + 2 * HOUR);
+  assert.equal((await runHealthCheck({ store, config: notifying, now: NIGHT + 3 * HOUR, notify: false, desktopNotify })).desktop, false);
   assert.equal(shown.length, 1);
   // A failing notifier never fails the check.
-  store.saveHealthFindings([], NIGHT + 4 * HOUR);
-  const broken = runHealthCheck({ store, config: notifying, now: NIGHT + 5 * HOUR, desktopNotify: () => { throw new Error('no GUI'); } });
+  await store.saveHealthFindings([], NIGHT + 4 * HOUR);
+  const broken = await runHealthCheck({ store, config: notifying, now: NIGHT + 5 * HOUR, desktopNotify: () => { throw new Error('no GUI'); } });
   assert.equal(broken.desktop, false);
   assert.equal(broken.alerted, true);
 });
 
-test('no Mac notification while the collector is connected and WhatsApp can deliver', () => {
+test('no Mac notification while the collector is connected and WhatsApp can deliver', async () => {
   const shown = [];
   const store = {
     listHealthFacts: () => ({ now: AFTERNOON, ...facts({ codexCalls: [{ ok: 0 }, { ok: 0 }, { ok: 0 }] }) }),
     saveHealthFindings: (findings) => findings,
     enqueueHealthNotification: () => true,
   };
-  const result = runHealthCheck({ store, config: notifying, now: AFTERNOON, desktopNotify: (...args) => shown.push(args) });
+  const result = await runHealthCheck({ store, config: notifying, now: AFTERNOON, desktopNotify: (...args) => shown.push(args) });
   assert.deepEqual(keys(result.findings), ['codex:consecutive']);
   assert.equal(result.alerted, true);
   assert.equal(result.desktop, false);
   assert.deepEqual(shown, []);
 });
 
-test('a failed Codex call keeps its reason for later diagnosis', (context) => {
+test('a failed Codex call keeps its reason for later diagnosis', async (context) => {
   const store = tempStore(context);
-  store.recordCodexCall({ purpose: 'scoring', ok: false, errorCode: 'failed', errorReason: 'stream disconnected before completion', at: NIGHT });
-  store.recordCodexCall({ purpose: 'scoring', ok: true, errorReason: 'ignored on success', at: NIGHT + 1 });
-  const calls = store.listHealthFacts({ now: NIGHT + 2 }).codexCalls;
+  await store.recordCodexCall({ purpose: 'scoring', ok: false, errorCode: 'failed', errorReason: 'stream disconnected before completion', at: NIGHT });
+  await store.recordCodexCall({ purpose: 'scoring', ok: true, errorReason: 'ignored on success', at: NIGHT + 1 });
+  const calls = (await store.listHealthFacts({ now: NIGHT + 2 })).codexCalls;
   assert.deepEqual(calls.map((call) => [call.ok, call.errorReason]), [[1, null], [0, 'stream disconnected before completion']]);
 });
 
@@ -221,12 +221,12 @@ test('partial WhatsApp history does not make a run incomplete when the live coll
   }
 });
 
-test('the live collector counts only when connected to every expected group', () => {
+test('the live collector counts only when connected to every expected group', async () => {
   const storeWith = (collector) => ({ getCollectorStatusSummary: () => collector });
-  assert.equal(liveCollectorSince(storeWith({ status: 'connected', started_at: 5, groups_found: 4, groups_expected: 4 })), 5);
-  assert.equal(liveCollectorSince(storeWith({ status: 'connected', started_at: 5, groups_found: 3, groups_expected: 4 })), null);
-  assert.equal(liveCollectorSince(storeWith({ status: 'reconnecting', started_at: 5, groups_found: 4, groups_expected: 4 })), null);
-  assert.equal(liveCollectorSince(storeWith(null)), null);
+  assert.equal(await liveCollectorSince(storeWith({ status: 'connected', started_at: 5, groups_found: 4, groups_expected: 4 })), 5);
+  assert.equal(await liveCollectorSince(storeWith({ status: 'connected', started_at: 5, groups_found: 3, groups_expected: 4 })), null);
+  assert.equal(await liveCollectorSince(storeWith({ status: 'reconnecting', started_at: 5, groups_found: 4, groups_expected: 4 })), null);
+  assert.equal(await liveCollectorSince(storeWith(null)), null);
 });
 
 test('group silence over Shabbat is expected, not a finding', () => {

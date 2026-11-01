@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import { migrateWhatsAppState } from '../scripts/migrate-whatsapp-state.mjs';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 
-test('legacy WhatsApp migration copies dedup state into the unified store', (context) => {
+test('legacy WhatsApp migration copies dedup state into the unified store', async (context) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-wa-migration-test-'));
   context.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   const legacyPath = path.join(tempDir, 'legacy.db');
@@ -24,11 +24,11 @@ test('legacy WhatsApp migration copies dedup state into the unified store', (con
   `);
   legacy.close();
 
-  const result = migrateWhatsAppState({ legacyDatabasePath: legacyPath, jobsDatabasePath: jobsPath });
+  const result = await migrateWhatsAppState({ legacyDatabasePath: legacyPath, jobsDatabasePath: jobsPath });
   assert.deepEqual(result, { messagesImported: 1, checkpointsSeen: 1 });
 
   const store = createJobStore(jobsPath);
-  assert.equal(store.shouldProcessMessage('old-message'), false);
-  assert.equal(store.getCheckpoint('whatsapp:group-a'), 100);
+  assert.equal(await store.shouldProcessMessage('old-message'), false);
+  assert.equal(await store.getCheckpoint('whatsapp:group-a'), 100);
   store.close();
 });

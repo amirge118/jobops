@@ -293,7 +293,7 @@ test('the socket drops every chat except the tracked groups and the own account'
   assert.equal(createWhatsAppSocketOptions({ auth: { creds: {}, keys: {} }, logger: {} }).shouldIgnoreJid, undefined);
 });
 
-test('local WhatsApp backlog is processed newest-first without opening a socket', () => {
+test('local WhatsApp backlog is processed newest-first without opening a socket', async () => {
   const processed = [];
   const store = {
     getCheckpoint: () => 0,
@@ -314,7 +314,7 @@ test('local WhatsApp backlog is processed newest-first without opening a socket'
   };
   const config = { sources: { whatsapp: { groups: [{ name: 'Group A', jid: 'a@g.us' }] } } };
 
-  const result = scanWhatsAppBacklog({ config, store, sinceMs: 0, untilMs: 3_000, limitPerGroup: 100 });
+  const result = await scanWhatsAppBacklog({ config, store, sinceMs: 0, untilMs: 3_000, limitPerGroup: 100 });
 
   assert.deepEqual(processed, ['newer', 'older']);
   assert.equal(result.candidates.length, 1);
@@ -371,7 +371,7 @@ test('WhatsApp connection waits for every announced history download to settle',
   }), 'timeout');
 });
 
-test('WhatsApp ingress queues only bounded text from configured groups', () => {
+test('WhatsApp ingress queues only bounded text from configured groups', async () => {
   const queued = [];
   const store = {
     queueWhatsAppMessage(message) {
@@ -397,7 +397,7 @@ test('WhatsApp ingress queues only bounded text from configured groups', () => {
     },
   ];
 
-  const result = queueIncomingMessages({
+  const result = await queueIncomingMessages({
     messages,
     configuredGroupJids: new Set(['a@g.us']),
     store,

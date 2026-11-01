@@ -113,15 +113,15 @@ function sendCompanyError(response, error) {
   return true;
 }
 
-export function createDashboardServer({
+export async function createDashboardServer({
   config = loadJobsConfig(), execute = runCommand, readiness = null, researchCompany = null,
   probeSource = probeCompanySource, browserResolve = null,
 } = {}) {
   const staticDir = path.join(config.rootDir, 'web');
   const bootstrapStore = createJobStore(config.jobsDbPath);
   try {
-    if (!config.demo) syncConfiguredCompanyEntries(bootstrapStore, config.rootDir);
-    bootstrapStore.pruneDiagnostics();
+    if (!config.demo) await syncConfiguredCompanyEntries(bootstrapStore, config.rootDir);
+    await bootstrapStore.pruneDiagnostics();
   } finally {
     bootstrapStore.close();
   }
@@ -129,16 +129,16 @@ export function createDashboardServer({
   // Company research runs Codex inside this process; its usage is recorded
   // like scan usage (scans are separate processes with their own recorder).
   if (!config.demo) {
-    setCodexUsageRecorder((entry) => {
+    setCodexUsageRecorder(async (entry) => {
       const store = createJobStore(config.jobsDbPath);
-      try { store.recordCodexCall(entry); }
+      try { await store.recordCodexCall(entry); }
       finally { store.close(); }
     });
   }
   const queries = createDashboardQueries(config, action);
-  const readinessService = readiness || createReadinessService(config, () => {
+  const readinessService = readiness || createReadinessService(config, async () => {
     const store = createJobStore(config.jobsDbPath);
-    try { return store.getCollectorStatusSummary(); }
+    try { return await store.getCollectorStatusSummary(); }
     finally { store.close(); }
   });
   const companyResearch = researchCompany || createCompanyResearcher(config);
@@ -151,25 +151,25 @@ export function createDashboardServer({
   // at once from repeated clicks.
   const browserProbe = { running: false, companyId: null, startedAt: null, probe: null, error: null };
 
-  function snapshot() {
-    return queries.snapshot();
+  async function snapshot() {
+    return await queries.snapshot();
   }
 
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${HOST}`);
       if (request.method === 'GET' && url.pathname === '/api/state') {
-        sendJson(response, 200, snapshot());
+        sendJson(response, 200, await snapshot());
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/summary') {
-        sendJson(response, 200, queries.summary());
+        sendJson(response, 200, await queries.summary());
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/scan') {
-        const scan = queries.scan();
+        const scan = await queries.scan();
         const readinessState = await readinessService.inspect({ force: url.searchParams.get('refresh') === '1' });
         sendJson(response, 200, {
           ...scan,
@@ -187,28 +187,28 @@ export function createDashboardServer({
       }
 
       if (request.method === 'GET' && url.pathname === '/api/jobs') {
-        sendJson(response, 200, queries.jobs());
+        sendJson(response, 200, await queries.jobs());
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/llm-usage/daily') {
         const days = Number(url.searchParams.get('days') || 14);
-        sendJson(response, 200, queries.dailyLlmUsage(days));
+        sendJson(response, 200, await queries.dailyLlmUsage(days));
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/decision-stats') {
-        sendJson(response, 200, queries.decisionStats());
+        sendJson(response, 200, await queries.decisionStats());
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/diagnostics/history') {
-        sendJson(response, 200, queries.diagnosticHistory());
+        sendJson(response, 200, await queries.diagnosticHistory());
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/companies') {
-        sendJson(response, 200, queries.companies());
+        sendJson(response, 200, await queries.companies());
         return;
       }
 
@@ -217,8 +217,8 @@ export function createDashboardServer({
       if (url.pathname === '/api/health' && ['GET', 'POST'].includes(request.method)) {
         const store = createJobStore(config.jobsDbPath);
         try {
-          if (request.method === 'POST') runHealthCheck({ store, config, notify: false });
-          sendJson(response, 200, { checkedAt: store.getHealthCheckedAt(), findings: store.listHealthFindings() });
+          if (request.method === 'POST') await runHealthCheck({ store, config, notify: false });
+          sendJson(response, 200, { checkedAt: await store.getHealthCheckedAt(), findings: await store.listHealthFindings() });
         } finally { store.close(); }
         return;
       }
@@ -228,9 +228,9 @@ export function createDashboardServer({
         const currentResumeText = fs.existsSync(resumePath) ? fs.readFileSync(resumePath, 'utf8') : '';
         const store = createJobStore(config.jobsDbPath);
         try {
-          const judged = store.listGapTermCoverage(coverageKeyOf(resumeHashOf(currentResumeText)));
-          sendJson(response, 200, aggregateGaps(store.listGapObservations(), {
-            currentResumeText, statuses: store.listGapTermStatuses(),
+          const judged = await store.listGapTermCoverage(coverageKeyOf(resumeHashOf(currentResumeText)));
+          sendJson(response, 200, aggregateGaps(await store.listGapObservations(), {
+            currentResumeText, statuses: await store.listGapTermStatuses(),
             coveredTerms: new Set([...judged].filter(([, covered]) => covered).map(([key]) => key)),
           }));
         }
@@ -241,13 +241,13 @@ export function createDashboardServer({
       if (request.method === 'POST' && url.pathname === '/api/personal-area/term-status') {
         const body = requireObjectBody(await readJson(request), ['term', 'status']);
         const store = createJobStore(config.jobsDbPath);
-        try { sendJson(response, 200, { status: store.setGapTermStatus(body.term, body.status ?? null) }); }
+        try { sendJson(response, 200, { status: await store.setGapTermStatus(body.term, body.status ?? null) }); }
         finally { store.close(); }
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/api/linkedin') {
-        sendJson(response, 200, queries.linkedin());
+        sendJson(response, 200, await queries.linkedin());
         return;
       }
 
@@ -258,7 +258,7 @@ export function createDashboardServer({
         requireJsonContentType(request);
         const body = requireObjectBody(await readJson(request), ['enabled']);
         if (typeof body.enabled !== 'boolean') throw Object.assign(new Error('enabled must be a boolean'), { statusCode: 400 });
-        sendJson(response, 200, queries.setLinkedInEnabled(body.enabled));
+        sendJson(response, 200, await queries.setLinkedInEnabled(body.enabled));
         return;
       }
 
@@ -278,8 +278,8 @@ export function createDashboardServer({
         const store = createJobStore(config.jobsDbPath);
         try {
           const fromTs = toTs - days * 24 * 60 * 60 * 1_000;
-          const groups = (config.sources.whatsapp?.groups || []).map((group) => {
-            const lastCollectedAt = store.getWhatsAppGroupCollectionStats(group.jid).lastCollectedAt;
+          const groups = await Promise.all((config.sources.whatsapp?.groups || []).map(async (group) => {
+            const lastCollectedAt = (await store.getWhatsAppGroupCollectionStats(group.jid)).lastCollectedAt;
             return {
               name: group.name,
               // Keep one second of overlap so the latest collected message can
@@ -287,8 +287,8 @@ export function createDashboardServer({
               // makes replaying that boundary message harmless.
               requestedFrom: Math.max(fromTs, Math.min((lastCollectedAt ?? fromTs) - 1_000, toTs - 1)),
             };
-          });
-          const result = store.requestWhatsAppHistory({
+          }));
+          const result = await store.requestWhatsAppHistory({
             fromTs,
             toTs,
             groupsTotal,
@@ -308,7 +308,7 @@ export function createDashboardServer({
             if (Object.keys(body).length !== 1 || !/^[a-f0-9]{24}$/.test(String(body.jobKey))) {
               throw new CompanyRegistryError('invalid_job_key', 'A valid job key is required');
             }
-            candidate = store.resolveCompanyCandidateForJob(String(body.jobKey));
+            candidate = await store.resolveCompanyCandidateForJob(String(body.jobKey));
           } else {
             if (body.name == null || body.url == null) {
               throw new CompanyRegistryError('invalid_request', 'Company name and job or careers URL are required');
@@ -319,12 +319,12 @@ export function createDashboardServer({
               discoverySource: 'manual',
             });
           }
-          const saved = store.upsertCompanyCandidate(candidate);
+          const saved = await store.upsertCompanyCandidate(candidate);
           // Explicitly flagging a job's company from the Decisions page means
           // "consider tracking this" — guarantee it lands in 'candidate',
           // even if it was previously ignored or paused (not just on first
           // discovery, which upsertCompanyCandidate alone would cover).
-          const company = store.markCompanyAsCandidate(saved.company.id);
+          const company = await store.markCompanyAsCandidate(saved.company.id);
           sendJson(response, 200, {
             candidate: company,
             sources: saved.sources,
@@ -340,19 +340,19 @@ export function createDashboardServer({
         const result = await companyResearch(body.name);
         const store = createJobStore(config.jobsDbPath);
         try {
-          const saved = store.upsertCompanyCandidate(result.candidate);
+          const saved = await store.upsertCompanyCandidate(result.candidate);
           const resolvedSource = saved.sources.find((source) =>
             source.provider === result.candidate.source?.provider &&
             source.careersUrl === result.candidate.source?.careersUrl,
           );
           if (resolvedSource && result.probe) {
-            store.recordCompanySourceProbe(
+            await store.recordCompanySourceProbe(
               resolvedSource.id,
               result.probe,
               result.research?.evidenceUrls || [],
             );
           }
-          const company = store.getCompany(saved.company.id);
+          const company = await store.getCompany(saved.company.id);
           sendJson(response, 200, {
             candidate: company,
             sources: company.sources,
@@ -378,7 +378,7 @@ export function createDashboardServer({
         const store = createJobStore(config.jobsDbPath);
         try {
           const companyId = Number(companyManualSourceMatch[1]);
-          const company = store.getCompany(companyId);
+          const company = await store.getCompany(companyId);
           if (!company) throw new CompanyRegistryError('company_not_found', 'Company was not found');
           // This is the manual escape hatch for exactly the case the automated
           // research pipeline cannot close on its own: a real, working career
@@ -397,9 +397,9 @@ export function createDashboardServer({
           });
           const probe = await probeSource(source, company.name);
           const verified = ['verified_jobs', 'verified_empty'].includes(probe.status);
-          const saved = store.upsertCompanySource(companyId, { ...source, enabled: verified });
-          store.recordCompanySourceProbe(saved.id, probe, []);
-          sendJson(response, 200, { company: store.getCompany(companyId), probe });
+          const saved = await store.upsertCompanySource(companyId, { ...source, enabled: verified });
+          await store.recordCompanySourceProbe(saved.id, probe, []);
+          sendJson(response, 200, { company: await store.getCompany(companyId), probe });
         } finally { store.close(); }
         return;
       }
@@ -432,7 +432,7 @@ export function createDashboardServer({
         const companyId = Number(companyBrowserProbePostMatch[1]);
         const lookupStore = createJobStore(config.jobsDbPath);
         let company;
-        try { company = lookupStore.getCompany(companyId); } finally { lookupStore.close(); }
+        try { company = await lookupStore.getCompany(companyId); } finally { lookupStore.close(); }
         if (!company) throw new CompanyRegistryError('company_not_found', 'Company was not found');
         const candidateUrl = body.url || primaryCompanySourceUrl(company);
         if (!candidateUrl) {
@@ -447,14 +447,14 @@ export function createDashboardServer({
         // because a real browser render can take many seconds — see
         // scripts/jobs/browser-fetch.mjs.
         resolveWithBrowser({ companyName: company.name, candidateUrls: [candidateUrl], evidenceUrls: [] })
-          .then((result) => {
+          .then(async (result) => {
             const persistStore = createJobStore(config.jobsDbPath);
             try {
-              const saved = persistStore.upsertCompanyCandidate(result.candidate);
+              const saved = await persistStore.upsertCompanyCandidate(result.candidate);
               const resolvedSource = saved.sources.find((source) =>
                 source.provider === result.candidate.source?.provider &&
                 source.careersUrl === result.candidate.source?.careersUrl);
-              if (resolvedSource && result.probe) persistStore.recordCompanySourceProbe(resolvedSource.id, result.probe, []);
+              if (resolvedSource && result.probe) await persistStore.recordCompanySourceProbe(resolvedSource.id, result.probe, []);
             } finally { persistStore.close(); }
             browserProbe.probe = result.probe;
           })
@@ -476,8 +476,8 @@ export function createDashboardServer({
         const store = createJobStore(config.jobsDbPath);
         try {
           const companyId = Number(companyWatchMatch[1]);
-          store.approveCompany(companyId);
-          sendJson(response, 200, { company: store.getCompany(companyId) });
+          await store.approveCompany(companyId);
+          sendJson(response, 200, { company: await store.getCompany(companyId) });
         } finally { store.close(); }
         return;
       }
@@ -493,8 +493,8 @@ export function createDashboardServer({
         const store = createJobStore(config.jobsDbPath);
         try {
           const companyId = Number(companyStatusMatch[1]);
-          store.setCompanyStatus(companyId, body.status);
-          sendJson(response, 200, { company: store.getCompany(companyId) });
+          await store.setCompanyStatus(companyId, body.status);
+          sendJson(response, 200, { company: await store.getCompany(companyId) });
         } finally { store.close(); }
         return;
       }
@@ -502,7 +502,7 @@ export function createDashboardServer({
       const diagnosticMatch = request.method === 'GET'
         ? url.pathname.match(/^\/api\/diagnostics\/(runs|actions|collectors)\/([1-9]\d{0,8})$/) : null;
       if (diagnosticMatch) {
-        const result = queries.diagnosticDetail(diagnosticMatch[1], Number(diagnosticMatch[2]));
+        const result = await queries.diagnosticDetail(diagnosticMatch[1], Number(diagnosticMatch[2]));
         sendJson(response, result.statusCode, result.payload);
         return;
       }
@@ -529,7 +529,7 @@ export function createDashboardServer({
             return;
           }
         }
-        sendJson(response, 202, { action: startAction(actionName, body) });
+        sendJson(response, 202, { action: await startAction(actionName, body) });
         return;
       }
 
@@ -547,9 +547,9 @@ export function createDashboardServer({
         try {
           // Before archiving: the job must still be active to resolve its company,
           // and archiving wipes the details the tracker row needs.
-          job = store.getJob(decisionMatch[1]);
-          if (WANTED_JOB_DECISIONS.has(body.decision)) store.suggestCompanyForJob(decisionMatch[1]);
-          if (!store.decideJob(decisionMatch[1], body.decision)) {
+          job = await store.getJob(decisionMatch[1]);
+          if (WANTED_JOB_DECISIONS.has(body.decision)) await store.suggestCompanyForJob(decisionMatch[1]);
+          if (!await store.decideJob(decisionMatch[1], body.decision)) {
             sendJson(response, 404, { error: 'המשרה לא נמצאה או שכבר הועברה לארכיון' });
             return;
           }
@@ -577,11 +577,11 @@ export function createDashboardServer({
         const store = createJobStore(config.jobsDbPath);
         let result;
         try {
-          result = store.archiveJobsByErrorCode([...NON_RETRYABLE_FAILURE_CODES]);
+          result = await store.archiveJobsByErrorCode([...NON_RETRYABLE_FAILURE_CODES]);
         } finally {
           store.close();
         }
-        sendJson(response, 200, { ...result, state: snapshot() });
+        sendJson(response, 200, { ...result, state: await snapshot() });
         return;
       }
 
@@ -604,10 +604,10 @@ export function createDashboardServer({
 
 export async function startDashboard(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const demo = options.demo ? createDemoEnvironment({ rootDir: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..') }) : null;
+  const demo = options.demo ? await createDemoEnvironment({ rootDir: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..') }) : null;
   if (demo) demo.store.close();
   const config = demo?.config || loadJobsConfig();
-  const server = createDashboardServer({ config, execute: demo ? runDemoAction : runCommand });
+  const server = await createDashboardServer({ config, execute: demo ? runDemoAction : runCommand });
   if (demo) server.once('close', demo.cleanup);
   if (!demo) {
     // Only the LaunchAgent copy restarts itself; a terminal run would just end.

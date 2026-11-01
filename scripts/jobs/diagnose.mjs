@@ -12,25 +12,25 @@ function parseReference(argv) {
   return { kind: match[1].toLowerCase(), id: Number(match[2]) };
 }
 
-export function diagnosticRecord(store, reference) {
+export async function diagnosticRecord(store, reference) {
   if (reference.kind === 'latest') {
-    const latest = store.diagnosticHistory()[0];
+    const latest = (await store.diagnosticHistory())[0];
     if (!latest) return null;
-    if (latest.kind === 'runs') return store.getRun(latest.id);
-    if (latest.kind === 'actions') return store.getAction(latest.id);
-    return store.getCollectorRun(latest.id);
+    if (latest.kind === 'runs') return await store.getRun(latest.id);
+    if (latest.kind === 'actions') return await store.getAction(latest.id);
+    return await store.getCollectorRun(latest.id);
   }
-  if (reference.kind === 'run') return store.getRun(reference.id);
-  if (reference.kind === 'action') return store.getAction(reference.id);
-  return store.getCollectorRun(reference.id);
+  if (reference.kind === 'run') return await store.getRun(reference.id);
+  if (reference.kind === 'action') return await store.getAction(reference.id);
+  return await store.getCollectorRun(reference.id);
 }
 
-export function printDiagnostic(argv = process.argv.slice(2)) {
+export async function printDiagnostic(argv = process.argv.slice(2)) {
   const config = loadJobsConfig();
   const store = createJobStore(config.jobsDbPath);
   try {
     const reference = parseReference(argv);
-    const record = diagnosticRecord(store, reference);
+    const record = await diagnosticRecord(store, reference);
     if (!record) throw new Error('Diagnostic record not found.');
     console.log(JSON.stringify(record, null, 2));
   } finally {
@@ -39,7 +39,7 @@ export function printDiagnostic(argv = process.argv.slice(2)) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  try { printDiagnostic(); }
+  try { await printDiagnostic(); }
   catch (error) {
     console.error(error.message);
     process.exitCode = 1;

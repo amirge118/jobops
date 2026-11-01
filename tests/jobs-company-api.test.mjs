@@ -17,7 +17,7 @@ async function startCompanyApi(context, overrides = {}) {
     decision: { minimumScore: 4, exactMatchScore: 4.5 },
     sources: { whatsapp: { groups: [] } },
   };
-  const server = createDashboardServer({ config, ...overrides });
+  const server = await createDashboardServer({ config, ...overrides });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => server.close());
   return { config, baseUrl: `http://127.0.0.1:${server.address().port}` };
@@ -34,10 +34,10 @@ async function postJson(url, body = {}) {
 test('company API resolves a suitable job as candidate and watches only after approval', async (context) => {
   const { config, baseUrl } = await startCompanyApi(context);
   const store = createJobStore(config.jobsDbPath);
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://short.example/jobs/42', company: 'Example', title: 'Backend Engineer', source: 'WhatsApp: Jobs',
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Backend.', score: 4.5,
     fitLabel: 'בול מתאים', decisionReason: 'Relevant.', suitable: true,
     applyUrl: 'https://jobs.lever.co/example/role-id', activeStatus: 'active',
@@ -70,10 +70,10 @@ test('company API resolves a suitable job as candidate and watches only after ap
 test('resolving a job for an already-ignored or paused company moves it back to candidate', async (context) => {
   const { config, baseUrl } = await startCompanyApi(context);
   const store = createJobStore(config.jobsDbPath);
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://short.example/jobs/99', company: 'Example', title: 'Backend Engineer', source: 'WhatsApp: Jobs',
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Backend.', score: 4.5,
     fitLabel: 'בול מתאים', decisionReason: 'Relevant.', suitable: true,
     applyUrl: 'https://jobs.lever.co/example/role-id', activeStatus: 'active',
@@ -150,7 +150,7 @@ test('company API accepts a manually configured official-html source once it ver
     }),
   });
   const store = createJobStore(config.jobsDbPath);
-  const saved = store.upsertCompanyCandidate({ name: 'Custom Co', discoverySource: 'manual' });
+  const saved = await store.upsertCompanyCandidate({ name: 'Custom Co', discoverySource: 'manual' });
   store.close();
 
   const failed = await postJson(`${baseUrl}/api/companies/${saved.company.id}/manual-source`, {
@@ -200,7 +200,7 @@ test('company API runs a browser probe in the background and reports its outcome
   });
   const { config, baseUrl } = await startCompanyApi(context, { browserResolve });
   const store = createJobStore(config.jobsDbPath);
-  const saved = store.upsertCompanyCandidate({ name: 'Blocked Co', discoverySource: 'manual' });
+  const saved = await store.upsertCompanyCandidate({ name: 'Blocked Co', discoverySource: 'manual' });
   store.close();
 
   const started = await postJson(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`, {
@@ -231,7 +231,7 @@ test('company API runs a browser probe in the background and reports its outcome
 test('company API browser probe requires a URL when the company has no existing source', async (context) => {
   const { config, baseUrl } = await startCompanyApi(context, { browserResolve: async () => ({ candidate: {}, probe: {} }) });
   const store = createJobStore(config.jobsDbPath);
-  const saved = store.upsertCompanyCandidate({ name: 'No Source Co', discoverySource: 'manual' });
+  const saved = await store.upsertCompanyCandidate({ name: 'No Source Co', discoverySource: 'manual' });
   store.close();
 
   const missingUrl = await postJson(`${baseUrl}/api/companies/${saved.company.id}/browser-probe`, {});

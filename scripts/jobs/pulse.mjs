@@ -15,9 +15,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import Database from 'better-sqlite3';
-
 import { loadJobsConfig } from './config.mjs';
+import { createJobStore } from './store.mjs';
 import { inShabbatQuiet } from './health-check.mjs';
 import { SCHEDULES } from './scheduled-scan-service.mjs';
 
@@ -44,9 +43,9 @@ function run(command, args, { timeout = 10_000 } = {}) {
 
 // Each section is collected on its own: one broken source of data must not
 // hide the others. A failed section reports { error } instead.
-function section(fn) {
+async function section(fn) {
   try {
-    return fn();
+    return await fn();
   } catch (error) {
     return { error: String(error?.message || error).slice(0, 200) };
   }
@@ -117,27 +116,24 @@ export function sourceKind(sourcesJson, url, sightingKind = null) {
   return ['whatsapp', 'linkedin', 'ats'].includes(sightingKind) ? sightingKind : 'unknown';
 }
 
-export function collectPulse({ db, config, now = Date.now(), launchctlText = null, powerLogText = null, batteryText = null, egress = null, logs = {} }) {
-  const has = (table) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+export async function collectPulse({ store, config, now = Date.now(), launchctlText = null, powerLogText = null, batteryText = null, egress = null, logs = {} }) {
   const linkedinLimits = config.sources?.linkedin?.limits || {};
 
-  const services = section(() => {
+  const services = await section(() => {
     const labels = [...SCHEDULES.map((schedule) => schedule.label), ...ALWAYS_ON_AGENTS];
     return parseLaunchctlList(launchctlText, labels);
   });
 
-  const machine = section(() => ({
+  const machine = await section(() => ({
     onAC: batteryText == null ? null : /AC Power/.test(batteryText),
     last24h: summarizePowerLog(powerLogText, now - DAY),
     egress,
   }));
 
-  const collector = section(() => {
-    const row = db.prepare('SELECT * FROM collector_runs ORDER BY id DESC LIMIT 1').get();
-    if (!row) return { status: 'never_ran' };
-    const events = (stage, since) => db.prepare('SELECT COUNT(*) AS n FROM collector_events WHERE collector_run_id = ? AND stage = ? AND created_at >= ?').get(row.id, stage, since).n;
-    const lastFailure = db.prepare(`SELECT stage, details_json, created_at FROM collector_events
-      WHERE collector_run_id = ? AND stage IN ('connect', 'connection-closed') ORDER BY id DESC LIMIT 1`).get(row.id);
+  const collector = await section(async () => {
+    const facts = await store.pulseCollectorFacts(now);
+    if (!facts) return { status: 'never_ran' };
+    const { run: row, lastFailure } = facts;
     const failure = (() => { try { return JSON.parse(lastFailure?.details_json || '{}'); } catch { return {}; } })();
     return {
       run: row.id,
@@ -148,67 +144,46 @@ export function collectPulse({ db, config, now = Date.now(), launchctlText = nul
       lastMessageMinutesAgo: minutesAgo(now, row.last_message_at),
       messagesThisRun: row.messages_received,
       reconnectsThisRun: row.reconnects,
-      reconnectsLast6h: events('reconnect', now - 6 * HOUR),
-      connectFailuresLast6h: events('connect', now - 6 * HOUR),
-      decryptFailuresLast6h: events('decrypt-failure', now - 6 * HOUR),
+      reconnectsLast6h: facts.reconnectsLast6h,
+      connectFailuresLast6h: facts.connectFailuresLast6h,
+      decryptFailuresLast6h: facts.decryptFailuresLast6h,
       lastDisconnect: lastFailure ? { at: iso(lastFailure.created_at), code: failure.code ?? null, statusCode: failure.statusCode ?? null, stream: failure.stream?.message ?? null } : null,
     };
   });
 
-  const whatsapp = section(() => {
-    const perHour = db.prepare(`SELECT COUNT(*) AS n FROM processed_messages WHERE wa_timestamp >= ?`);
-    const lastMessageAt = db.prepare('SELECT MAX(wa_timestamp) AS at FROM processed_messages').get().at;
-    const pending = db.prepare(`SELECT COUNT(*) AS n, MIN(wa_timestamp) AS oldest FROM processed_messages WHERE status = 'pending' AND message_text IS NOT NULL`).get();
+  const whatsapp = await section(async () => {
+    const facts = await store.pulseWhatsAppFacts(now);
     return {
-      groupMessagesLast1h: perHour.get(now - HOUR).n,
-      groupMessagesLast6h: perHour.get(now - 6 * HOUR).n,
-      groupMessagesLast24h: perHour.get(now - DAY).n,
-      lastGroupMessageMinutesAgo: minutesAgo(now, lastMessageAt),
-      backlogPending: pending.n,
-      backlogOldestMinutes: minutesAgo(now, pending.oldest),
+      groupMessagesLast1h: facts.last1h,
+      groupMessagesLast6h: facts.last6h,
+      groupMessagesLast24h: facts.last24h,
+      lastGroupMessageMinutesAgo: minutesAgo(now, facts.lastMessageAt),
+      backlogPending: facts.pending.n,
+      backlogOldestMinutes: minutesAgo(now, facts.pending.oldest),
     };
   });
 
-  const alerts = section(() => {
-    // The collector sends only alerts younger than 24h with < 5 attempts
-    // (listPendingNotifications); older unsent ones expired and never will be.
-    const deliverable = db.prepare(`SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM notification_outbox
-      WHERE sent_at IS NULL AND attempts < 5 AND created_at >= ?`).get(now - DAY);
-    const expired7d = db.prepare(`SELECT COUNT(*) AS n FROM notification_outbox
-      WHERE sent_at IS NULL AND (attempts >= 5 OR created_at < ?) AND created_at >= ?`).get(now - DAY, now - 7 * DAY).n;
+  const alerts = await section(async () => {
+    const { deliverable, expired7d } = await store.pulseAlertFacts(now);
     return { unsent: deliverable.n, oldestUnsentMinutes: minutesAgo(now, deliverable.oldest), expiredUnsentLast7d: expired7d };
   });
 
-  const linkedin = section(() => {
-    const state = db.prepare('SELECT * FROM linkedin_state WHERE id = 1').get() || {};
-    const queue = db.prepare(`SELECT last_error_code AS code, COUNT(*) AS n FROM jobs
-      WHERE archived_at IS NULL AND last_error_code LIKE 'linkedin%' GROUP BY 1`).all();
-    const SENT = "kind NOT LIKE 'refused:%'";
-    const requests = has('linkedin_requests') ? {
-      last1h: db.prepare(`SELECT kind, COUNT(*) AS n FROM linkedin_requests WHERE at >= ? AND ${SENT} GROUP BY kind`).all(now - HOUR),
-      last24h: db.prepare(`SELECT kind, COUNT(*) AS n FROM linkedin_requests WHERE at >= ? AND ${SENT} GROUP BY kind`).all(now - DAY),
-      lastSearchMinutesAgo: minutesAgo(now, db.prepare("SELECT MAX(at) AS at FROM linkedin_requests WHERE kind = 'search'").get().at),
-      busiestHourLast24h: db.prepare(`SELECT strftime('%Y-%m-%dT%H:00', at / 1000, 'unixepoch') AS hour, COUNT(*) AS n
-        FROM linkedin_requests WHERE at >= ? AND ${SENT} GROUP BY hour ORDER BY n DESC LIMIT 1`).get(now - DAY) ?? null,
-      // Each refusal with the requests sent in the hour and the 10 minutes before it.
-      refusals: db.prepare(`SELECT r.at, substr(r.kind, 9) AS reason, r.detail,
-          (SELECT COUNT(*) FROM linkedin_requests q WHERE q.at > r.at - 3600000 AND q.at <= r.at AND q.${SENT}) AS lastHour,
-          (SELECT COUNT(*) FROM linkedin_requests q WHERE q.at > r.at - 600000 AND q.at <= r.at AND q.${SENT}) AS last10min
-        FROM linkedin_requests r WHERE r.kind LIKE 'refused:%' AND r.at >= ? ORDER BY r.at`).all(now - DAY)
-        .map((row) => {
-          const detail = (() => { try { return JSON.parse(row.detail || 'null'); } catch { return null; } })();
-          // recovered: the one retry after Retry-After succeeded (since 2026-10-24).
-          return { at: iso(row.at), reason: row.reason, lastHour: row.lastHour, last10min: row.last10min,
-            ...(detail ? { recovered: Boolean(detail.recovered), retryAfter: detail.retryAfter ?? null, status: detail.status ?? null } : {}) };
-        }),
-    } : null;
-    const refusals24h = db.prepare(`SELECT last_error_code AS code, COUNT(*) AS n FROM jobs WHERE last_attempted_at >= ?
-      AND last_error_code IN ('linkedin_rate_limited', 'linkedin_blocked') GROUP BY 1`).all(now - DAY);
-    // Evaluated LinkedIn postings include ones known from the page cache or an
-    // external twin; `requests` counts what was actually fetched from LinkedIn.
-    const postingsEvaluated24h = db.prepare(`SELECT COUNT(*) AS n FROM jobs WHERE canonical_url LIKE '%linkedin.com/jobs/view/%'
-      AND evaluated_at >= ?`).get(now - DAY).n;
-    const requestLogSince = has('linkedin_requests') ? iso(db.prepare('SELECT MIN(at) AS at FROM linkedin_requests').get().at) : null;
+  const linkedin = await section(async () => {
+    const facts = await store.pulseLinkedInFacts(now);
+    const { state, queue, refusals24h, postingsEvaluated24h } = facts;
+    const requests = {
+      last1h: facts.sentLast1h,
+      last24h: facts.sentLast24h,
+      lastSearchMinutesAgo: minutesAgo(now, facts.lastSearchAt),
+      busiestHourLast24h: facts.busiestHourLast24h,
+      refusals: facts.refusals.map((row) => {
+        const detail = (() => { try { return JSON.parse(row.detail || 'null'); } catch { return null; } })();
+        // recovered: the one retry after Retry-After succeeded (since 2026-10-24).
+        return { at: iso(row.at), reason: row.reason, lastHour: row.lastHour, last10min: row.last10min,
+          ...(detail ? { recovered: Boolean(detail.recovered), retryAfter: detail.retryAfter ?? null, status: detail.status ?? null } : {}) };
+      }),
+    };
+    const requestLogSince = iso(facts.requestLogSince);
     return {
       cooldown: state.blocked_until > now ? { reason: state.blocked_reason, until: iso(state.blocked_until), sinceMinutes: minutesAgo(now, state.blocked_at) } : null,
       lastBlock: state.blocked_at ? { reason: state.blocked_reason, at: iso(state.blocked_at), minutesAgo: minutesAgo(now, state.blocked_at) } : null,
@@ -221,14 +196,13 @@ export function collectPulse({ db, config, now = Date.now(), launchctlText = nul
     };
   });
 
-  const ats = section(() => {
+  const ats = await section(() => {
     const last = lastAtsRun(logs.ats?.text);
     return last ? { ...last, logUpdatedMinutesAgo: minutesAgo(now, logs.ats?.modifiedAt) } : { lastRun: null };
   });
 
-  const codex = section(() => {
-    const calls = db.prepare(`SELECT ok, error_code AS code, error_reason AS reason, created_at AS at FROM codex_calls WHERE created_at >= ? ORDER BY created_at DESC`).all(now - DAY);
-    const blocked = db.prepare('SELECT blocked_until AS until, blocked_reason AS reason FROM llm_state WHERE id = 1').get();
+  const codex = await section(async () => {
+    const { calls, blocked } = await store.pulseCodexFacts(now);
     const failed = calls.filter((call) => !call.ok);
     return {
       calls24h: calls.length,
@@ -238,16 +212,13 @@ export function collectPulse({ db, config, now = Date.now(), launchctlText = nul
     };
   });
 
-  const runs = section(() => ({
-    stuck: db.prepare(`SELECT id, sources, stage, heartbeat_at AS heartbeat FROM runs WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) < ?`).all(now - 10 * MIN)
-      .map((run) => ({ id: run.id, sources: run.sources, stage: run.stage, heartbeatMinutesAgo: minutesAgo(now, run.heartbeat) })),
-    running: db.prepare(`SELECT id, sources, stage FROM runs WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) >= ?`).all(now - 10 * MIN),
-  }));
+  const runs = await section(async () => {
+    const { stuck, running } = await store.pulseRunFacts(now);
+    return { stuck: stuck.map((run) => ({ id: run.id, sources: run.sources, stage: run.stage, heartbeatMinutesAgo: minutesAgo(now, run.heartbeat) })), running };
+  });
 
-  const jobs = section(() => {
-    const rows = db.prepare(`SELECT sources_json, canonical_url, first_suitable_at AS suitableAt,
-      (SELECT source_kind FROM job_source_sightings s WHERE s.job_key = jobs.job_key ORDER BY s.first_seen_at DESC LIMIT 1) AS sightingKind
-      FROM jobs WHERE evaluated_at >= ?`).all(now - DAY);
+  const jobs = await section(async () => {
+    const { evaluated24h: rows, newSuitable24h, evaluated6h, failing } = await store.pulseJobFacts(now);
     const read24h = {};
     for (const row of rows) {
       const kind = sourceKind(row.sources_json, row.canonical_url, row.sightingKind);
@@ -255,15 +226,10 @@ export function collectPulse({ db, config, now = Date.now(), launchctlText = nul
       read24h[kind].evaluated += 1;
       if (row.suitableAt >= now - DAY) read24h[kind].newSuitable += 1;
     }
-    // Same notion as the decisions page: first found suitable in the window.
-    const newSuitable24h = db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE first_suitable_at >= ?').get(now - DAY).n;
-    const evaluated6h = db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE evaluated_at >= ?').get(now - 6 * HOUR).n;
-    const failing = db.prepare(`SELECT last_error_code AS code, COUNT(*) AS n FROM jobs WHERE archived_at IS NULL AND last_error_code IS NOT NULL
-      AND last_error_code NOT LIKE 'linkedin%' GROUP BY 1 ORDER BY 2 DESC LIMIT 6`).all();
     return { read24h, evaluated6h, newSuitable24h, failingNow: Object.fromEntries(failing.map((row) => [row.code, row.n])) };
   });
 
-  const health = section(() => db.prepare(`SELECT finding_key AS key, severity, title, first_seen_at AS since FROM health_findings WHERE resolved_at IS NULL`).all()
+  const health = await section(async () => (await store.listOpenHealthFindings())
     .map((finding) => ({ ...finding, since: iso(finding.since) })));
 
   const snapshot = { at: iso(now), local: local(now), services, machine, collector, whatsapp, alerts, linkedin, ats, codex, runs, jobs, health };
@@ -389,10 +355,10 @@ async function detectEgress() {
 
 async function main() {
   const config = loadJobsConfig();
-  const db = new Database(config.jobsDbPath, { readonly: true, fileMustExist: true });
+  const store = createJobStore(config.jobsDbPath, { readonly: true });
   try {
-    const pulse = collectPulse({
-      db,
+    const pulse = await collectPulse({
+      store,
       config,
       launchctlText: run('launchctl', ['list']),
       powerLogText: run('pmset', ['-g', 'log'], { timeout: 20_000 }),
@@ -402,7 +368,7 @@ async function main() {
     });
     console.log(process.argv.includes('--text') ? formatPulseText(pulse) : JSON.stringify(pulse, null, 2));
   } finally {
-    db.close();
+    store.close();
   }
 }
 

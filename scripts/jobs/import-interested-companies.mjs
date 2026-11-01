@@ -24,7 +24,7 @@ function identity(name) {
 
 // Companies to research: wanted at least once, named, not watched, not
 // blocked, and not an anonymous placeholder ("Unknown", "a client of ...").
-export function companiesToImport({ decisions, companies, isBlocked = () => false }) {
+export async function companiesToImport({ decisions, companies, isBlocked = () => false }) {
   const known = new Map(companies.map((company) => [identity(company.name), company]));
   const wanted = new Map();
   for (const decision of decisions) {
@@ -32,7 +32,7 @@ export function companiesToImport({ decisions, companies, isBlocked = () => fals
     const name = String(decision.company || '').trim();
     const key = identity(name);
     if (!key || key === 'unknown' || /לקוח לא מזוהה|confidential|stealth/i.test(name)) continue;
-    if (known.get(key)?.status === 'watched' || known.get(key)?.status === 'ignored' || isBlocked(name)) continue;
+    if (known.get(key)?.status === 'watched' || known.get(key)?.status === 'ignored' || await isBlocked(name)) continue;
     const row = wanted.get(key) || { name, count: 0 };
     row.count += 1;
     wanted.set(key, row);
@@ -48,11 +48,11 @@ async function main(argv = process.argv.slice(2)) {
   const store = createJobStore(config.jobsDbPath);
   let targets;
   try {
-    targets = companiesToImport({
-      decisions: store.listJobDecisions(),
-      companies: store.listCompanies({ limit: 1_000 }),
-      isBlocked: (name) => store.isCompanyBlocked(name),
-    }).slice(0, limit);
+    targets = (await companiesToImport({
+      decisions: await store.listJobDecisions(),
+      companies: await store.listCompanies({ limit: 1_000 }),
+      isBlocked: async (name) => await store.isCompanyBlocked(name),
+    })).slice(0, limit);
   } finally { store.close(); }
 
   console.log(`${targets.length} חברות שעניינו אותך ועדיין לא במעקב.`);
@@ -68,16 +68,16 @@ async function main(argv = process.argv.slice(2)) {
       const result = await research(target.name);
       const store = createJobStore(config.jobsDbPath);
       try {
-        const saved = store.upsertCompanyCandidate(result.candidate);
+        const saved = await store.upsertCompanyCandidate(result.candidate);
         const source = saved.sources.find((item) =>
           item.provider === result.candidate.source?.provider && item.careersUrl === result.candidate.source?.careersUrl);
-        if (source && result.probe) store.recordCompanySourceProbe(source.id, result.probe, result.research?.evidenceUrls || []);
+        if (source && result.probe) await store.recordCompanySourceProbe(source.id, result.probe, result.research?.evidenceUrls || []);
         const scannable = source && source.provider !== 'unsupported' && VERIFIED.has(result.probe?.status);
         if (scannable) {
-          store.approveCompany(saved.company.id);
+          await store.approveCompany(saved.company.id);
           summary.watched.push(`${target.name} (${source.provider}, ${result.probe.count} משרות)`);
         } else {
-          store.markCompanyAsCandidate(saved.company.id);
+          await store.markCompanyAsCandidate(saved.company.id);
           summary.candidate.push(`${target.name} (${result.research?.rationale || result.probe?.reason || 'לא נמצא מקור נתמך'})`);
         }
       } finally { store.close(); }

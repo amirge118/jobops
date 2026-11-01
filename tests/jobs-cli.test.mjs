@@ -69,7 +69,7 @@ test('CLI keeps the workflow small and rejects conflicting source flags', () => 
   assert.throws(() => parseArgs(['--whatsapp-backlog', '--ats-only']), /whatsapp-backlog/);
 });
 
-test('scan window uses last successful run with overlap and caps both explicit and automatic windows', () => {
+test('scan window uses last successful run with overlap and caps both explicit and automatic windows', async () => {
   const config = { scan: { maxLookbackDays: 14, defaultLookbackDays: 2, overlapHours: 12 } };
   const now = Date.UTC(2026, 7, 24);
   const store = {
@@ -80,16 +80,16 @@ test('scan window uses last successful run with overlap and caps both explicit a
   };
 
   assert.equal(
-    scanWindow({ config, store, sources: ['ats', 'whatsapp'], now }).from,
+    (await scanWindow({ config, store, sources: ['ats', 'whatsapp'], now })).from,
     now - 36 * 60 * 60 * 1000,
   );
   assert.equal(
-    scanWindow({ config, store, requestedDays: 30, sources: ['ats', 'whatsapp'], now }).from,
+    (await scanWindow({ config, store, requestedDays: 30, sources: ['ats', 'whatsapp'], now })).from,
     now - 14 * 24 * 60 * 60 * 1000,
   );
   const staleStore = { getLastSuccessfulRun: () => ({ finished_at: now - 40 * 24 * 60 * 60 * 1000 }) };
   assert.equal(
-    scanWindow({ config, store: staleStore, sources: ['ats', 'whatsapp'], now }).from,
+    (await scanWindow({ config, store: staleStore, sources: ['ats', 'whatsapp'], now })).from,
     now - 14 * 24 * 60 * 60 * 1000,
   );
 });

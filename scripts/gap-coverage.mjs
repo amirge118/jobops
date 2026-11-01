@@ -11,7 +11,7 @@ import { createJobStore } from './jobs/store.mjs';
 
 const config = loadJobsConfig();
 const store = createJobStore(config.jobsDbPath);
-setCodexUsageRecorder((entry) => store.recordCodexCall(entry));
+setCodexUsageRecorder(async (entry) => await store.recordCodexCall(entry));
 try {
   const result = await refreshGapCoverage({
     store, checker: createGapCoverageChecker({ config }), candidateContext: readCandidateContext(config),

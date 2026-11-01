@@ -136,40 +136,40 @@ test('explicit official HTML sources are scannable without pretending to be an A
   });
 });
 
-test('candidate persistence is idempotent and duplicate domains/sources converge', () => {
+test('candidate persistence is idempotent and duplicate domains/sources converge', async () => {
   const store = newStore();
-  const first = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const first = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'Acme',
     jobUrl: 'https://acme.example/careers/backend',
     discoverySource: 'whatsapp',
   }), 100);
-  const second = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const second = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'ACME',
     jobUrl: 'https://acme.example/jobs/data',
     discoverySource: 'manual',
   }), 200);
 
   assert.equal(first.company.id, second.company.id);
-  assert.equal(store.listCompanies().length, 1);
-  assert.equal(store.getCompany(first.company.id).status, 'candidate');
-  assert.equal(store.listWatchedCompanySources().length, 0);
+  assert.equal((await store.listCompanies()).length, 1);
+  assert.equal((await store.getCompany(first.company.id)).status, 'candidate');
+  assert.equal((await store.listWatchedCompanySources()).length, 0);
   store.close();
 });
 
-test('configured companies on a shared unsupported job host remain separate', () => {
+test('configured companies on a shared unsupported job host remain separate', async () => {
   const store = newStore();
   const entries = [
     { name: 'Alpha', careers_url: 'https://www.comeet.com/jobs/alpha/AA.001', enabled: false },
     { name: 'Beta', careers_url: 'https://www.comeet.com/jobs/beta/BB.002', enabled: false },
   ];
 
-  assert.deepEqual(store.importConfiguredCompanies(entries, 100), { imported: 2, skipped: 0 });
-  assert.deepEqual(store.listCompanies().map((company) => company.name).sort(), ['Alpha', 'Beta']);
-  assert.equal(store.listCompanies().every((company) => company.canonicalDomain === null), true);
+  assert.deepEqual(await store.importConfiguredCompanies(entries, 100), { imported: 2, skipped: 0 });
+  assert.deepEqual((await store.listCompanies()).map((company) => company.name).sort(), ['Alpha', 'Beta']);
+  assert.equal((await store.listCompanies()).every((company) => company.canonicalDomain === null), true);
   store.close();
 });
 
-test('configured import repairs legacy shared-host source ownership', () => {
+test('configured import repairs legacy shared-host source ownership', async () => {
   const store = newStore();
   const alphaSource = {
     provider: 'unsupported', boardKey: null,
@@ -179,26 +179,26 @@ test('configured import repairs legacy shared-host source ownership', () => {
     provider: 'unsupported', boardKey: null,
     careersUrl: 'https://www.comeet.com/jobs/beta/BB.002', apiUrl: null, enabled: false,
   };
-  const legacy = store.upsertCompanyCandidate({
+  const legacy = await store.upsertCompanyCandidate({
     name: 'Alpha', canonicalDomain: 'comeet.com', discoverySource: 'configured',
     resolutionStatus: 'unsupported', source: alphaSource,
   }, 100);
-  store.upsertCompanySource(legacy.company.id, betaSource, 100);
+  await store.upsertCompanySource(legacy.company.id, betaSource, 100);
 
   const entries = [
     { name: 'Alpha', careers_url: alphaSource.careersUrl, enabled: false },
     { name: 'Beta', careers_url: betaSource.careersUrl, enabled: false },
   ];
-  assert.deepEqual(store.importConfiguredCompanies(entries, 200), { imported: 2, skipped: 0 });
+  assert.deepEqual(await store.importConfiguredCompanies(entries, 200), { imported: 2, skipped: 0 });
 
-  const companies = store.listCompanies().sort((left, right) => left.name.localeCompare(right.name));
+  const companies = (await store.listCompanies()).sort((left, right) => left.name.localeCompare(right.name));
   assert.deepEqual(companies.map((company) => company.name), ['Alpha', 'Beta']);
   assert.equal(companies.every((company) => company.canonicalDomain === null), true);
   assert.deepEqual(companies.map((company) => company.sources.length), [1, 1]);
   store.close();
 });
 
-test('store migration adds Comeet and official HTML to an existing company source table', () => {
+test('store migration adds Comeet and official HTML to an existing company source table', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-companies-migration-'));
   const databasePath = path.join(dir, 'jobs.db');
   const legacy = new Database(databasePath);
@@ -223,11 +223,11 @@ test('store migration adds Comeet and official HTML to an existing company sourc
   legacy.close();
 
   const store = createJobStore(databasePath);
-  const saved = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const saved = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'Finubit', jobUrl: 'https://www.comeet.com/jobs/finubit/A9.002',
   }));
   assert.equal(saved.sources[0].provider, 'comeet');
-  const htmlSource = store.upsertCompanyCandidate({
+  const htmlSource = await store.upsertCompanyCandidate({
     name: 'Appcharge', canonicalDomain: 'appcharge.com', discoverySource: 'configured',
     resolutionStatus: 'resolved', status: 'candidate',
     source: {
@@ -239,91 +239,91 @@ test('store migration adds Comeet and official HTML to an existing company sourc
   store.close();
 });
 
-test('configured official HTML upgrade activates an auto-candidate unsupported company', () => {
+test('configured official HTML upgrade activates an auto-candidate unsupported company', async () => {
   const store = newStore();
-  store.importConfiguredCompanies([{
+  await store.importConfiguredCompanies([{
     name: 'Appcharge', careers_url: 'https://www.appcharge.com/careers', enabled: false,
   }], 100);
   // An unresolved source is the scanner's problem, not the user's choice —
   // it must land in 'candidate' (awaiting a working source), never 'paused'
   // (reserved for a deliberate "השהה" by the user).
-  assert.equal(store.listCompanies()[0].status, 'candidate');
+  assert.equal((await store.listCompanies())[0].status, 'candidate');
 
-  store.importConfiguredCompanies([{
+  await store.importConfiguredCompanies([{
     name: 'Appcharge', careers_url: 'https://www.appcharge.com/careers',
     provider: 'official-html', enabled: true,
   }], 200);
 
-  const company = store.listCompanies()[0];
+  const company = (await store.listCompanies())[0];
   assert.equal(company.status, 'watched');
   assert.equal(company.resolutionStatus, 'resolved');
   assert.deepEqual(company.sources.map((source) => source.provider), ['official-html']);
   store.close();
 });
 
-test('reclassifyAutoPausedCompanies moves only the auto-paused-while-unsupported rows to candidate', () => {
+test('reclassifyAutoPausedCompanies moves only the auto-paused-while-unsupported rows to candidate', async () => {
   const store = newStore();
   // Pre-fix data shape: a configured company stuck at 'paused' purely
   // because its source was never resolvable — nothing the user chose.
-  store.importConfiguredCompanies([{
+  await store.importConfiguredCompanies([{
     name: 'Appcharge', careers_url: 'https://www.appcharge.com/careers', enabled: false,
   }], 100);
-  store.setCompanyStatus(store.listCompanies()[0].id, 'paused', 150);
-  assert.equal(store.listCompanies()[0].status, 'paused');
+  await store.setCompanyStatus((await store.listCompanies())[0].id, 'paused', 150);
+  assert.equal((await store.listCompanies())[0].status, 'paused');
 
   // A company the user genuinely, deliberately paused (any other discovery
   // source) must be left exactly where it is.
-  const manual = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const manual = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'Deliberately Paused Co', jobUrl: 'https://jobs.lever.co/deliberate/role-id',
     discoverySource: 'manual',
   }), 200);
-  store.setCompanyStatus(manual.company.id, 'paused', 250);
+  await store.setCompanyStatus(manual.company.id, 'paused', 250);
 
-  const result = store.reclassifyAutoPausedCompanies(300);
+  const result = await store.reclassifyAutoPausedCompanies(300);
   assert.deepEqual(result.reclassified, ['Appcharge']);
 
-  const byName = Object.fromEntries(store.listCompanies().map((company) => [company.name, company.status]));
+  const byName = Object.fromEntries((await store.listCompanies()).map((company) => [company.name, company.status]));
   assert.equal(byName.Appcharge, 'candidate');
   assert.equal(byName['Deliberately Paused Co'], 'paused');
 
   // Idempotent: nothing left to fix on a second run.
-  assert.deepEqual(store.reclassifyAutoPausedCompanies(400).reclassified, []);
+  assert.deepEqual((await store.reclassifyAutoPausedCompanies(400)).reclassified, []);
   store.close();
 });
 
-test('only explicit approval creates watched scanner entries', () => {
+test('only explicit approval creates watched scanner entries', async () => {
   const store = newStore();
-  const saved = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const saved = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'Example Labs',
     jobUrl: 'https://jobs.lever.co/example/role-id',
     discoverySource: 'whatsapp',
   }), 100);
 
   assert.equal(saved.company.status, 'candidate');
-  assert.throws(
-    () => store.setCompanyStatus(saved.company.id, 'watched', 200),
+  await assert.rejects(
+    async () => await store.setCompanyStatus(saved.company.id, 'watched', 200),
     /approveCompany/,
   );
-  assert.equal(store.approveCompany(saved.company.id, 300), true);
-  assert.deepEqual(store.listWatchedCompanySources(), [{
+  assert.equal(await store.approveCompany(saved.company.id, 300), true);
+  assert.deepEqual(await store.listWatchedCompanySources(), [{
     name: 'Example Labs',
     careers_url: 'https://jobs.lever.co/example',
     provider: 'lever',
     enabled: true,
     sourceId: saved.sources[0].id,
   }]);
-  assert.equal(store.approveCompany(saved.company.id, 400), true);
+  assert.equal(await store.approveCompany(saved.company.id, 400), true);
   store.close();
 });
 
-test('provider configuration survives the registry and reaches the daily scanner', () => {
+test('provider configuration survives the registry and reaches the daily scanner', async () => {
   const store = newStore();
-  store.importConfiguredCompanies([{
+  await store.importConfiguredCompanies([{
     name: 'Dynamic Yield', provider: 'workday', enabled: true,
     careers_url: 'https://mastercard.wd1.myworkdayjobs.com/CorporateCareers',
     search_text: 'Dynamic Yield',
   }], 100);
-  assert.deepEqual(store.listWatchedCompanySources(), [{
+  assert.deepEqual(await store.listWatchedCompanySources(), [{
     name: 'Dynamic Yield', provider: 'workday', enabled: true,
     careers_url: 'https://mastercard.wd1.myworkdayjobs.com/CorporateCareers',
     search_text: 'Dynamic Yield', sourceId: 1,
@@ -331,106 +331,106 @@ test('provider configuration survives the registry and reaches the daily scanner
   store.close();
 });
 
-test('source probes persist bounded verification evidence and reject malformed results', () => {
+test('source probes persist bounded verification evidence and reject malformed results', async () => {
   const store = newStore();
-  const saved = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const saved = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'Acme', jobUrl: 'https://jobs.ashbyhq.com/acme', discoverySource: 'research',
   }), 100);
   const sourceId = saved.sources[0].id;
 
-  assert.equal(store.recordCompanySourceProbe(sourceId, {
+  assert.equal(await store.recordCompanySourceProbe(sourceId, {
     status: 'verified_jobs', count: 3, errorCode: null,
     reason: 'נמצאו 3 משרות במקור שנבדק.',
   }, ['https://www.acme.example/careers'], 200), true);
 
-  const source = store.getCompany(saved.company.id).sources[0];
+  const source = (await store.getCompany(saved.company.id)).sources[0];
   assert.equal(source.verificationStatus, 'verified_jobs');
   assert.equal(source.lastJobCount, 3);
   assert.equal(source.health, 'healthy');
   assert.equal(source.lastProbeAt, 200);
   assert.deepEqual(source.discoveryEvidence, ['https://www.acme.example/careers']);
-  assert.throws(
-    () => store.recordCompanySourceProbe(sourceId, { status: 'invented', count: 0 }),
+  await assert.rejects(
+    async () => await store.recordCompanySourceProbe(sourceId, { status: 'invented', count: 0 }),
     (error) => error.code === 'invalid_probe_status',
   );
-  assert.throws(
-    () => store.recordCompanySourceProbe(sourceId, { status: 'verified_jobs', count: 5_001 }),
+  await assert.rejects(
+    async () => await store.recordCompanySourceProbe(sourceId, { status: 'verified_jobs', count: 5_001 }),
     (error) => error.code === 'invalid_probe_count',
   );
   store.close();
 });
 
-test('duplicate ATS source cannot be attached to two companies', () => {
+test('duplicate ATS source cannot be attached to two companies', async () => {
   const store = newStore();
-  const first = store.upsertCompanyCandidate(resolveCompanyCandidate({
+  const first = await store.upsertCompanyCandidate(resolveCompanyCandidate({
     company: 'First Name',
     jobUrl: 'https://jobs.ashbyhq.com/shared/one',
   }));
-  const second = store.upsertCompanyCandidate({
+  const second = await store.upsertCompanyCandidate({
     ...resolveCompanyCandidate({ company: 'Second Name', jobUrl: 'https://jobs.ashbyhq.com/shared/two' }),
     source: null,
   });
 
-  assert.throws(
-    () => store.upsertCompanySource(second.company.id, first.sources[0]),
+  await assert.rejects(
+    async () => await store.upsertCompanySource(second.company.id, first.sources[0]),
     (error) => error instanceof CompanyRegistryError && error.code === 'source_conflict' &&
       error.ownerName === 'First Name',
   );
   store.close();
 });
 
-test('stored suitable jobs resolve to candidates without mutating the registry', () => {
+test('stored suitable jobs resolve to candidates without mutating the registry', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://jobs.lever.co/example/role-id',
     company: 'Example',
     title: 'Backend Engineer',
     source: 'WhatsApp: Jobs',
     seenAt: 100,
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Backend systems.', score: 4.5,
     fitLabel: 'בול מתאים', decisionReason: 'Relevant.', suitable: true,
     applyUrl: 'https://jobs.lever.co/example/role-id', activeStatus: 'active',
     contentHash: 'content', profileHash: 'profile', criteriaVersion: 'v1', evaluatedAt: 200,
   });
 
-  const candidate = store.resolveCompanyCandidateForJob(sighting.jobKey);
+  const candidate = await store.resolveCompanyCandidateForJob(sighting.jobKey);
   assert.equal(candidate.source.provider, 'lever');
   assert.equal(candidate.status, 'candidate');
-  assert.deepEqual(store.listCompanies(), []);
+  assert.deepEqual(await store.listCompanies(), []);
 
-  const rejected = store.recordSighting({ url: 'https://jobs.lever.co/nope/role', source: 'WhatsApp: Jobs' });
-  assert.throws(
-    () => store.resolveCompanyCandidateForJob(rejected.jobKey),
+  const rejected = await store.recordSighting({ url: 'https://jobs.lever.co/nope/role', source: 'WhatsApp: Jobs' });
+  await assert.rejects(
+    async () => await store.resolveCompanyCandidateForJob(rejected.jobKey),
     (error) => error instanceof CompanyRegistryError && error.code === 'job_not_suitable',
   );
   store.close();
 });
 
-test('stored jobs resolve from the evaluated final URL rather than a WhatsApp shortener', () => {
+test('stored jobs resolve from the evaluated final URL rather than a WhatsApp shortener', async () => {
   const store = newStore();
-  const sighting = store.recordSighting({
+  const sighting = await store.recordSighting({
     url: 'https://api.dueto.io/Redirect/short-id',
     company: 'Example',
     title: 'Backend Engineer',
     source: 'WhatsApp: Jobs',
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Example', title: 'Backend Engineer', summary: 'Backend systems.', score: 4.5,
     fitLabel: 'בול מתאים', decisionReason: 'Relevant.', suitable: true,
     applyUrl: 'https://jobs.ashbyhq.com/example/final-role', activeStatus: 'active',
     contentHash: 'content', profileHash: 'profile', criteriaVersion: 'v1', evaluatedAt: 200,
   });
 
-  const candidate = store.resolveCompanyCandidateForJob(sighting.jobKey);
+  const candidate = await store.resolveCompanyCandidateForJob(sighting.jobKey);
   assert.equal(candidate.source.provider, 'ashby');
   assert.equal(candidate.source.boardKey, 'example');
   assert.equal(candidate.discoverySource, 'whatsapp');
   store.close();
 });
 
-test('configured company import is additive, idempotent, and preserves user state', () => {
+test('configured company import is additive, idempotent, and preserves user state', async () => {
   const store = newStore();
   const entries = [
     { name: 'Enabled Co', careers_url: 'https://jobs.lever.co/enabled', enabled: true },
@@ -443,22 +443,22 @@ test('configured company import is additive, idempotent, and preserves user stat
     { name: 'Not Yet Enabled Co', careers_url: 'https://jobs.ashbyhq.com/not-yet-enabled', enabled: false },
   ];
 
-  assert.deepEqual(store.importConfiguredCompanies(entries, 100), { imported: 2, skipped: 0 });
-  const enabled = store.listCompanies().find((company) => company.name === 'Enabled Co');
-  const notYetEnabled = store.listCompanies().find((company) => company.name === 'Not Yet Enabled Co');
+  assert.deepEqual(await store.importConfiguredCompanies(entries, 100), { imported: 2, skipped: 0 });
+  const enabled = (await store.listCompanies()).find((company) => company.name === 'Enabled Co');
+  const notYetEnabled = (await store.listCompanies()).find((company) => company.name === 'Not Yet Enabled Co');
   assert.equal(enabled.status, 'watched');
   assert.equal(notYetEnabled.status, 'candidate');
 
-  store.setCompanyStatus(enabled.id, 'ignored', 200);
-  assert.deepEqual(store.importConfiguredCompanies(entries, 300), { imported: 2, skipped: 0 });
-  assert.equal(store.listCompanies().length, 2);
-  assert.equal(store.getCompany(enabled.id).status, 'ignored');
+  await store.setCompanyStatus(enabled.id, 'ignored', 200);
+  assert.deepEqual(await store.importConfiguredCompanies(entries, 300), { imported: 2, skipped: 0 });
+  assert.equal((await store.listCompanies()).length, 2);
+  assert.equal((await store.getCompany(enabled.id)).status, 'ignored');
   store.close();
 });
 
 test('interested companies to import skip watched, ignored, blocked and anonymous ones', async () => {
   const { companiesToImport } = await import('../scripts/jobs/import-interested-companies.mjs');
-  const targets = companiesToImport({
+  const targets = await companiesToImport({
     decisions: [
       { decision: 'interested', company: 'Rubrik' }, { decision: 'company_candidate', company: 'Rubrik' },
       { decision: 'interested', company: 'Acme Ltd.' }, { decision: 'interested', company: 'Unknown' },

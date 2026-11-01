@@ -84,33 +84,33 @@ test('history deadlines also bound a request promise that never settles', { time
   assert.equal(sock.groupHistoryDiagnostics.get(group.jid).reason, 'history_request_timeout');
 });
 
-test('saved anchors contain metadata only, stay group-scoped and do not go backwards', (context) => {
+test('saved anchors contain metadata only, stay group-scoped and do not go backwards', async (context) => {
   const store = tempStore(context);
   const config = { configuredGroupJids: new Set([group.jid]), store, sinceMs: 0 };
-  queueIncomingMessages({ ...config, messages: [message('latest', 200, 'private-body')] });
-  queueIncomingMessages({ ...config, messages: [message('old', 100)] });
-  const anchor = store.getWhatsAppAnchor(group.jid);
+  await queueIncomingMessages({ ...config, messages: [message('latest', 200, 'private-body')] });
+  await queueIncomingMessages({ ...config, messages: [message('old', 100)] });
+  const anchor = await store.getWhatsAppAnchor(group.jid);
   assert.equal(anchor.key.id, 'latest');
   assert.doesNotMatch(JSON.stringify(anchor), /private-body|conversation/);
-  assert.equal(store.getWhatsAppAnchor('other@g.us'), null);
+  assert.equal(await store.getWhatsAppAnchor('other@g.us'), null);
 });
 
-test('anchor migration is additive, survives reopening and uses its primary-key lookup', (context) => {
+test('anchor migration is additive, survives reopening and uses its primary-key lookup', async (context) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-anchor-migration-'));
   const dbPath = path.join(dir, 'jobs.db');
   context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let store = createJobStore(dbPath);
-  const job = store.recordSighting({ url: 'https://example.com/jobs/existing' });
+  const job = await store.recordSighting({ url: 'https://example.com/jobs/existing' });
   store.close();
   const legacy = new Database(dbPath);
-  legacy.exec('DROP TABLE whatsapp_anchors'); // Synthetic legacy database only.
+  legacy.exec('DROP TABLE whatsapp_anchors; DROP TABLE schema_migrations'); // Synthetic legacy database only.
   legacy.close();
   store = createJobStore(dbPath);
-  assert.ok(store.getJob(job.jobKey));
-  store.saveWhatsAppAnchor(group.jid, message('saved', 200, 'private-body'));
+  assert.ok(await store.getJob(job.jobKey));
+  await store.saveWhatsAppAnchor(group.jid, message('saved', 200, 'private-body'));
   store.close();
   store = createJobStore(dbPath);
-  assert.equal(store.getWhatsAppAnchor(group.jid).key.id, 'saved');
+  assert.equal((await store.getWhatsAppAnchor(group.jid)).key.id, 'saved');
   store.close();
   const db = new Database(dbPath, { readonly: true });
   try {
@@ -122,11 +122,11 @@ test('anchor migration is additive, survives reopening and uses its primary-key 
 
 test('an earlier scoring decision must not hide a later retryable page failure', async (context) => {
   const store = tempStore(context);
-  const candidate = { ...store.recordSighting({ url: 'https://example.com/jobs/retry' }), url: 'https://example.com/jobs/retry' };
-  store.saveEvaluation(candidate.jobKey, { suitable: true, score: 4.5, fitLabel: 'match', company: 'Example', title: 'Engineer',
+  const candidate = { ...await store.recordSighting({ url: 'https://example.com/jobs/retry' }), url: 'https://example.com/jobs/retry' };
+  await store.saveEvaluation(candidate.jobKey, { suitable: true, score: 4.5, fitLabel: 'match', company: 'Example', title: 'Engineer',
     summary: 'test', decisionReason: 'test', applyUrl: candidate.url, contentHash: 'previous', profileHash: 'profile',
     criteriaVersion: 'v1', evaluatedAt: Date.now(), activeStatus: 'active' });
-  store.markEvaluationFailure(candidate.jobKey, { code: 'page_uncertain', reason: 'retry needed' });
+  await store.markEvaluationFailure(candidate.jobKey, { code: 'page_uncertain', reason: 'retry needed' });
   let fetched = 0;
   const outcomes = await evaluateCandidates({ candidates: [candidate], config: { decision: { criteriaVersion: 'v1' } }, store,
     fetcher: { fetch: async () => { fetched += 1; return { status: 'uncertain', code: 'page_uncertain' }; } },
@@ -138,8 +138,8 @@ test('an earlier scoring decision must not hide a later retryable page failure',
 
 test('a scan with zero delivered messages never marks old stored messages or chat state as read', async (context) => {
   const store = tempStore(context);
-  store.queueWhatsAppMessage({ messageId: 'old', groupJid: group.jid, timestamp: 100_000, text: 'private-old' });
-  store.markMessageDone({ messageId: 'old', groupJid: group.jid, timestamp: 100_000 });
+  await store.queueWhatsAppMessage({ messageId: 'old', groupJid: group.jid, timestamp: 100_000, text: 'private-old' });
+  await store.markMessageDone({ messageId: 'old', groupJid: group.jid, timestamp: 100_000 });
   let receipts = 0;
   const sock = { historyStore: new Map(), groupFetchAllParticipating: async () => ({ [group.jid]: {} }),
     readMessages: async () => { receipts += 1; }, chatModify: async () => { receipts += 1; } };
@@ -197,7 +197,7 @@ test('anchor wait diagnostics exclude later time spent waiting for a history res
   assert.equal(sock.groupHistoryDiagnostics.get(group.jid).anchorWaitMs, 500);
 });
 
-test('malformed metadata cannot be persisted as a cursor', (context) => {
+test('malformed metadata cannot be persisted as a cursor', async (context) => {
   const store = tempStore(context);
   for (const item of [
     { ...message('x', 100), key: { id: 'x', remoteJid: group.jid } },
@@ -206,9 +206,9 @@ test('malformed metadata cannot be persisted as a cursor', (context) => {
     { ...message('x', 100), key: { id: 'x', remoteJid: 'other@g.us', fromMe: false } },
   ]) {
     assert.equal(normalizeWhatsAppAnchor(item, group.jid), null);
-    assert.equal(store.saveWhatsAppAnchor(group.jid, item), false);
+    assert.equal(await store.saveWhatsAppAnchor(group.jid, item), false);
   }
-  assert.equal(store.getWhatsAppAnchor(group.jid), null);
+  assert.equal(await store.getWhatsAppAnchor(group.jid), null);
 });
 
 test('a saved anchor inside the window does not claim coverage of newer messages', async () => {
@@ -250,7 +250,7 @@ test('scan receipts exclude failed extraction, out-of-window, other-group and ou
   assert.deepEqual(keys.map((key) => key.id), ['ok']);
   assert.equal(result.groups[0].read.status, 'sent');
   assert.equal(result.groups[0].failedMessages, 1);
-  assert.equal(store.getMessageState('bad').status, 'failed');
+  assert.equal((await store.getMessageState('bad')).status, 'failed');
 });
 
 test('receipt failure preserves the scan result and the count of acknowledged batches', async (context) => {

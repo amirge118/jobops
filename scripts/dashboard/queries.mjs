@@ -33,9 +33,9 @@ export function dashboardSettings(config) {
 }
 
 export function createDashboardQueries(config, action) {
-  const withStore = (callback) => {
+  const withStore = async (callback) => {
     const store = createJobStore(config.jobsDbPath);
-    try { return callback(store); }
+    try { return await callback(store); }
     finally { store.close(); }
   };
 
@@ -54,13 +54,13 @@ export function createDashboardQueries(config, action) {
     }
   };
 
-  const whatsappHistory = (store) => {
+  const whatsappHistory = async (store) => {
     const now = Date.now();
-    const all = store.getWhatsAppBacklogStats({ untilMs: now });
-    const recent = store.getWhatsAppBacklogStats({ sinceMs: now - 7 * 24 * 60 * 60 * 1_000, untilMs: now });
-    const lastRun = store.getLastRunSummary();
-    const latestRequest = store.getLatestWhatsAppHistoryRequest();
-    const collector = store.getCollectorStatusSummary();
+    const all = await store.getWhatsAppBacklogStats({ untilMs: now });
+    const recent = await store.getWhatsAppBacklogStats({ sinceMs: now - 7 * 24 * 60 * 60 * 1_000, untilMs: now });
+    const lastRun = await store.getLastRunSummary();
+    const latestRequest = await store.getLatestWhatsAppHistoryRequest();
+    const collector = await store.getCollectorStatusSummary();
     const collectorLive = collector?.status === 'connected' &&
       Number(collector.groups_found || 0) === Number(collector.groups_expected || 0);
     const historyGroups = new Map((latestRequest?.groups || []).map((group) => [group.name, group]));
@@ -78,11 +78,11 @@ export function createDashboardQueries(config, action) {
         recentTotal: recent.total,
         oldestAt: all.oldestAt,
         newestAt: all.newestAt,
-        groups: [...knownJids].map((groupJid) => {
+        groups: await Promise.all([...knownJids].map(async (groupJid) => {
           const group = all.groups.find((item) => item.groupJid === groupJid);
           const recentGroup = recentByJid.get(groupJid);
           const name = names.get(groupJid) || 'קבוצה לא מוגדרת';
-          const collection = store.getWhatsAppGroupCollectionStats(groupJid);
+          const collection = await store.getWhatsAppGroupCollectionStats(groupJid);
           const runGroup = lastWhatsAppGroups.get(name);
           const processing = processingGroups.get(name);
           const historyGroup = historyGroups.get(name);
@@ -120,7 +120,7 @@ export function createDashboardQueries(config, action) {
             syncState,
             gapFrom: hasGap ? historyGroup?.requestedFrom ?? null : null,
           };
-        }),
+        })),
       },
       request: latestRequest,
     };
@@ -130,11 +130,11 @@ export function createDashboardQueries(config, action) {
   // a single run's numbers can't tell "which WhatsApp group actually brings
   // jobs" or "is ATS or WhatsApp costing more per suitable job" apart from
   // noise. See scripts/jobs/insights.mjs for how a window is summed.
-  const insights = (store) => {
+  const insights = async (store) => {
     const now = Date.now();
     const windows = {};
     for (const [key, spanMs] of Object.entries(STATS_WINDOWS)) {
-      const runs = store.listRuns({ sinceMs: now - spanMs });
+      const runs = await store.listRuns({ sinceMs: now - spanMs });
       windows[key] = { groups: aggregateGroupStats(runs), sourcePerformance: aggregateSourcePerformance(runs), runsCounted: runs.length };
     }
     return { windows };
@@ -144,10 +144,10 @@ export function createDashboardQueries(config, action) {
   // reflects the real outstanding backlog rather than just the last scan.
   // Searches are defined only in config/jobs.yml; syncing on read lets the
   // dashboard show them before the first LinkedIn scan has ever run.
-  const llmUsage = (store) => {
+  const llmUsage = async (store) => {
     const now = Date.now();
-    const day = store.summarizeCodexUsage({ sinceMs: now - 24 * 60 * 60 * 1000, untilMs: now });
-    const week = store.summarizeCodexUsage({ sinceMs: now - 7 * 24 * 60 * 60 * 1000, untilMs: now });
+    const day = await store.summarizeCodexUsage({ sinceMs: now - 24 * 60 * 60 * 1000, untilMs: now });
+    const week = await store.summarizeCodexUsage({ sinceMs: now - 7 * 24 * 60 * 60 * 1000, untilMs: now });
     return {
       model: config.scoring?.model || 'default',
       reasoningEffort: config.scoring?.reasoningEffort || null,
@@ -159,16 +159,16 @@ export function createDashboardQueries(config, action) {
     };
   };
 
-  const linkedin = (store) => {
+  const linkedin = async (store) => {
     const configured = config.sources.linkedin || null;
-    if (configured) store.syncLinkedInSearches(configured.searches || []);
+    if (configured) await store.syncLinkedInSearches(configured.searches || []);
     return {
       configured: Boolean(configured),
       configEnabled: Boolean(configured?.enabled),
-      enabled: Boolean(configured?.enabled) && store.isSourceEnabled('linkedin'),
+      enabled: Boolean(configured?.enabled) && await store.isSourceEnabled('linkedin'),
       window: linkedinWindowSettings(config),
       limits: { ...DEFAULT_LINKEDIN_LIMITS, ...(configured?.limits || {}) },
-      searches: store.listLinkedInSearches(),
+      searches: await store.listLinkedInSearches(),
     };
   };
 
@@ -176,8 +176,8 @@ export function createDashboardQueries(config, action) {
   // failures: the queue reader reads them on its own, and "retry" would only
   // add requests to LinkedIn. They are reported apart as `waiting`.
   const WAITING_CODES = new Set(['linkedin_deferred', 'linkedin_cooldown']);
-  const failures = (store) => {
-    const rows = store.getFailureBreakdown();
+  const failures = async (store) => {
+    const rows = await store.getFailureBreakdown();
     const breakdown = rows.filter((row) => !WAITING_CODES.has(row.code)).map((row) => ({
       ...row,
       retryable: !NON_RETRYABLE_FAILURE_CODES.has(row.code),
@@ -188,10 +188,10 @@ export function createDashboardQueries(config, action) {
     return { breakdown, retryableTotal, nonRetryableTotal, waiting };
   };
 
-  const snapshot = () => withStore((store) => ({
-    ...store.getDashboardSnapshot(),
-    collector: store.getCollectorStatusSummary(),
-    history: store.diagnosticHistory(),
+  const snapshot = async () => await withStore(async (store) => ({
+    ...await store.getDashboardSnapshot(),
+    collector: await store.getCollectorStatusSummary(),
+    history: await store.diagnosticHistory(),
     action: { ...action },
     settings: dashboardSettings(config),
   }));
@@ -199,91 +199,91 @@ export function createDashboardQueries(config, action) {
   return {
     snapshot,
 
-    summary() {
-      return withStore((store) => {
-        const stats = store.getDashboardStats();
+    async summary() {
+      return await withStore(async (store) => {
+        const stats = await store.getDashboardStats();
         return {
           jobs: { suitable: stats.suitable, unopened: stats.unopened },
-          companies: store.getCompanyStats(),
+          companies: await store.getCompanyStats(),
           groups: dashboardSettings(config).groups.length,
           action: { status: action.status },
         };
       });
     },
 
-    scan() {
-      return withStore((store) => ({
-        stats: store.getDashboardStats(),
-        lastRun: store.getLastRunSummary(),
-        collector: store.getCollectorStatusSummary(),
+    async scan() {
+      return await withStore(async (store) => ({
+        stats: await store.getDashboardStats(),
+        lastRun: await store.getLastRunSummary(),
+        collector: await store.getCollectorStatusSummary(),
         action: { ...action },
         settings: dashboardSettings(config),
-        whatsappHistory: whatsappHistory(store),
-        insights: insights(store),
-        failures: failures(store),
-        linkedin: linkedin(store),
-        llmUsage: llmUsage(store),
+        whatsappHistory: await whatsappHistory(store),
+        insights: await insights(store),
+        failures: await failures(store),
+        linkedin: await linkedin(store),
+        llmUsage: await llmUsage(store),
       }));
     },
 
-    linkedin() {
-      return withStore((store) => linkedin(store));
+    async linkedin() {
+      return await withStore(async (store) => await linkedin(store));
     },
 
-    dailyLlmUsage(days = 14) {
-      return withStore((store) => ({
+    async dailyLlmUsage(days = 14) {
+      return await withStore(async (store) => ({
         model: config.scoring?.model || 'default',
-        ...store.dailyUsageBySource({ days: Math.max(1, Math.min(60, Number(days) || 14)) }),
+        ...await store.dailyUsageBySource({ days: Math.max(1, Math.min(60, Number(days) || 14)) }),
       }));
     },
 
-    setLinkedInEnabled(enabled) {
-      return withStore((store) => { store.setSourceEnabled('linkedin', enabled); return linkedin(store); });
+    async setLinkedInEnabled(enabled) {
+      return await withStore(async (store) => { await store.setSourceEnabled('linkedin', enabled); return await linkedin(store); });
     },
 
-    jobs() {
-      return withStore((store) => ({
-        stats: store.getDashboardStats(),
-        jobs: store.listDashboardJobs({ resumeGapContext: resumeGapContext() }),
+    async jobs() {
+      return await withStore(async (store) => ({
+        stats: await store.getDashboardStats(),
+        jobs: await store.listDashboardJobs({ resumeGapContext: resumeGapContext() }),
       }));
     },
 
-    decisionStats() {
-      return withStore((store) => ({
-        ...buildDecisionStats(store.listJobDecisions(), {
-          pending: store.getDashboardStats().suitable,
+    async decisionStats() {
+      return await withStore(async (store) => ({
+        ...buildDecisionStats(await store.listJobDecisions(), {
+          pending: (await store.getDashboardStats()).suitable,
           minimumScore: Number(config.decision?.minimumScore ?? 4),
           exactMatchScore: Number(config.decision?.exactMatchScore ?? 4.5),
         }),
-        sourceValue: buildSourceValue(store.listSourceValueFacts({
+        sourceValue: buildSourceValue(await store.listSourceValueFacts({
           since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
         })),
         speed: buildSpeedStats({
-          decisions: store.listJobDecisions(),
-          sightings: store.listSightingTimes(),
-          linkedinPostings: store.listLinkedInPostingTimes({ since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000 }),
-          watchedCompanies: store.listCompanies({ status: 'watched', limit: 1_000 }).map((company) => company.name),
+          decisions: await store.listJobDecisions(),
+          sightings: await store.listSightingTimes(),
+          linkedinPostings: await store.listLinkedInPostingTimes({ since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000 }),
+          watchedCompanies: (await store.listCompanies({ status: 'watched', limit: 1_000 })).map((company) => company.name),
           trackerRows: readTrackerRows(config),
         }),
       }));
     },
 
-    companies() {
-      return withStore((store) => {
-        const companies = store.listCompanies({ limit: 500 });
-        return { companies, stats: store.getCompanyStats() };
+    async companies() {
+      return await withStore(async (store) => {
+        const companies = await store.listCompanies({ limit: 500 });
+        return { companies, stats: await store.getCompanyStats() };
       });
     },
 
-    diagnosticHistory() {
-      return withStore((store) => ({ history: store.diagnosticHistory() }));
+    async diagnosticHistory() {
+      return await withStore(async (store) => ({ history: await store.diagnosticHistory() }));
     },
 
-    diagnosticDetail(kind, id) {
-      return withStore((store) => {
+    async diagnosticDetail(kind, id) {
+      return await withStore(async (store) => {
         const detail = kind === 'runs'
-          ? store.getRun(id)
-          : kind === 'actions' ? store.getAction(id) : store.getCollectorRun(id);
+          ? await store.getRun(id)
+          : kind === 'actions' ? await store.getAction(id) : await store.getCollectorRun(id);
         return detail ? { statusCode: 200, payload: { detail } }
           : { statusCode: 404, payload: { error: 'רשומת האבחון לא נמצאה' } };
       });

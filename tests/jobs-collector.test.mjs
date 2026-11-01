@@ -88,7 +88,7 @@ test('collector durably queues configured messages, sends receipts and records a
     readMessages: async (keys) => receiptIds.push(...keys.map((key) => key.id)),
   };
   const connect = async (_authPath, options) => {
-    options.onMessages([message], sock);
+    await options.onMessages([message], sock);
     setImmediate(() => options.onConnectionUpdate({ connection: 'close', lastDisconnect: { error: new Boom('replaced', { statusCode: 440 }) } }, sock));
     return sock;
   };
@@ -96,12 +96,12 @@ test('collector durably queues configured messages, sends receipts and records a
   const result = await runWhatsAppCollector({ config: configFor(dir), store, connect, disconnect: async () => {}, registerSignals: false });
   assert.equal(result.status, 'failed');
   assert.deepEqual(receiptIds, ['message-1']);
-  assert.equal(store.getMessageState('message-1').status, 'pending');
-  const diagnostic = store.getCollectorRun(result.id);
+  assert.equal((await store.getMessageState('message-1')).status, 'pending');
+  const diagnostic = await store.getCollectorRun(result.id);
   assert.equal(diagnostic.messages_received, 1);
   assert.equal(diagnostic.messages_queued, 1);
   assert.equal(diagnostic.receipts_sent, 1);
-  assert.ok(store.getWhatsAppGroupCollectionStats(group.jid).lastReadAt);
+  assert.ok((await store.getWhatsAppGroupCollectionStats(group.jid)).lastReadAt);
   assert.equal(diagnostic.events.some((event) => event.stage === 'message-ingress'), true);
   assert.doesNotMatch(JSON.stringify(diagnostic), /private text|private-user|group-a@g\.us/);
 });
@@ -134,17 +134,17 @@ test('collector reconnects a status 500 stream error inside the same durable run
 
   assert.equal(result.status, 'failed');
   assert.equal(connections, 2);
-  const diagnostic = store.getCollectorRun(result.id);
+  const diagnostic = await store.getCollectorRun(result.id);
   assert.equal(diagnostic.reconnects, 1);
   assert.equal(diagnostic.events.some((event) => event.stage === 'reconnect-wait'), true);
 });
 
 test('scan consumes the collector inbox without opening another WhatsApp session', async (context) => {
   const { dir, store } = temporary(context);
-  const collectorId = Number(store.startCollectorRun({ ownerPid: process.pid, startedAt: 1_000, groupsExpected: 1 }));
-  store.updateCollectorRun(collectorId, { status: 'connected', stage: 'connected', connectedAt: 1_000, groupsFound: 1 });
-  store.recordCollectorEvent(collectorId, { stage: 'group-verification', status: 'complete', details: { groups: [{ name: group.name, found: true, liveName: group.name, participants: 10 }] } });
-  store.queueWhatsAppMessage({ messageId: 'queued-1', groupJid: group.jid, timestamp: 2_000, text: 'https://example.com/jobs/collector' });
+  const collectorId = Number(await store.startCollectorRun({ ownerPid: process.pid, startedAt: 1_000, groupsExpected: 1 }));
+  await store.updateCollectorRun(collectorId, { status: 'connected', stage: 'connected', connectedAt: 1_000, groupsFound: 1 });
+  await store.recordCollectorEvent(collectorId, { stage: 'group-verification', status: 'complete', details: { groups: [{ name: group.name, found: true, liveName: group.name, participants: 10 }] } });
+  await store.queueWhatsAppMessage({ messageId: 'queued-1', groupJid: group.jid, timestamp: 2_000, text: 'https://example.com/jobs/collector' });
   let connected = false;
 
   const result = await scanWhatsApp({ config: configFor(dir), store, sinceMs: 1_500, untilMs: 3_000,
@@ -155,12 +155,12 @@ test('scan consumes the collector inbox without opening another WhatsApp session
   assert.equal(result.groups[0].coverage.status, 'complete');
   assert.equal(result.groups[0].read.status, 'skipped');
   assert.equal(result.groups[0].read.marked, false);
-  assert.equal(store.getMessageState('queued-1').status, 'done');
+  assert.equal((await store.getMessageState('queued-1')).status, 'done');
 });
 
 test('collector executes one durable history request on its existing socket', async (context) => {
   const { dir, store } = temporary(context);
-  const request = store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
+  const request = await store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
   const historical = {
     key: { id: 'history-1', remoteJid: group.jid, fromMe: false },
     messageTimestamp: 3,
@@ -185,8 +185,8 @@ test('collector executes one durable history request on its existing socket', as
 
   assert.equal(result.id, request.request.id);
   assert.equal(result.status, 'complete');
-  assert.equal(store.getMessageState('history-1').status, 'pending');
-  assert.equal(store.getLatestWhatsAppHistoryRequest().messagesQueued, 1);
+  assert.equal((await store.getMessageState('history-1')).status, 'pending');
+  assert.equal((await store.getLatestWhatsAppHistoryRequest()).messagesQueued, 1);
 });
 
 test('collector history request keeps successful group evidence when another group fails', async (context) => {
@@ -194,7 +194,7 @@ test('collector history request keeps successful group evidence when another gro
   const second = { name: 'Group B', jid: 'group-b@g.us' };
   const config = configFor(dir);
   config.sources.whatsapp.groups.push(second);
-  store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 2 });
+  await store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 2 });
   const sock = { groupHistoryDiagnostics: new Map() };
 
   const result = await processNextHistoryRequest({
@@ -218,7 +218,7 @@ test('collector history request keeps successful group evidence when another gro
 
 test('collector reports a history group as failed when WhatsApp returns no history page', async (context) => {
   const { dir, store } = temporary(context);
-  store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
+  await store.requestWhatsAppHistory({ fromTs: 1_000, toTs: 5_000, groupsTotal: 1 });
   const sock = { groupHistoryDiagnostics: new Map() };
 
   const result = await processNextHistoryRequest({

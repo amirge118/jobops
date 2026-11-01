@@ -18,7 +18,7 @@ function sourcePath(argv, rootDir) {
   );
 }
 
-export function migrateWhatsAppState({ legacyDatabasePath, jobsDatabasePath }) {
+export async function migrateWhatsAppState({ legacyDatabasePath, jobsDatabasePath }) {
   if (!fs.existsSync(legacyDatabasePath)) {
     throw new Error(`Legacy WhatsApp database not found: ${legacyDatabasePath}`);
   }
@@ -41,7 +41,7 @@ export function migrateWhatsAppState({ legacyDatabasePath, jobsDatabasePath }) {
       SELECT group_jid, last_wa_timestamp
       FROM checkpoints
     `).all();
-    return store.importWhatsAppState({ messages, checkpoints });
+    return await store.importWhatsAppState({ messages, checkpoints });
   } finally {
     legacy?.close();
     store?.close();
@@ -49,10 +49,10 @@ export function migrateWhatsAppState({ legacyDatabasePath, jobsDatabasePath }) {
   }
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const config = loadJobsConfig();
   const legacyDatabasePath = sourcePath(argv, config.rootDir);
-  const result = migrateWhatsAppState({
+  const result = await migrateWhatsAppState({
     legacyDatabasePath,
     jobsDatabasePath: config.jobsDbPath,
   });
@@ -62,7 +62,7 @@ function main(argv = process.argv.slice(2)) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(`ייבוא מצב WhatsApp נכשל: ${error.message}`);
     process.exitCode = 1;

@@ -9,11 +9,11 @@ import { resolveCodexBinary } from '../jobs/score-job.mjs';
 import { createJobStore } from '../jobs/store.mjs';
 import { rateLimitBlockedUntil, readCodexRateLimits } from '../jobs/llm-usage.mjs';
 
-function defaultQuotaState(config) {
+async function defaultQuotaState(config) {
   if (!config?.jobsDbPath) return null;
   const store = createJobStore(config.jobsDbPath);
   let stored;
-  try { stored = store.getLlmQuota(); }
+  try { stored = await store.getLlmQuota(); }
   finally { store.close(); }
   // Free: Codex's own local record of the account's usage windows.
   let limitedUntil = null;

@@ -21,9 +21,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import Database from 'better-sqlite3';
-
 import { loadJobsConfig } from './config.mjs';
+import { createJobStore } from './store.mjs';
 import { LINKEDIN_HEADERS, LINKEDIN_POSTING_ENDPOINT, classifySearchResponse, parsePostingPage } from './sources/linkedin.mjs';
 
 export const MIN_GAP_MS = 30 * 60 * 1000;
@@ -150,20 +149,15 @@ async function main() {
     throw new Error(`--series must be 1-${MAX_SERIES}.`);
   }
   if (!Number.isFinite(intervalS) || intervalS < MIN_INTERVAL_S) throw new Error(`--interval must be at least ${MIN_INTERVAL_S} seconds.`);
-  const db = new Database(config.jobsDbPath, { readonly: true });
+  const store = createJobStore(config.jobsDbPath, { readonly: true });
   let jobIds;
   let cooldown;
   try {
     // Postings still waiting for LinkedIn first: real, probably live ids.
-    jobIds = db.prepare(`
-      SELECT canonical_url AS url FROM jobs
-      WHERE archived_at IS NULL AND canonical_url LIKE '%linkedin.com/jobs/view/%'
-      ORDER BY (last_error_code = 'linkedin_deferred') DESC, first_seen_at DESC LIMIT ?
-    `).all(seriesSize ?? 1).map((row) => row.url.match(/(\d{6,})/)?.[1]).filter(Boolean);
-    const state = db.prepare('SELECT blocked_reason AS reason, blocked_at AS at, blocked_until AS until FROM linkedin_state WHERE id = 1').get();
-    cooldown = state?.until > Date.now() ? { reason: state.reason, since: new Date(state.at).toISOString() } : null;
+    jobIds = (await store.listLinkedInPostingUrls(seriesSize ?? 1)).map((url) => url.match(/(\d{6,})/)?.[1]).filter(Boolean);
+    cooldown = await store.getLinkedInBlock();
   } finally {
-    db.close();
+    store.close();
   }
   // --id: check specific postings (one series, same pacing and stop rule).
   const ids = process.argv.flatMap((arg, index) => (arg === '--id' ? [process.argv[index + 1]] : []));

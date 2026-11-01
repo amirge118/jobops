@@ -366,12 +366,12 @@ async function main(argv = process.argv.slice(2)) {
   const { makeHttpCtx } = await import('../providers/_http.mjs');
   const config = loadJobsConfig();
   const now = Date.now();
-  const withStore = (callback) => {
+  const withStore = async (callback) => {
     const store = createJobStore(config.jobsDbPath);
-    try { return callback(store); } finally { store.close(); }
+    try { return await callback(store); } finally { store.close(); }
   };
 
-  const due = withStore((store) => store.listCompaniesDueForAutoResolve({ now, includeAll: Boolean(onlyCompany) }))
+  const due = (await withStore(async (store) => await store.listCompaniesDueForAutoResolve({ now, includeAll: Boolean(onlyCompany) })))
     .filter((company) => !onlyCompany || identity(company.name) === onlyCompany);
   console.log(`${due.length} חברות ממתינות לבדיקה אוטומטית${dryRun ? ' (הרצת ניסיון, בלי שמירה)' : ''}.`);
   if (!due.length) return;
@@ -391,31 +391,31 @@ async function main(argv = process.argv.slice(2)) {
           discoverPage: (url) => discovery.discover(url),
           fetchJson: (url) => http.fetchJson(url, { timeoutMs: 15_000 }),
           log: (line) => console.log(line),
-          saveResearch: async (target, result) => withStore((store) => {
-            const saved = store.upsertCompanyCandidate(result.candidate);
+          saveResearch: async (target, result) => await withStore(async (store) => {
+            const saved = await store.upsertCompanyCandidate(result.candidate);
             const source = saved.sources.find((item) => item.provider === result.candidate.source?.provider &&
               item.careersUrl === result.candidate.source?.careersUrl);
-            if (source && result.probe) store.recordCompanySourceProbe(source.id, result.probe, result.research?.evidenceUrls || []);
-            return store.getCompany(target.id);
+            if (source && result.probe) await store.recordCompanySourceProbe(source.id, result.probe, result.research?.evidenceUrls || []);
+            return await store.getCompany(target.id);
           }),
         });
         if (outcome.status === 'watched') {
-          if (!dryRun) withStore((store) => {
-            const saved = store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
-            store.recordCompanySourceProbe(saved.id, outcome.probe, []);
-            store.approveCompany(company.id);
-            store.recordAutoResolve(company.id, { status: 'auto_watched', reason: null, detail: `${outcome.source.provider}: ${outcome.source.careersUrl}`, at: now });
+          if (!dryRun) await withStore(async (store) => {
+            const saved = await store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
+            await store.recordCompanySourceProbe(saved.id, outcome.probe, []);
+            await store.approveCompany(company.id);
+            await store.recordAutoResolve(company.id, { status: 'auto_watched', reason: null, detail: `${outcome.source.provider}: ${outcome.source.careersUrl}`, at: now });
           });
           // Only after the save: a conflicting board must not be reported as watched.
           summary.watched.push(`${company.name} (${outcome.source.provider}, ${outcome.probe.count} משרות; ${outcome.how})`);
         } else {
           summary.unscannable.push(`${company.name}: ${outcome.reason}${outcome.detail ? ` (${outcome.detail})` : ''}`);
-          if (!dryRun) withStore((store) => {
+          if (!dryRun) await withStore(async (store) => {
             if (outcome.source) {
-              const saved = store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
-              store.recordCompanySourceProbe(saved.id, outcome.probe, []);
+              const saved = await store.upsertCompanySource(company.id, { ...outcome.source, enabled: true });
+              await store.recordCompanySourceProbe(saved.id, outcome.probe, []);
             }
-            store.recordAutoResolve(company.id, {
+            await store.recordAutoResolve(company.id, {
               status: 'unscannable', reason: outcome.reason, detail: outcome.detail, at: now, nextAt: now + RETRY_DAYS * DAY_MS,
             });
           });
@@ -424,7 +424,7 @@ async function main(argv = process.argv.slice(2)) {
         if (error?.code === 'source_conflict') {
           const detail = error.ownerName || null;
           summary.unscannable.push(`${company.name}: source_conflict${detail ? ` (${detail})` : ''}`);
-          if (!dryRun) withStore((store) => store.recordAutoResolve(company.id, {
+          if (!dryRun) await withStore(async (store) => await store.recordAutoResolve(company.id, {
             status: 'unscannable', reason: 'source_conflict', detail, at: now, nextAt: now + RETRY_DAYS * DAY_MS,
           }));
         } else {

@@ -20,6 +20,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 | `templates/` | CV HTML template, canonical states, portals example | system |
 | `scripts/jobs.mjs` | Unified ATS + WhatsApp + LinkedIn scan, scoring, reporting, and optional Chrome opening | system |
 | `scripts/jobs/` | Shared job collection, storage, evaluation, and output modules | system |
+| `scripts/jobs/store/` | Storage layer: repositories per domain, migrations, and the only driver module (ADR 0007) | system |
 | `scripts/web.mjs` | Local-only dashboard server and bounded action runner | system |
 | `web/` | Dependency-free Hebrew dashboard UI | system |
 | `scripts/` | Node tools: scan, PDF, liveness, dedup, normalize | system |

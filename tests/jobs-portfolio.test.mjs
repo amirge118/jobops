@@ -8,15 +8,15 @@ import { createDemoEnvironment } from '../scripts/jobs/demo.mjs';
 import { inspectProject } from '../scripts/doctor.mjs';
 import { setupProject } from '../scripts/setup.mjs';
 
-test('demo mode uses isolated synthetic data and exposes scan health', (context) => {
-  const demo = createDemoEnvironment({ rootDir: '/project', now: 1_800_000_000_000 });
+test('demo mode uses isolated synthetic data and exposes scan health', async (context) => {
+  const demo = await createDemoEnvironment({ rootDir: '/project', now: 1_800_000_000_000 });
   context.after(() => demo.cleanup());
 
   assert.match(demo.config.jobsDbPath, /jobops-demo-/);
   assert.equal(demo.config.demo, true);
   assert.equal(demo.config.sources.whatsapp.groups.length, 4);
 
-  const snapshot = demo.store.getDashboardSnapshot();
+  const snapshot = await demo.store.getDashboardSnapshot();
   assert.equal(snapshot.jobs.length, 4);
   assert.equal(snapshot.stats.suitable, 4);
   assert.equal(snapshot.lastRun.status, 'success');

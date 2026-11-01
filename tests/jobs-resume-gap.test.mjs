@@ -20,19 +20,19 @@ function createRoot() {
   return rootDir;
 }
 
-function saveSuitableJob(store) {
-  const sighting = store.recordSighting({
+async function saveSuitableJob(store) {
+  const sighting = await store.recordSighting({
     url: 'https://example.com/jobs/1', company: 'Acme', title: 'Senior Backend Engineer',
     source: 'ats', seenAt: 100,
   });
-  store.saveEvaluation(sighting.jobKey, {
+  await store.saveEvaluation(sighting.jobKey, {
     company: 'Acme', title: 'Senior Backend Engineer', summary: 'Good backend role.',
     score: 4.4, fitLabel: 'מתאים', decisionReason: 'Strong fit.',
     fitBreakdown: { cvMatch: 4, seniority: 4, roleScope: 4, location: 5, sector: 4, uncertainties: [] },
     suitable: true, applyUrl: sighting.canonicalUrl, activeStatus: 'active',
     contentHash: 'content-v1', profileHash: 'profile-v1', criteriaVersion: 'v1', evaluatedAt: 200,
   });
-  store.savePage({
+  await store.savePage({
     canonicalUrl: sighting.canonicalUrl,
     finalUrl: sighting.canonicalUrl,
     status: 'active',
@@ -107,15 +107,15 @@ test('resume gap analyzer requests only evidence-backed, actionable gaps', async
   assert.equal(RESUME_GAP_VERSION.length > 0, true);
 });
 
-test('dashboard exposes cached resume gaps only while their input hash is current', () => {
+test('dashboard exposes cached resume gaps only while their input hash is current', async () => {
   const rootDir = createRoot();
   const store = createJobStore(path.join(rootDir, 'data', 'jobs.db'));
-  const job = saveSuitableJob(store);
+  const job = await saveSuitableJob(store);
   const inputHash = resumeGapInputHash({
     contentHash: 'content-v1', profileHash: 'profile-v1', resumeHash: 'resume-v1',
     analysisVersion: RESUME_GAP_VERSION,
   });
-  store.saveResumeGap(job.jobKey, {
+  await store.saveResumeGap(job.jobKey, {
     inputHash,
     analysis: { items: [{
       keyword: 'AWS', kind: 'safe_addition', importance: 'required',
@@ -127,7 +127,7 @@ test('dashboard exposes cached resume gaps only while their input hash is curren
     analyzedAt: 300,
   });
 
-  const current = store.listDashboardJobs({ resumeGapContext: {
+  const current = await store.listDashboardJobs({ resumeGapContext: {
     profileHash: 'profile-v1', resumeHash: 'resume-v1',
     analysisVersion: RESUME_GAP_VERSION, resumeAvailable: true,
   } });
@@ -136,7 +136,7 @@ test('dashboard exposes cached resume gaps only while their input hash is curren
   assert.equal(current[0].resumeGap.employerPriorities[0].weight, 'critical');
   assert.equal(current[0].resumeGap.screenPass.level, 'low');
 
-  const stale = store.listDashboardJobs({ resumeGapContext: {
+  const stale = await store.listDashboardJobs({ resumeGapContext: {
     profileHash: 'profile-v1', resumeHash: 'resume-v2',
     analysisVersion: RESUME_GAP_VERSION, resumeAvailable: true,
   } });
@@ -148,7 +148,7 @@ test('dashboard exposes cached resume gaps only while their input hash is curren
 test('resume analysis stage persists results without changing the job decision', async () => {
   const rootDir = createRoot();
   const store = createJobStore(path.join(rootDir, 'data', 'jobs.db'));
-  saveSuitableJob(store);
+  await saveSuitableJob(store);
   const candidateContext = {
     profile: 'Built APIs with Node.js and AWS.',
     currentResume: 'Backend engineer. Built Node.js services.',
@@ -169,7 +169,7 @@ test('resume analysis stage persists results without changing the job decision',
         employerPriorities: [{ priority: 'Node.js at scale', weight: 'critical', coverage: 'strong', note: 'In the resume.' }],
         screenPass: { level: 'high', reason: 'Core stack is visible.' },
       }));
-      onProgress({ completed: jobs.length, total: jobs.length, failed: 0, results, failures: [] });
+      await onProgress({ completed: jobs.length, total: jobs.length, failed: 0, results, failures: [] });
       return { results, failures: [] };
     },
   };
@@ -179,8 +179,8 @@ test('resume analysis stage persists results without changing the job decision',
   });
 
   assert.deepEqual(summary, { status: 'complete', analyzed: 1, failed: 0 });
-  assert.equal(store.getDashboardStats().suitable, 1);
-  const [listed] = store.listDashboardJobs({ resumeGapContext: {
+  assert.equal((await store.getDashboardStats()).suitable, 1);
+  const [listed] = await store.listDashboardJobs({ resumeGapContext: {
     profileHash: 'profile-v1', resumeHash: 'resume-v1',
     analysisVersion: RESUME_GAP_VERSION, resumeAvailable: true,
   } });
@@ -189,9 +189,9 @@ test('resume analysis stage persists results without changing the job decision',
   assert.deepEqual(listed.resumeGap.screenPass, { level: 'high', reason: 'Core stack is visible.' });
 
   // The durable copy outlives the job's decision and archive, which wipe resume_gap_json.
-  const [job] = store.listUnpresentedSuitable();
-  assert.equal(store.decideJob(job.jobKey, 'interested'), true);
-  const [observation] = store.listGapObservations();
+  const [job] = await store.listUnpresentedSuitable();
+  assert.equal(await store.decideJob(job.jobKey, 'interested'), true);
+  const [observation] = await store.listGapObservations();
   assert.equal(observation.jobKey, job.jobKey);
   assert.equal(observation.company, 'Acme');
   assert.equal(observation.score, 4.4);

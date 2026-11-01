@@ -161,7 +161,7 @@ export function createResumeGapAnalyzer({ config = {}, runCodex = runCodexExec }
         batchFailures.push(...batch.map((job) => ({ jobKey: job.jobKey, code: 'resume_gap_failed', reason })));
         failures.push(...batchFailures);
       }
-      onProgress?.({
+      await onProgress?.({
         completed: Math.min(start + batch.length, jobs.length), total: jobs.length,
         failed: failures.length, results: batchResults, failures: batchFailures,
       });

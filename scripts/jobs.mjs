@@ -77,10 +77,10 @@ export function parseArgs(argv) {
   };
 }
 
-export function scanWindow({ config, store, requestedDays, sources = [], now = Date.now() }) {
+export async function scanWindow({ config, store, requestedDays, sources = [], now = Date.now() }) {
   const maxDays = Number(config.scan.maxLookbackDays);
   const explicitDays = requestedDays == null ? null : Math.min(requestedDays, maxDays);
-  const lastRun = store.getLastSuccessfulRun(sources);
+  const lastRun = await store.getLastSuccessfulRun(sources);
   const overlapMs = Number(config.scan.overlapHours) * 60 * 60 * 1000;
   const defaultMs = Number(config.scan.defaultLookbackDays) * 24 * 60 * 60 * 1000;
   const from = explicitDays != null
@@ -286,8 +286,8 @@ export function sourceScanStatRows(details, secondsBySource = {}) {
 // messages already reached the backlog (processed by the backlog run, which
 // ignores the window). Partial history is then not missing coverage, and
 // reporting the run as incomplete would only be noise.
-export function liveCollectorSince(store) {
-  const collector = store.getCollectorStatusSummary();
+export async function liveCollectorSince(store) {
+  const collector = await store.getCollectorStatusSummary();
   const allGroups = Number(collector?.groups_expected || 0) > 0
     && Number(collector.groups_found || 0) === Number(collector.groups_expected);
   return collector?.status === 'connected' && allGroups ? Number(collector.started_at) : null;
@@ -423,9 +423,9 @@ export function completionStatusFor(summary) {
     : 'success';
 }
 
-function recordRunAudit(store, runId, summary) {
+async function recordRunAudit(store, runId, summary) {
   if (summary.ats) {
-    store.recordRunEvent(runId, {
+    await store.recordRunEvent(runId, {
       source: 'ats',
       scope: 'source',
       scopeKey: 'ATS',
@@ -441,7 +441,7 @@ function recordRunAudit(store, runId, summary) {
     });
   }
   if (summary.whatsapp) {
-    store.recordRunEvent(runId, {
+    await store.recordRunEvent(runId, {
       source: 'whatsapp',
       scope: 'source',
       scopeKey: 'WhatsApp',
@@ -456,7 +456,7 @@ function recordRunAudit(store, runId, summary) {
       },
     });
     for (const group of summary.whatsapp.groups) {
-      store.recordRunEvent(runId, {
+      await store.recordRunEvent(runId, {
         source: 'whatsapp',
         scope: 'group',
         scopeKey: group.name,
@@ -474,7 +474,7 @@ function recordRunAudit(store, runId, summary) {
     }
   }
   if (summary.linkedin) {
-    store.recordRunEvent(runId, {
+    await store.recordRunEvent(runId, {
       source: 'linkedin',
       scope: 'source',
       scopeKey: 'LinkedIn',
@@ -485,7 +485,7 @@ function recordRunAudit(store, runId, summary) {
         discovery: summary.linkedin.discovery, failure: summary.linkedin.failure },
     });
     for (const search of summary.linkedin.searches) {
-      store.recordRunEvent(runId, {
+      await store.recordRunEvent(runId, {
         source: 'linkedin',
         scope: 'search',
         scopeKey: search.label.slice(0, 200),
@@ -497,7 +497,7 @@ function recordRunAudit(store, runId, summary) {
     }
   }
   for (const processing of summary.processing?.scopes || []) {
-    store.recordRunEvent(runId, {
+    await store.recordRunEvent(runId, {
       source: processing.source,
       scope: processing.source === 'whatsapp' ? 'group' : processing.source === 'linkedin' ? 'search' : 'source',
       scopeKey: processing.name,
@@ -623,9 +623,9 @@ export async function evaluateCandidates({
   let blockedCompanyCount = 0;
   // A company marked "not interesting" on the decisions page: rejected
   // locally, never fetched (when the source names it) and never scored.
-  const rejectBlockedCompany = (candidate, company, page = null) => {
+  const rejectBlockedCompany = async (candidate, company, page = null) => {
     blockedCompanyCount += 1;
-    store.saveEvaluation(candidate.jobKey, {
+    await store.saveEvaluation(candidate.jobKey, {
       company,
       title: candidate.title || 'משרה לא ידועה',
       summary: 'המשרה סוננה מקומית: החברה סומנה כלא מעניינת.',
@@ -665,7 +665,7 @@ export async function evaluateCandidates({
   const passesPositiveTitleFilter = positiveTitle.positive.length
     ? buildTitleFilter({ ...positiveTitle, negative: [] })
     : () => true;
-  const recordFailure = (candidate, code, reason) => {
+  const recordFailure = async (candidate, code, reason) => {
     const fallback = /scor/.test(code) ? 'scoring_failed' : /browser/.test(code) ? 'browser_error' : 'page_uncertain';
     // Source-specific codes with their own explanation (linkedin_*) keep it,
     // rather than being re-derived from the free-text reason.
@@ -686,14 +686,14 @@ export async function evaluateCandidates({
       reason: diagnostic.reason,
     };
     outcomes.set(candidate.jobKey, outcome);
-    store.markEvaluationFailure(candidate.jobKey, outcome);
-    onFailure(candidate, diagnostic, processingStage);
+    await store.markEvaluationFailure(candidate.jobKey, outcome);
+    await onFailure(candidate, diagnostic, processingStage);
   };
 
-  onStage('page-fetch');
+  await onStage('page-fetch');
   let fetched = 0;
   for (const candidate of candidates) {
-    const existing = store.getJob(candidate.jobKey);
+    const existing = await store.getJob(candidate.jobKey);
     const evaluationIsCurrent = existing?.evaluated_at && !existing.last_error_code &&
       existing.profile_hash === scorer.profileHash &&
       existing.criteria_version === config.decision.criteriaVersion;
@@ -706,8 +706,8 @@ export async function evaluateCandidates({
       continue;
     }
     const listedCompany = candidate.company || existing?.company || '';
-    if (listedCompany && store.isCompanyBlocked?.(listedCompany)) {
-      rejectBlockedCompany(candidate, listedCompany);
+    if (listedCompany && await store.isCompanyBlocked?.(listedCompany)) {
+      await rejectBlockedCompany(candidate, listedCompany);
       continue;
     }
     // A LinkedIn link shared on WhatsApp is screened by the hint kept from its
@@ -718,9 +718,9 @@ export async function evaluateCandidates({
     // free message text is checked for negative keywords only.
     const hint = linkedinJobId(candidate.url) ? parseLinkHint(existing?.link_hint) : null;
     if (hint) {
-      if (hint.company && store.isCompanyBlocked?.(hint.company)) {
+      if (hint.company && await store.isCompanyBlocked?.(hint.company)) {
         prefilteredCount += 1;
-        rejectBlockedCompany(candidate, hint.company);
+        await rejectBlockedCompany(candidate, hint.company);
         continue;
       }
       const hintTitle = hint.title || '';
@@ -728,7 +728,7 @@ export async function evaluateCandidates({
         : hintTitle && !passesPositiveTitleFilter(hintTitle) ? 'positive' : null;
       if (hintBlock) {
         prefilteredCount += 1;
-        store.saveEvaluation(candidate.jobKey, {
+        await store.saveEvaluation(candidate.jobKey, {
           company: hint.company || candidate.company || 'חברה לא ידועה',
           title: hintTitle || candidate.title || 'משרה לא ידועה',
           summary: hintBlock === 'negative'
@@ -756,7 +756,7 @@ export async function evaluateCandidates({
     try {
       page = await fetcher.fetch(candidate.url);
     } catch (error) {
-      recordFailure(candidate, 'page_fetch_failed', error?.message || 'Job page fetch failed.');
+      await recordFailure(candidate, 'page_fetch_failed', error?.message || 'Job page fetch failed.');
       continue;
     } finally {
       fetched += 1;
@@ -770,7 +770,7 @@ export async function evaluateCandidates({
       outcomes.set(candidate.jobKey, { status: 'deferred' });
       continue;
     }
-    if (!store.needsEvaluation(candidate.jobKey, {
+    if (!await store.needsEvaluation(candidate.jobKey, {
       contentHash: page.contentHash,
       profileHash: scorer.profileHash,
       criteriaVersion: config.decision.criteriaVersion,
@@ -789,10 +789,10 @@ export async function evaluateCandidates({
 
     if (page.status !== 'active') {
       if (page.status === 'uncertain') {
-        recordFailure(candidate, page.code || 'page_uncertain', page.reason || 'The job page could not be verified.');
+        await recordFailure(candidate, page.code || 'page_uncertain', page.reason || 'The job page could not be verified.');
         continue;
       }
-      store.saveEvaluation(candidate.jobKey, {
+      await store.saveEvaluation(candidate.jobKey, {
         company: candidate.company || 'חברה לא ידועה',
         title: candidate.title || 'משרה לא ידועה',
         summary: 'הקישור לא אומת כמשרה פעילה.',
@@ -819,11 +819,11 @@ export async function evaluateCandidates({
       company: page.identity?.company || candidate.company || existing?.company || '',
       title: page.identity?.title || candidate.title || existing?.title || '',
     };
-    if (identity.company && store.isCompanyBlocked?.(identity.company)) {
-      rejectBlockedCompany(candidate, identity.company, page);
+    if (identity.company && await store.isCompanyBlocked?.(identity.company)) {
+      await rejectBlockedCompany(candidate, identity.company, page);
       continue;
     }
-    const { duplicateOf } = store.claimJobIdentity?.(candidate.jobKey, {
+    const { duplicateOf } = await store.claimJobIdentity?.(candidate.jobKey, {
       ...identity,
       profileHash: scorer.profileHash,
       criteriaVersion: config.decision.criteriaVersion,
@@ -847,7 +847,7 @@ export async function evaluateCandidates({
         : !passesPositiveTitleFilter(page.content.slice(0, 600)) ? 'positive' : null;
     if (titleBlock) {
       titleFilteredCount += 1;
-      store.saveEvaluation(candidate.jobKey, {
+      await store.saveEvaluation(candidate.jobKey, {
         company: candidate.company || 'חברה לא ידועה',
         title: candidate.title || 'משרה לא ידועה',
         summary: titleBlock === 'negative'
@@ -877,11 +877,11 @@ export async function evaluateCandidates({
   if (titleFilteredCount > 0) console.log(`סוננו מקומית ${titleFilteredCount} משרות WhatsApp לפי כותרת (מילות מפתח שליליות או ללא תפקיד יעד), לפני שליחה לניקוד.`);
   if (prefilteredCount > 0) console.log(`סוננו ${prefilteredCount} קישורי LinkedIn לפי הכותרת/החברה שבהודעה, לפני קריאה מ-LinkedIn.`);
 
-  const persistResult = (result) => {
+  const persistResult = async (result) => {
     const item = pendingScores.find(({ candidate }) => candidate.jobKey === result.jobKey);
     if (!item) throw new Error(`Scorer returned an unexpected job: ${result.jobKey}`);
-    store.recordSourceOutcome?.({ source: sourceKindOf(item.candidate.source), suitable: result.suitable });
-    store.saveEvaluation(result.jobKey, {
+    await store.recordSourceOutcome?.({ source: sourceKindOf(item.candidate.source), suitable: result.suitable });
+    await store.saveEvaluation(result.jobKey, {
       ...result,
       scoredByModel: true,
       contentHash: item.page.contentHash,
@@ -893,7 +893,7 @@ export async function evaluateCandidates({
   };
 
   if (allowDeferScoring) {
-    const firstSeen = pendingScores.map(({ candidate }) => Number(store.getJob(candidate.jobKey)?.first_seen_at ?? now()));
+    const firstSeen = await Promise.all(pendingScores.map(async ({ candidate }) => Number((await store.getJob(candidate.jobKey))?.first_seen_at ?? now())));
     const deferral = scoringDeferral({ count: pendingScores.length, oldestFirstSeenAt: Math.min(...firstSeen), now: now(), config });
     if (deferral.defer) {
       for (const { candidate } of pendingScores) outcomes.set(candidate.jobKey, { status: 'deferred' });
@@ -903,14 +903,14 @@ export async function evaluateCandidates({
   }
 
   processingStage = 'scoring';
-  onStage(processingStage);
+  await onStage(processingStage);
   await scorer.scoreBatchSettled(pendingScores, {
-    onProgress: ({ completed, total, failed, results, failures }) => {
+    onProgress: async ({ completed, total, failed, results, failures }) => {
       for (const failure of failures) {
         const item = pendingScores.find(({ candidate }) => candidate.jobKey === failure.jobKey);
-        if (item) recordFailure(item.candidate, failure.code, failure.reason);
+        if (item) await recordFailure(item.candidate, failure.code, failure.reason);
       }
-      for (const result of results) persistResult(result);
+      for (const result of results) await persistResult(result);
       console.log(`ציון משרות: ${completed}/${total}; ${failed} נכשלו עד כה.`);
     },
   });
@@ -931,7 +931,7 @@ export async function analyzeSuitableResumeGaps({
     return { status: 'skipped', reason: 'resume_unavailable', analyzed: 0, failed: 0 };
   }
 
-  const candidates = store.listResumeGapCandidates({ limit: 500 })
+  const candidates = (await store.listResumeGapCandidates({ limit: 500 }))
     .filter((job) => job.profileHash === candidateContext.profileHash)
     .map((job) => ({
       ...job,
@@ -960,16 +960,16 @@ export async function analyzeSuitableResumeGaps({
     return { status: 'deferred', analyzed: 0, failed: 0, waiting: candidates.length };
   }
 
-  onStage('resume-gap-analysis');
+  await onStage('resume-gap-analysis');
   let analyzed = 0;
   const settled = await analyzer.analyzeBatchSettled(candidates, {
     profile: candidateContext.profile,
     currentResume: candidateContext.currentResume,
-    onProgress: ({ completed, total, failed, results, failures }) => {
+    onProgress: async ({ completed, total, failed, results, failures }) => {
       for (const result of results) {
         const job = candidates.find((item) => item.jobKey === result.jobKey);
         if (!job) continue;
-        store.saveResumeGap(result.jobKey, {
+        await store.saveResumeGap(result.jobKey, {
           inputHash: job.resumeGapInputHash,
           analysis: {
             items: result.items,
@@ -984,7 +984,7 @@ export async function analyzeSuitableResumeGaps({
       for (const failure of failures) {
         const job = candidates.find((item) => item.jobKey === failure.jobKey);
         if (!job) continue;
-        store.markResumeGapFailure(failure.jobKey, {
+        await store.markResumeGapFailure(failure.jobKey, {
           inputHash: job.resumeGapInputHash,
           code: failure.code,
           reason: failure.reason,
@@ -1004,8 +1004,8 @@ export async function analyzeSuitableResumeGaps({
 
 const LOCK_POLL_MS = 15_000;
 
-export function linkedinEnabledFor(config, store) {
-  return Boolean(config.sources.linkedin?.enabled) && store.isSourceEnabled('linkedin');
+export async function linkedinEnabledFor(config, store) {
+  return Boolean(config.sources.linkedin?.enabled) && await store.isSourceEnabled('linkedin');
 }
 
 // Only with a signed-in profile (npm run jobs:hiremetech-login); without one,
@@ -1101,14 +1101,14 @@ async function runJobsLocked(options, config) {
   const store = createJobStore(options.dryRun ? ':memory:' : config.jobsDbPath);
   const runStartedAt = Date.now();
   let usageRunId = null;
-  setCodexUsageRecorder((entry) => store.recordCodexCall({ ...entry, runId: usageRunId }));
+  setCodexUsageRecorder(async (entry) => await store.recordCodexCall({ ...entry, runId: usageRunId }));
   // No quota means nothing can be scored; collecting now would only move
   // coverage forward for jobs that then wait. Skip the whole run instead:
   // every source resumes from its last success once quota is back.
   if (!options.dryRun) {
-    const quota = checkCodexQuota({ store, readRateLimits: () => readCodexRateLimits({ fsModule: fs }) });
+    const quota = await checkCodexQuota({ store, readRateLimits: () => readCodexRateLimits({ fsModule: fs }) });
     if (!quota.available) {
-      store.noteLlmSkip();
+      await store.noteLlmSkip();
       const until = new Date(quota.until).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
       console.log(`מכסת Codex נגמרה (תתחדש בערך ב-${until}); הריצה דולגה ולא נאסף דבר. כל מקור ימשיך מההצלחה האחרונה שלו.`);
       setCodexUsageRecorder(null);
@@ -1118,18 +1118,18 @@ async function runJobsLocked(options, config) {
   }
   // portals.yml bootstraps the registry without overwriting decisions already
   // made in the dashboard (watch, pause, or ignore).
-  syncConfiguredCompanyEntries(store, config.rootDir);
+  await syncConfiguredCompanyEntries(store, config.rootDir);
   // Same model for LinkedIn: config seeds searches, the dashboard owns edits.
-  store.syncLinkedInSearches(config.sources.linkedin?.searches || []);
-  const linkedinEnabled = linkedinEnabledFor(config, store);
+  await store.syncLinkedInSearches(config.sources.linkedin?.searches || []);
+  const linkedinEnabled = await linkedinEnabledFor(config, store);
   // Decided once, before this run sends anything, so its own requests never
   // throttle it; only earlier runs' blocks and activity count.
   const cooldownSettings = config.sources.linkedin?.cooldown || {};
   const linkedinBlockMs = Number(cooldownSettings.afterBlockMinutes ?? 60) * 60_000;
-  const linkedinCooldown = store.getLinkedInCooldown({
+  const linkedinCooldown = await store.getLinkedInCooldown({
     afterActivityMs: Number(cooldownSettings.afterActivityMinutes ?? 15) * 60_000,
   });
-  const noteLinkedInBlock = (status, detail = null) => store.noteLinkedInBlock(status, { cooldownMs: linkedinBlockMs, detail });
+  const noteLinkedInBlock = async (status, detail = null) => await store.noteLinkedInBlock(status, { cooldownMs: linkedinBlockMs, detail });
   const linkedinLimits = { ...DEFAULT_LINKEDIN_LIMITS, ...(config.sources.linkedin?.limits || {}) };
   const linkedinGate = createLinkedInGate({
     store,
@@ -1141,13 +1141,13 @@ async function runJobsLocked(options, config) {
     linkedinLimits: config.sources.linkedin?.limits || {},
     linkedinCooldown: linkedinCooldown.reads,
     linkedinGate,
-    onLinkedInRefusal: (detail) => store.recordLinkedInRefusal({ reason: 'rate_limited', detail }),
-    onLinkedInRequest: () => store.noteLinkedInActivity(),
+    onLinkedInRefusal: async (detail) => await store.recordLinkedInRefusal({ reason: 'rate_limited', detail }),
+    onLinkedInRequest: async () => await store.noteLinkedInActivity(),
     onLinkedInBlock: noteLinkedInBlock,
     hireMeTech: createScanHireMeTechResolver(config),
-    onHireMeTechResolve: (outcome) => {
-      if (outcome.status === 'logged_out') store.setCheckpoint('hiremetech:logged_out', Date.now());
-      if (outcome.status === 'resolved') store.setCheckpoint('hiremetech:resolved', Date.now());
+    onHireMeTechResolve: async (outcome) => {
+      if (outcome.status === 'logged_out') await store.setCheckpoint('hiremetech:logged_out', Date.now());
+      if (outcome.status === 'resolved') await store.setCheckpoint('hiremetech:resolved', Date.now());
     },
   });
   let runId = null;
@@ -1167,13 +1167,13 @@ async function runJobsLocked(options, config) {
     if (sources.length === 0) throw new Error('No job sources are enabled for this run');
     const window = options.whatsappBacklog
       ? { from: options.days == null ? 0 : Date.now() - options.days * 24 * 60 * 60 * 1_000, to: Date.now() }
-      : scanWindow({ config, store, requestedDays: options.days, sources });
+      : await scanWindow({ config, store, requestedDays: options.days, sources });
     if (!options.dryRun) {
       const actionId = /^[1-9]\d{0,8}$/.test(process.env.JOBOPS_ACTION_ID || '') ? Number(process.env.JOBOPS_ACTION_ID) : null;
-      runId = store.startRun({ fromTs: window.from, toTs: window.to, sources, ownerPid: process.pid, actionId });
+      runId = await store.startRun({ fromTs: window.from, toTs: window.to, sources, ownerPid: process.pid, actionId });
       usageRunId = runId;
       lifecycle = createRunLifecycle(store, runId, { registerProcessHandlers: true });
-      store.recordRunEvent(runId, {
+      await store.recordRunEvent(runId, {
         source: 'system',
         scope: 'run',
         scopeKey: String(runId),
@@ -1185,35 +1185,35 @@ async function runJobsLocked(options, config) {
 
     const sourceResults = [];
     const sourceSeconds = {};
-    const coverageContext = { windowFrom: window.from, liveSince: liveCollectorSince(store) };
+    const coverageContext = { windowFrom: window.from, liveSince: await liveCollectorSince(store) };
     let sourceStartedAt = Date.now();
-    const saveSource = (result) => {
+    const saveSource = async (result) => {
       sourceSeconds[result.source] = (Date.now() - sourceStartedAt) / 1_000;
       sourceResults.push(result);
       runDetails = summarizeSourceResults(sourceResults, coverageContext);
       if (!runId) return;
       // Persist each source before waiting for the next one, so an interruption
       // during WhatsApp cannot erase an already completed ATS collection.
-      store.touchRun(runId, { details: runDetails });
-      recordRunAudit(store, runId, summarizeSourceResults([result]));
+      await store.touchRun(runId, { details: runDetails });
+      await recordRunAudit(store, runId, summarizeSourceResults([result]));
       for (const error of result.source === 'ats' ? result.errors || [] : []) {
-        store.recordRunEvent(runId, { source: result.source, scope: 'company', scopeKey: String(error.company || 'ATS').slice(0, 200),
+        await store.recordRunEvent(runId, { source: result.source, scope: 'company', scopeKey: String(error.company || 'ATS').slice(0, 200),
           stage: 'collection', status: 'failed', details: describeFailure(error.error, 'collection_failed') });
       }
       for (const group of result.groups || []) {
-        const record = (stage, failure) => store.recordRunEvent(runId, { source: 'whatsapp', scope: 'group',
+        const record = async (stage, failure) => await store.recordRunEvent(runId, { source: 'whatsapp', scope: 'group',
           scopeKey: group.name, stage, status: 'warning', details: failure });
-        if (group.coverage?.reason && group.coverage.reason !== 'stale-session-no-anchor') record('history-coverage', describeFailure(null, group.coverage.reason));
-        else if (group.coverage?.reason === 'stale-session-no-anchor') record('history-coverage', describeFailure(null, 'history_not_delivered'));
-        else if (group.error) record('collection', describeFailure(group.error, 'collection_failed'));
-        else if (group.coverage?.status !== 'complete') record('history-coverage', describeFailure(null, 'coverage_incomplete'));
-        if (group.read && group.read.status !== 'skipped' && !group.read.marked) record('mark-read', describeFailure(group.read.error, 'read_failed'));
+        if (group.coverage?.reason && group.coverage.reason !== 'stale-session-no-anchor') await record('history-coverage', describeFailure(null, group.coverage.reason));
+        else if (group.coverage?.reason === 'stale-session-no-anchor') await record('history-coverage', describeFailure(null, 'history_not_delivered'));
+        else if (group.error) await record('collection', describeFailure(group.error, 'collection_failed'));
+        else if (group.coverage?.status !== 'complete') await record('history-coverage', describeFailure(null, 'coverage_incomplete'));
+        if (group.read && group.read.status !== 'skipped' && !group.read.marked) await record('mark-read', describeFailure(group.read.error, 'read_failed'));
       }
     };
     if (sources.includes('ats')) {
-      lifecycle?.stage('collection', 'ats');
+      await lifecycle?.stage('collection', 'ats');
       sourceStartedAt = Date.now();
-      saveSource(await scanAts({
+      await saveSource(await scanAts({
         store,
         lookbackHours: Math.ceil((window.to - window.from) / (60 * 60 * 1000)),
         companyWindow: {
@@ -1225,19 +1225,19 @@ async function runJobsLocked(options, config) {
       }));
     }
     if (sources.includes('whatsapp')) {
-      lifecycle?.stage('collection', 'whatsapp');
+      await lifecycle?.stage('collection', 'whatsapp');
       sourceStartedAt = Date.now();
-      saveSource(await scanWhatsApp({
+      await saveSource(await scanWhatsApp({
         config,
         store,
         sinceMs: window.from,
         untilMs: window.to,
-        onStage: (stage) => lifecycle?.stage(stage, 'whatsapp'),
-        onDiagnostic: (event) => { if (runId) store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
+        onStage: async (stage) => await lifecycle?.stage(stage, 'whatsapp'),
+        onDiagnostic: async (event) => { if (runId) await store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
       }));
     }
     if (sources.includes('linkedin')) {
-      lifecycle?.stage('collection', 'linkedin');
+      await lifecycle?.stage('collection', 'linkedin');
       sourceStartedAt = Date.now();
       const passesTitle = buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')));
       if (linkedinCooldown.scans) {
@@ -1254,20 +1254,20 @@ async function runJobsLocked(options, config) {
           gate: linkedinGate,
           // Only recovered refusals are recorded here; a second 429 halts the
           // search and is recorded by noteLinkedInBlock with the run's block.
-          onRefusal: (detail) => { if (detail.recovered) store.recordLinkedInRefusal({ reason: 'rate_limited', detail }); },
+          onRefusal: async (detail) => { if (detail.recovered) await store.recordLinkedInRefusal({ reason: 'rate_limited', detail }); },
         });
-        if (result.requests > 0) store.noteLinkedInActivity();
-        if (['rate_limited', 'blocked'].includes(result.haltedBy)) noteLinkedInBlock(result.haltedBy);
-        saveSource(result);
+        if (result.requests > 0) await store.noteLinkedInActivity();
+        if (['rate_limited', 'blocked'].includes(result.haltedBy)) await noteLinkedInBlock(result.haltedBy);
+        await saveSource(result);
       } catch (error) {
         // LinkedIn is an optional, unofficial source: its failure is reported
         // and never aborts ATS/WhatsApp collection or processing.
-        saveSource({ source: 'linkedin', candidates: [], searches: [], errors: [], failure: describeFailure(error, 'collection_failed') });
+        await saveSource({ source: 'linkedin', candidates: [], searches: [], errors: [], failure: describeFailure(error, 'collection_failed') });
       }
     }
     if (sources.includes('whatsapp-backlog')) {
-      lifecycle?.stage('collection', 'whatsapp-backlog');
-      saveSource(scanWhatsAppBacklog({
+      await lifecycle?.stage('collection', 'whatsapp-backlog');
+      await saveSource(await scanWhatsAppBacklog({
         config,
         store,
         sinceMs: window.from,
@@ -1276,8 +1276,8 @@ async function runJobsLocked(options, config) {
         // offline. Keep the action bounded while allowing the common backlog
         // to drain in one run.
         limitPerGroup: 500,
-        onStage: (stage) => lifecycle?.stage(stage, 'whatsapp-backlog'),
-        onDiagnostic: (event) => { if (runId) store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
+        onStage: async (stage) => await lifecycle?.stage(stage, 'whatsapp-backlog'),
+        onDiagnostic: async (event) => { if (runId) await store.recordRunEvent(runId, { ...event, source: 'whatsapp' }); },
       }));
     }
 
@@ -1287,15 +1287,15 @@ async function runJobsLocked(options, config) {
     printLinkedInSummary(runDetails.linkedin);
     const candidateSightings = sourceResults.flatMap((result) => result.candidates);
     let retryCandidates = filterPendingCandidatesForSources(
-      store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }),
+      await store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }),
       sources,
       { linkedinEnabled },
     );
     if (options.linkedinQueue) {
-      const stale = store.archiveStaleLinkedInQueue({ olderThanMs: Number(linkedinLimits.queueMaxAgeDays) * 24 * 60 * 60 * 1000 });
+      const stale = await store.archiveStaleLinkedInQueue({ olderThanMs: Number(linkedinLimits.queueMaxAgeDays) * 24 * 60 * 60 * 1000 });
       if (stale.archived) {
         console.log(`תור LinkedIn: ${stale.archived} משרות חיכו יותר מ-${linkedinLimits.queueMaxAgeDays} ימים והועברו לארכיון בלי קריאה.`);
-        const stillPending = new Set(store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] }).map((job) => job.jobKey));
+        const stillPending = new Set((await store.listPendingEvaluation({ excludeErrorCodes: [...NON_RETRYABLE_FAILURE_CODES] })).map((job) => job.jobKey));
         retryCandidates = retryCandidates.filter((candidate) => stillPending.has(candidate.jobKey));
       }
       const limit = Number(config.sources.linkedin?.limits?.maxDetailFetchesPerRun ?? 6);
@@ -1312,20 +1312,20 @@ async function runJobsLocked(options, config) {
     ];
     const candidates = uniqueCandidates([...candidateSightings, ...retryCandidates]);
     const candidateContext = readCandidateContext(config);
-    lifecycle?.stage('scorer-setup');
+    await lifecycle?.stage('scorer-setup');
     const scorer = createJobScorer(config, { candidateContext });
     let failureSamples = 0;
     const outcomes = await evaluateCandidates({ candidates, config, store, fetcher, scorer,
       // Only unattended runs batch; a run started from the dashboard or a retry scores now.
       allowDeferScoring: (!options.retryOnly || options.linkedinQueue) && !process.env.JOBOPS_ACTION_ID,
-      onStage: (stage) => lifecycle?.stage(stage),
-      onFailure: (candidate, failure, stage) => {
+      onStage: async (stage) => await lifecycle?.stage(stage),
+      onFailure: async (candidate, failure, stage) => {
         if (!runId || failureSamples >= 200) return;
         failureSamples += 1;
         // A shared link can appear in several groups; retain each affected scope.
         const sightings = processingCandidates.filter((item) => item.jobKey === candidate.jobKey);
         const scopes = new Map(sightings.map((item) => { const scope = processingScope(item); return [`${scope.source}:${scope.name}`, scope]; }));
-        for (const scope of scopes.values()) store.recordRunEvent(runId, {
+        for (const scope of scopes.values()) await store.recordRunEvent(runId, {
           source: scope.source, scope: 'job', scopeKey: scope.name, stage,
           status: 'failed', details: { ...failure, jobKey: candidate.jobKey, host: safeTargetUrl(candidate.url) },
         });
@@ -1336,7 +1336,7 @@ async function runJobsLocked(options, config) {
     const resumeGapAnalyzer = createResumeGapAnalyzer({ config });
     runDetails.resumeGap = await analyzeSuitableResumeGaps({
       config, store, analyzer: resumeGapAnalyzer, candidateContext,
-      onStage: (stage) => lifecycle?.stage(stage),
+      onStage: async (stage) => await lifecycle?.stage(stage),
     });
     if (runDetails.resumeGap.failed > 0) {
       console.warn('ניתוח שיפורי קורות החיים נכשל חלקית; המשרות עצמן נשמרו ומוצגות כרגיל.');
@@ -1353,17 +1353,17 @@ async function runJobsLocked(options, config) {
       runDetails.gapCoverage = { status: 'failed', reason: String(error?.message || error).slice(0, 300) };
       console.warn(`בדיקת כיסוי פערים נכשלה ותנוסה שוב בסריקה הבאה: ${runDetails.gapCoverage.reason}`);
     }
-    runDetails.llmUsage = summarizeRunUsage(store.summarizeCodexUsage({ sinceMs: runStartedAt }).totals);
+    runDetails.llmUsage = summarizeRunUsage((await store.summarizeCodexUsage({ sinceMs: runStartedAt })).totals);
     printUsageSummary(runDetails.llmUsage);
     if (runId) {
-      store.recordSourceScanStats(sourceScanStatRows(runDetails, sourceSeconds), { runId });
+      await store.recordSourceScanStats(sourceScanStatRows(runDetails, sourceSeconds), { runId });
       runDetails.failureSampleLimit = 200;
-      store.touchRun(runId, { details: runDetails });
-      recordRunAudit(store, runId, { processing: runDetails.processing });
+      await store.touchRun(runId, { details: runDetails });
+      await recordRunAudit(store, runId, { processing: runDetails.processing });
     }
 
-    lifecycle?.stage('report');
-    const unpresentedJobs = store.listUnpresentedSuitable();
+    await lifecycle?.stage('report');
+    const unpresentedJobs = await store.listUnpresentedSuitable();
     const matchingJobs = deduplicateJobs(unpresentedJobs);
     const generatedAt = new Date(window.to);
     const report = renderMinimalReport({ generatedAt, window, jobs: matchingJobs });
@@ -1376,37 +1376,37 @@ async function runJobsLocked(options, config) {
       fs.writeFileSync(paths.dated, report, 'utf8');
       fs.writeFileSync(paths.latest, report, 'utf8');
       appendMatchingJobs(config.pipelinePath, matchingJobs);
-      const notified = queueJobNotifications({ store, jobs: matchingJobs, config });
+      const notified = await queueJobNotifications({ store, jobs: matchingJobs, config });
       if (notified) console.log(`${notified} התראות WhatsApp על משרות חזקות נוספו לתור; ה-Collector ישלח אותן.`);
       // Mark equivalent source records together so a duplicate cannot surface tomorrow.
-      store.markPresented(unpresentedJobs.map((job) => job.jobKey));
+      await store.markPresented(unpresentedJobs.map((job) => job.jobKey));
       console.log(`הדוח נשמר: ${path.relative(config.rootDir, paths.dated)}`);
     }
 
     if (options.open && matchingJobs.length > 0) {
-      lifecycle?.stage('open-browser');
+      await lifecycle?.stage('open-browser');
       const openResult = await openJobUrls({ jobs: matchingJobs, application: config.browser?.application });
-      if (!options.dryRun) store.markOpened(unpresentedJobs.map((job) => job.jobKey));
+      if (!options.dryRun) await store.markOpened(unpresentedJobs.map((job) => job.jobKey));
       console.log(`נפתחו ${openResult.opened} משרות ב-${config.browser?.application || 'Google Chrome'}.`);
     }
 
-    lifecycle?.stage('cleanup');
+    await lifecycle?.stage('cleanup');
     await fetcher.close();
     fetcherClosed = true;
     const completionStatus = completionStatusFor(runDetails);
-    lifecycle?.finish(completionStatus, { details: runDetails, windowStatus: windowStatusFor(runDetails) });
+    await lifecycle?.finish(completionStatus, { details: runDetails, windowStatus: windowStatusFor(runDetails) });
     if (completionStatus === 'incomplete') {
       console.warn('⚠️ הריצה הסתיימה עם כיסוי חלקי; יש לעיין במשפך הקבוצות לפני הסקת מסקנות.');
     }
     console.log(`נסרקו ${candidates.length} מועמדות; נמצאו ${matchingJobs.length} משרות חדשות מתאימות.`);
   } catch (error) {
-    lifecycle?.finish('failed', { failure: describeFailure(error), details: runDetails });
+    await lifecycle?.finish('failed', { failure: describeFailure(error), details: runDetails });
     throw error;
   } finally {
     lifecycle?.dispose();
     try { if (!fetcherClosed) await fetcher.close(); }
     finally {
-      try { store.pruneDiagnostics(); }
+      try { await store.pruneDiagnostics(); }
       catch { console.error('JobOps diagnostic retention unavailable; existing records were preserved.'); }
       setCodexUsageRecorder(null);
       store.close();

@@ -33,23 +33,23 @@ test('the decision waits for a well-filled batch unless the oldest job waited to
   assert.deepEqual(triggerSettings({}), { minNewJobs: 10, maxWaitMinutes: 120, lookbackDays: 7 });
 });
 
-test('only unique, unknown job links count as new jobs, and the check changes nothing', () => {
+test('only unique, unknown job links count as new jobs, and the check changes nothing', async () => {
   const store = tempStore();
-  store.recordSighting({ url: 'https://jobs.lever.co/acme/known', source: 'ATS: lever-api' });
-  const queue = (id, jid, minutesAgo, text) => store.queueWhatsAppMessage({ messageId: id, groupJid: jid, timestamp: now - minutesAgo * MINUTE, text });
-  queue('m1', 'a@g.us', 30, 'New role https://jobs.lever.co/acme/1');
-  queue('m2', 'b@g.us', 90, 'Same role shared again https://jobs.lever.co/acme/1?utm_source=wa');
-  queue('m3', 'a@g.us', 10, 'Known https://jobs.lever.co/acme/known and a store link https://play.google.com/store/apps/x');
-  queue('m4', 'b@g.us', 5, 'LinkedIn https://il.linkedin.com/jobs/view/backend-at-x-4400000001?refId=1');
-  queue('m5', 'a@g.us', 60 * 24 * 10, 'Too old https://jobs.lever.co/acme/old');
-  queue('m6', 'a@g.us', 1, 'no link, just chatter');
+  await store.recordSighting({ url: 'https://jobs.lever.co/acme/known', source: 'ATS: lever-api' });
+  const queue = async (id, jid, minutesAgo, text) => await store.queueWhatsAppMessage({ messageId: id, groupJid: jid, timestamp: now - minutesAgo * MINUTE, text });
+  await queue('m1', 'a@g.us', 30, 'New role https://jobs.lever.co/acme/1');
+  await queue('m2', 'b@g.us', 90, 'Same role shared again https://jobs.lever.co/acme/1?utm_source=wa');
+  await queue('m3', 'a@g.us', 10, 'Known https://jobs.lever.co/acme/known and a store link https://play.google.com/store/apps/x');
+  await queue('m4', 'b@g.us', 5, 'LinkedIn https://il.linkedin.com/jobs/view/backend-at-x-4400000001?refId=1');
+  await queue('m5', 'a@g.us', 60 * 24 * 10, 'Too old https://jobs.lever.co/acme/old');
+  await queue('m6', 'a@g.us', 1, 'no link, just chatter');
 
-  const state = inspectWhatsAppBacklog({ config, store, now });
+  const state = await inspectWhatsAppBacklog({ config, store, now });
   assert.equal(state.pendingMessages, 5);
   assert.equal(state.newJobs, 2);
   assert.equal(state.waitedMinutes, 90);
   assert.deepEqual(shouldProcess(state), { run: false, reason: 'waiting_for_more' });
-  assert.equal(store.countJobs(), 1, 'inspection records nothing');
-  assert.equal(store.getMessageState('m1').status, 'pending', 'inspection marks nothing');
+  assert.equal(await store.countJobs(), 1, 'inspection records nothing');
+  assert.equal((await store.getMessageState('m1')).status, 'pending', 'inspection marks nothing');
   store.close();
 });

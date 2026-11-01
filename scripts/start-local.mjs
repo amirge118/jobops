@@ -30,17 +30,17 @@ export function collectorNeedsRestart({ serviceLoaded, collector } = {}) {
   return !serviceLoaded || collector?.status !== 'connected';
 }
 
-function latestCollector() {
+async function latestCollector() {
   const config = loadJobsConfig();
   const store = createJobStore(config.jobsDbPath);
-  try { return store.getCollectorStatusSummary(); }
+  try { return await store.getCollectorStatusSummary(); }
   finally { store.close(); }
 }
 
 export async function startLocal() {
   assertExternalRuntime();
   const status = collectorCommand('status', 'ignore');
-  const collector = latestCollector();
+  const collector = await latestCollector();
   if (collectorNeedsRestart({ serviceLoaded: status.status === 0, collector })) {
     const reason = status.status !== 0
       ? 'the background service is not loaded'

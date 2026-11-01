@@ -33,15 +33,15 @@ test('diagnostics classify errors without saving secrets, raw stacks or URL para
   assert.equal(safeTargetUrl('file:///private/secret-value'), null);
 });
 
-test('output collection handles chunk boundaries, separate streams and oversized private output', () => {
+test('output collection handles chunk boundaries, separate streams and oversized private output', async () => {
   const failures = [];
   const collector = createFailureCollector((failure) => failures.push(failure));
-  collector.push('privateKey: <Buffer aa bb>\nQR private-qr\nEP', 'stderr');
-  collector.push('private-body\n', 'stdout');
-  collector.push('ERM private-token\n', 'stderr');
-  collector.push('x'.repeat(100_000));
-  collector.push('\nHTTP 403 private-token');
-  collector.flush();
+  await collector.push('privateKey: <Buffer aa bb>\nQR private-qr\nEP', 'stderr');
+  await collector.push('private-body\n', 'stdout');
+  await collector.push('ERM private-token\n', 'stderr');
+  await collector.push('x'.repeat(100_000));
+  await collector.push('\nHTTP 403 private-token');
+  await collector.flush();
   assert.deepEqual(failures.map((item) => item.code), ['permission_denied', 'http_error']);
   assert.doesNotMatch(JSON.stringify(failures), /private|aa bb|xxxxx/);
 });
@@ -56,19 +56,19 @@ test('legacy or stale runs are not falsely reported as running, failed or succes
   assert.equal(base.status, 'running');
 });
 
-test('stage and completed source survive failure, migration and reopening the database', (context) => {
+test('stage and completed source survive failure, migration and reopening the database', async (context) => {
   const db = temporary(context);
   let store = createJobStore(db);
-  const id = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp'], ownerPid: process.pid });
+  const id = await store.startRun({ fromTs: 1, toTs: 2, sources: ['ats', 'whatsapp'], ownerPid: process.pid });
   const lifecycle = createRunLifecycle(store, id);
-  store.touchRun(id, { details: { ats: { found: 19 } } });
-  lifecycle.stage('whatsapp-connect', 'whatsapp');
-  lifecycle.finish('failed', { failure: describeFailure(new Error('EPERM private-token')) });
+  await store.touchRun(id, { details: { ats: { found: 19 } } });
+  await lifecycle.stage('whatsapp-connect', 'whatsapp');
+  await lifecycle.finish('failed', { failure: describeFailure(new Error('EPERM private-token')) });
   lifecycle.dispose();
   store.close();
   store = createJobStore(db);
   context.after(() => store.close());
-  const run = store.getRun(id);
+  const run = await store.getRun(id);
   assert.equal(run.stage, 'whatsapp-connect');
   assert.equal(run.details.ats.found, 19);
   assert.equal(run.diagnostic.code, 'permission_denied');
@@ -87,7 +87,7 @@ for (const mode of ['SIGTERM', 'SIGKILL', 'uncaught']) {
     await exit;
     const store = createJobStore(db);
     context.after(() => store.close());
-    const run = store.getRun(id);
+    const run = await store.getRun(id);
     assert.equal(run.details.ats.found, 42);
     assert.equal(run.stage, 'whatsapp-connect');
     assert.equal(run.status, mode === 'uncaught' ? 'failed' : 'interrupted');
@@ -96,14 +96,14 @@ for (const mode of ['SIGTERM', 'SIGKILL', 'uncaught']) {
   });
 }
 
-test('detail history always includes the final failure after more than 500 events', (context) => {
+test('detail history always includes the final failure after more than 500 events', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
-  const id = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'] });
-  for (let index = 0; index < 510; index += 1) store.recordRunEvent(id, { source: 'ats', scope: 'source', stage: 'collection', status: 'started' });
-  store.recordRunEvent(id, { source: 'ats', scope: 'source', stage: 'collection', status: 'failed', details: describeFailure(new Error('timeout')) });
-  store.finishRun(id, { status: 'failed' });
-  const run = store.getRun(id);
+  const id = await store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'] });
+  for (let index = 0; index < 510; index += 1) await store.recordRunEvent(id, { source: 'ats', scope: 'source', stage: 'collection', status: 'started' });
+  await store.recordRunEvent(id, { source: 'ats', scope: 'source', stage: 'collection', status: 'failed', details: describeFailure(new Error('timeout')) });
+  await store.finishRun(id, { status: 'failed' });
+  const run = await store.getRun(id);
   assert.equal(run.events.length, 500);
   assert.equal(run.events.at(-1).status, 'failed');
   assert.equal(run.eventCount, 511);
@@ -113,11 +113,11 @@ test('a WhatsApp link with a negative-keyword title is filtered locally, never r
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
   const whatsappCandidate = {
-    ...store.recordSighting({ url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A' }),
+    ...await store.recordSighting({ url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A' }),
     url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A',
   };
   const atsCandidate = {
-    ...store.recordSighting({ url: 'https://example.com/jobs/2', source: 'ATS: greenhouse-api' }),
+    ...await store.recordSighting({ url: 'https://example.com/jobs/2', source: 'ATS: greenhouse-api' }),
     url: 'https://example.com/jobs/2', source: 'ATS: greenhouse-api',
   };
   let scoreCalls = 0;
@@ -130,7 +130,7 @@ test('a WhatsApp link with a negative-keyword title is filtered locally, never r
       profileHash: 'p',
       scoreBatchSettled: async (items, { onProgress }) => {
         scoreCalls += items.length;
-        onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
+        await onProgress({ completed: items.length, total: items.length, failed: 0, results: [], failures: [] });
       },
     },
   });
@@ -139,7 +139,7 @@ test('a WhatsApp link with a negative-keyword title is filtered locally, never r
   // A distinct 'filtered' outcome (not 'not-suitable') so per-source cost
   // aggregation can tell "screened for free" apart from "scored by Codex".
   assert.equal(outcomes.get(whatsappCandidate.jobKey).status, 'filtered');
-  const filtered = store.getJob(whatsappCandidate.jobKey);
+  const filtered = await store.getJob(whatsappCandidate.jobKey);
   assert.equal(filtered.suitable, 0);
   assert.equal(filtered.evaluated_at != null, true, 'must be recorded as resolved, not left pending for retry');
 });
@@ -147,8 +147,8 @@ test('a WhatsApp link with a negative-keyword title is filtered locally, never r
 test('a scoring failure is stored with its specific reason, while a page-fetch failure keeps its own specific code', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
-  const scoringCandidate = { ...store.recordSighting({ url: 'https://example.com/jobs/scored', source: 'ATS: Example' }), url: 'https://example.com/jobs/scored' };
-  const blockedCandidate = { ...store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ATS: Example' }), url: 'https://example.com/jobs/blocked' };
+  const scoringCandidate = { ...await store.recordSighting({ url: 'https://example.com/jobs/scored', source: 'ATS: Example' }), url: 'https://example.com/jobs/scored' };
+  const blockedCandidate = { ...await store.recordSighting({ url: 'https://example.com/jobs/blocked', source: 'ATS: Example' }), url: 'https://example.com/jobs/blocked' };
 
   await evaluateCandidates({
     candidates: [scoringCandidate, blockedCandidate], config: { decision: { criteriaVersion: 'v1' } }, store,
@@ -160,7 +160,7 @@ test('a scoring failure is stored with its specific reason, while a page-fetch f
     scorer: {
       profileHash: 'p',
       scoreBatchSettled: async (items, { onProgress }) => {
-        onProgress({
+        await onProgress({
           completed: 1, total: 1, failed: 1, results: [],
           failures: [{ jobKey: items[0].candidate.jobKey, code: 'scoring_failed', reason: "ERROR: You've hit your usage limit. purchase more credits" }],
         });
@@ -172,18 +172,18 @@ test('a scoring failure is stored with its specific reason, while a page-fetch f
   // describeFailure's own classification is strictly more specific and is
   // now what gets persisted, so a repeat failure is diagnosable without
   // guessing or re-running a live probe.
-  assert.equal(store.getJob(scoringCandidate.jobKey).last_error_code, 'codex_usage_limit');
+  assert.equal((await store.getJob(scoringCandidate.jobKey)).last_error_code, 'codex_usage_limit');
   // access_blocked is already specific; describeFailure's generic
   // HTTP-status fallback ("http_error") would only make it coarser, so it
   // must be left untouched.
-  assert.equal(store.getJob(blockedCandidate.jobKey).last_error_code, 'access_blocked');
+  assert.equal((await store.getJob(blockedCandidate.jobKey)).last_error_code, 'access_blocked');
 });
 
 test('a page with no recognized apply control still reaches the scorer, while an anti-bot block does not', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
-  const noApplyControl = { ...store.recordSighting({ url: 'https://example.com/jobs/no-apply', source: 'ATS: Example' }), url: 'https://example.com/jobs/no-apply' };
-  const botBlocked = { ...store.recordSighting({ url: 'https://example.com/jobs/bot', source: 'ATS: Example' }), url: 'https://example.com/jobs/bot' };
+  const noApplyControl = { ...await store.recordSighting({ url: 'https://example.com/jobs/no-apply', source: 'ATS: Example' }), url: 'https://example.com/jobs/no-apply' };
+  const botBlocked = { ...await store.recordSighting({ url: 'https://example.com/jobs/bot', source: 'ATS: Example' }), url: 'https://example.com/jobs/bot' };
   let scoredJobKeys = [];
 
   await evaluateCandidates({
@@ -197,7 +197,7 @@ test('a page with no recognized apply control still reaches the scorer, while an
       profileHash: 'p',
       scoreBatchSettled: async (items, { onProgress }) => {
         scoredJobKeys = items.map((item) => item.candidate.jobKey);
-        onProgress({
+        await onProgress({
           completed: items.length, total: items.length, failed: 0,
           results: items.map((item) => ({
             jobKey: item.candidate.jobKey, suitable: true, score: 4.5, fitLabel: 'בול מתאים',
@@ -213,16 +213,16 @@ test('a page with no recognized apply control still reaches the scorer, while an
   // no_apply_control alone isn't a reason to fail a job unseen anymore —
   // Codex gets to judge it on content, same as any other active page.
   assert.deepEqual(scoredJobKeys, [noApplyControl.jobKey]);
-  assert.equal(store.getJob(noApplyControl.jobKey).active_status, 'active');
-  assert.equal(store.getJob(noApplyControl.jobKey).last_error_code, null);
+  assert.equal((await store.getJob(noApplyControl.jobKey)).active_status, 'active');
+  assert.equal((await store.getJob(noApplyControl.jobKey)).last_error_code, null);
   // bot_challenge is a real site-level block — still never reaches Codex.
-  assert.equal(store.getJob(botBlocked.jobKey).last_error_code, 'bot_challenge');
+  assert.equal((await store.getJob(botBlocked.jobKey)).last_error_code, 'bot_challenge');
 });
 
 test('failed evaluation keeps retry identity and reports the actual processing stage', async (context) => {
   const store = createJobStore(temporary(context));
   context.after(() => store.close());
-  const candidate = { ...store.recordSighting({ url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A' }), url: 'https://example.com/jobs/1' };
+  const candidate = { ...await store.recordSighting({ url: 'https://example.com/jobs/1', source: 'WhatsApp: Group A' }), url: 'https://example.com/jobs/1' };
   const failures = [];
   await evaluateCandidates({ candidates: [candidate], config: { decision: { criteriaVersion: 'v1' } }, store,
     fetcher: { fetch: async () => { throw new Error('HTTP 403 private-content'); } },
@@ -231,8 +231,8 @@ test('failed evaluation keeps retry identity and reports the actual processing s
   });
   assert.equal(failures[0].stage, 'page-fetch');
   assert.equal(failures[0].failure.httpStatus, 403);
-  assert.equal(store.listPendingEvaluation().length, 1);
-  assert.doesNotMatch(store.getJob(candidate.jobKey).last_error_reason, /private-content/);
+  assert.equal((await store.listPendingEvaluation()).length, 1);
+  assert.doesNotMatch((await store.getJob(candidate.jobKey)).last_error_reason, /private-content/);
   assert.equal(completionStatusFor({ ats: { errors: 1 } }), 'incomplete');
   assert.equal(completionStatusFor({ whatsapp: { coverageStatus: 'complete', groups: [{ failedMessages: 1 }] } }), 'incomplete');
 });
@@ -259,8 +259,8 @@ test('API retains failed actions after a successful action and a server restart 
     attempt += 1;
     if (attempt !== 1) return;
     const store = createJobStore(db);
-    const id = store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'], actionId });
-    store.finishRun(id, { status: 'failed', failure: describeFailure(new Error('EPERM')) });
+    const id = await store.startRun({ fromTs: 1, toTs: 2, sources: ['ats'], actionId });
+    await store.finishRun(id, { status: 'failed', failure: describeFailure(new Error('EPERM')) });
     store.close();
     output('EP', 'stderr'); output('ERM private-raw-body\nprivateKey: <Buffer aa bb>\nQR private-qr', 'stderr');
     throw Object.assign(new Error('private-exception'), { exitCode: 2 });
@@ -269,7 +269,7 @@ test('API retains failed actions after a successful action and a server restart 
     browser: { status: 'ready' }, scorer: { status: 'ready' }, collector: { status: 'ready' },
     readyFor: { ats: true, whatsapp: true },
   }) };
-  let server = createDashboardServer({ config, execute, readiness });
+  let server = await createDashboardServer({ config, execute, readiness });
   const listen = async () => { await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); return `http://127.0.0.1:${server.address().port}`; };
   let base = await listen();
   context.after(() => server.close());
@@ -278,7 +278,7 @@ test('API retains failed actions after a successful action and a server restart 
   await fetch(`${base}/api/actions/mark-read`, { method: 'POST' });
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => server.close(resolve));
-  server = createDashboardServer({ config, execute, readiness });
+  server = await createDashboardServer({ config, execute, readiness });
   base = await listen();
   const { detail } = await fetch(`${base}/api/diagnostics/actions/${first.action.id}`).then((r) => r.json());
   assert.equal(detail.status, 'error');
@@ -289,8 +289,8 @@ test('API retains failed actions after a successful action and a server restart 
   const state = await fetch(`${base}/api/state`).then((r) => r.json());
   assert.equal(state.history.filter((item) => item.kind === 'actions').length, 2);
   const collectorStore = createJobStore(db);
-  const collectorId = Number(collectorStore.startCollectorRun({ ownerPid: process.pid, groupsExpected: 4 }));
-  collectorStore.finishCollectorRun(collectorId, { status: 'stopped' });
+  const collectorId = Number(await collectorStore.startCollectorRun({ ownerPid: process.pid, groupsExpected: 4 }));
+  await collectorStore.finishCollectorRun(collectorId, { status: 'stopped' });
   collectorStore.close();
   const collectorDetail = await fetch(`${base}/api/diagnostics/collectors/${collectorId}`).then((r) => r.json());
   assert.equal(collectorDetail.detail.status, 'stopped');

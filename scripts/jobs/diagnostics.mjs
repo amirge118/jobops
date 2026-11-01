@@ -104,20 +104,24 @@ export function safeTargetUrl(value) {
 export function createFailureCollector(onFailure) {
   const buffers = new Map();
   const seen = new Set();
-  function line(value) {
+  async function line(value) {
     const failure = describeFailure(value);
     const key = `${failure.code}:${failure.httpStatus || ''}`;
     if (failure.code === 'unknown_failure' || seen.has(key)) return;
     seen.add(key);
-    onFailure(failure);
+    await onFailure(failure);
   }
   return {
-    push(chunk, stream = 'stdout') {
+    async push(chunk, stream = 'stdout') {
       const parts = `${buffers.get(stream) || ''}${String(chunk)}`.split(/\r?\n/);
       buffers.set(stream, parts.pop().slice(-16_384));
-      for (const part of parts) line(part.slice(0, 16_384));
+      for (const part of parts) await line(part.slice(0, 16_384));
     },
-    flush() { for (const value of buffers.values()) line(value); buffers.clear(); },
+    async flush() {
+      const pending = [...buffers.values()];
+      buffers.clear();
+      for (const value of pending) await line(value);
+    },
   };
 }
 
@@ -125,37 +129,41 @@ export function createRunLifecycle(store, runId, { registerProcessHandlers = fal
   let ended = false;
   let stage = 'setup';
   let source = 'system';
-  const heartbeat = setInterval(() => store.touchRun(runId), 5_000);
+  const heartbeat = setInterval(async () => await store.touchRun(runId), 5_000);
   heartbeat.unref();
   const lifecycle = {
-    stage(next, nextSource = 'system') {
+    async stage(next, nextSource = 'system') {
       stage = next;
       source = nextSource;
-      store.touchRun(runId, { stage });
-      store.recordRunEvent(runId, { source, scope: 'run', stage, status: 'started' });
+      await store.touchRun(runId, { stage });
+      await store.recordRunEvent(runId, { source, scope: 'run', stage, status: 'started' });
     },
-    finish(status, { failure = null, details = null, windowStatus = null } = {}) {
+    async finish(status, { failure = null, details = null, windowStatus = null } = {}) {
       if (ended) return;
-      store.recordRunEvent(runId, { source, scope: 'run', stage, status, details: failure });
-      store.finishRun(runId, { status, error: failure?.reason, details, failure, windowStatus });
       ended = true;
+      // Both start before the first await: on the way out of a crashing process,
+      // only what runs synchronously reaches the disk.
+      await Promise.all([
+        store.recordRunEvent(runId, { source, scope: 'run', stage, status, details: failure }),
+        store.finishRun(runId, { status, error: failure?.reason, details, failure, windowStatus }),
+      ]);
     },
     dispose() {
       clearInterval(heartbeat);
       for (const [signal, handler] of handlers) process.off(signal, handler);
     },
   };
-  const emergencyFinish = (status, failure) => {
-    try { lifecycle.finish(status, { failure }); }
+  const emergencyFinish = async (status, failure) => {
+    try { await lifecycle.finish(status, { failure }); }
     catch { console.error('JobOps diagnostic storage unavailable; check permissions and disk space.'); }
   };
   const handlers = registerProcessHandlers ? [
-    ...['SIGINT', 'SIGTERM'].map((signal) => [signal, () => {
-      emergencyFinish('interrupted', { ...describeFailure(null, 'process_interrupted'), signal });
+    ...['SIGINT', 'SIGTERM'].map((signal) => [signal, async () => {
+      await emergencyFinish('interrupted', { ...describeFailure(null, 'process_interrupted'), signal });
       process.exit(signal === 'SIGINT' ? 130 : 143);
     }]),
-    ['uncaughtExceptionMonitor', (error) => emergencyFinish('failed', describeFailure(error))],
-    ['exit', (exitCode) => emergencyFinish('interrupted', { ...describeFailure(null, 'process_interrupted'), exitCode })],
+    ['uncaughtExceptionMonitor', async (error) => await emergencyFinish('failed', describeFailure(error))],
+    ['exit', async (exitCode) => await emergencyFinish('interrupted', { ...describeFailure(null, 'process_interrupted'), exitCode })],
   ] : [];
   for (const [signal, handler] of handlers) process.on(signal, handler);
   return lifecycle;

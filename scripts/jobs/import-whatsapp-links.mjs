@@ -16,7 +16,7 @@ function manualMessageId(groupJid, canonicalUrl) {
     .update(groupJid).update('\0').update(canonicalUrl).digest('hex').slice(0, 40)}`;
 }
 
-export function importWhatsAppLinks({ config, store, groupName, links, importedAt = Date.now() } = {}) {
+export async function importWhatsAppLinks({ config, store, groupName, links, importedAt = Date.now() } = {}) {
   const group = (config.sources.whatsapp?.groups || []).find((item) => item.name === groupName);
   if (!group?.jid) throw new Error(`WhatsApp group is not configured: ${groupName}`);
   if (!Array.isArray(links) || links.length > MAX_LINKS) {
@@ -45,7 +45,7 @@ export function importWhatsAppLinks({ config, store, groupName, links, importedA
     }
     seen.add(canonicalUrl);
     result.accepted += 1;
-    const queued = store.queueWhatsAppMessage({
+    const queued = await store.queueWhatsAppMessage({
       messageId: manualMessageId(group.jid, canonicalUrl),
       groupJid: group.jid,
       timestamp,
@@ -82,12 +82,12 @@ export function readLinkFile(filePath) {
   return parsed;
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const config = loadJobsConfig();
   const store = createJobStore(config.jobsDbPath);
   try {
-    const result = importWhatsAppLinks({
+    const result = await importWhatsAppLinks({
       config,
       store,
       groupName: options.group,
@@ -100,7 +100,7 @@ function main(argv = process.argv.slice(2)) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  try { main(); }
+  try { await main(); }
   catch (error) {
     console.error(error.message);
     process.exitCode = 1;

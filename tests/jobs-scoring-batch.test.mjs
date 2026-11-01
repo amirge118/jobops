@@ -21,15 +21,15 @@ test('scoring waits for a batch unless the oldest job has waited long enough', (
     'without minBatch nothing is deferred');
 });
 
-function setup(context, count) {
+async function setup(context, count) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-batch-'));
   context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const store = createJobStore(path.join(dir, 'jobs.db'));
   context.after(() => store.close());
-  const candidates = Array.from({ length: count }, (_, index) => {
+  const candidates = await Promise.all(Array.from({ length: count }, async (_, index) => {
     const url = `https://jobs.example.com/${index + 1}`;
-    return { ...store.recordSighting({ url, company: 'Acme', title: `Backend ${index + 1}`, source: 'ATS: Acme' }), url, source: 'ATS: Acme' };
-  });
+    return { ...await store.recordSighting({ url, company: 'Acme', title: `Backend ${index + 1}`, source: 'ATS: Acme' }), url, source: 'ATS: Acme' };
+  }));
   const scored = [];
   const deps = {
     candidates, store, config,
@@ -40,29 +40,29 @@ function setup(context, count) {
 }
 
 test('an unattended run with too few jobs leaves them pending without error, for the next run', async (context) => {
-  const { store, candidates, scored, deps } = setup(context, 2);
+  const { store, candidates, scored, deps } = await setup(context, 2);
   const outcomes = await evaluateCandidates({ ...deps, allowDeferScoring: true });
 
   assert.deepEqual(scored, [], 'no Codex call');
   assert.deepEqual(candidates.map((candidate) => outcomes.get(candidate.jobKey).status), ['deferred', 'deferred']);
-  assert.deepEqual(store.listPendingEvaluation().map((job) => job.jobKey).sort(), candidates.map((c) => c.jobKey).sort());
-  assert.ok(candidates.every((candidate) => store.getJob(candidate.jobKey).last_error_code === null));
+  assert.deepEqual((await store.listPendingEvaluation()).map((job) => job.jobKey).sort(), candidates.map((c) => c.jobKey).sort());
+  for (const candidate of candidates) assert.equal((await store.getJob(candidate.jobKey)).last_error_code, null);
   const processing = summarizeProcessingResults(candidates, outcomes);
   assert.equal(completionStatusFor({ processing }), 'success', 'deferring is not a failure');
 });
 
 test('a full batch, or a run someone waits on, scores immediately', async (context) => {
-  const full = setup(context, 3);
+  const full = await setup(context, 3);
   await evaluateCandidates({ ...full.deps, allowDeferScoring: true });
   assert.deepEqual(full.scored, [3]);
 
-  const manual = setup(context, 1);
+  const manual = await setup(context, 1);
   await evaluateCandidates({ ...manual.deps, allowDeferScoring: false });
   assert.deepEqual(manual.scored, [1]);
 });
 
 test('a lone job is scored once it has waited maxWaitHours', async (context) => {
-  const { scored, deps } = setup(context, 1);
+  const { scored, deps } = await setup(context, 1);
   await evaluateCandidates({ ...deps, allowDeferScoring: true, now: () => Date.now() + 3 * HOUR });
   assert.deepEqual(scored, [1]);
 });

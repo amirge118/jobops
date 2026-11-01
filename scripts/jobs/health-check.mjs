@@ -190,15 +190,15 @@ export function notifyMacOS(title, body) {
 // WhatsApp alerts are sent by the collector, so while it is not connected
 // they cannot arrive (2026-10-14→18 every one waited unsent); desktopNotify
 // (notifyMacOS from the CLI) shows them on the Mac as well.
-export function runHealthCheck({ store, config, now = Date.now(), notify = true, desktopNotify = null }) {
-  const facts = store.listHealthFacts({ now });
+export async function runHealthCheck({ store, config, now = Date.now(), notify = true, desktopNotify = null }) {
+  const facts = await store.listHealthFacts({ now });
   const findings = evaluateHealth(facts);
-  const opened = store.saveHealthFindings(findings, now);
+  const opened = await store.saveHealthFindings(findings, now);
   const alerting = opened.filter((finding) => finding.severity !== 'info');
   const settings = notificationSettings(config);
   let alerted = false;
   if (notify && settings.enabled && alerting.length) {
-    alerted = store.enqueueHealthNotification({
+    alerted = await store.enqueueHealthNotification({
       key: `${now}:${alerting.map((finding) => finding.key).join(',')}`.slice(0, 200),
       text: formatHealthAlert(alerting, settings),
       at: now,

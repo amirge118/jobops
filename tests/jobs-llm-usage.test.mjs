@@ -104,14 +104,14 @@ test('after a usage-limit failure the same process makes no further Codex calls'
   }
 });
 
-test('calls are stored and summarized per purpose and per run, and quota state follows them', () => {
+test('calls are stored and summarized per purpose and per run, and quota state follows them', async () => {
   const store = tempStore();
-  const runId = store.startRun({ fromTs: 1, toTs: 2, sources: ['whatsapp'] });
+  const runId = await store.startRun({ fromTs: 1, toTs: 2, sources: ['whatsapp'] });
   const usage = { inputTokens: 6000, cachedInputTokens: 2000, outputTokens: 1000, reasoningTokens: 400 };
-  store.recordCodexCall({ runId, purpose: 'scoring', model: 'gpt-reserve', items: 5, usage, ok: true, at: 1_000 });
-  store.recordCodexCall({ runId, purpose: 'resume_gap', model: 'gpt-reserve', items: 2, usage, ok: true, at: 2_000 });
-  store.recordCodexCall({ runId, purpose: 'scoring', items: 5, ok: false, errorCode: 'codex_usage_limit', limitUntil: 99_000, at: 3_000 });
-  const summary = store.summarizeCodexUsage({ sinceMs: 0, untilMs: 10_000 });
+  await store.recordCodexCall({ runId, purpose: 'scoring', model: 'gpt-reserve', items: 5, usage, ok: true, at: 1_000 });
+  await store.recordCodexCall({ runId, purpose: 'resume_gap', model: 'gpt-reserve', items: 2, usage, ok: true, at: 2_000 });
+  await store.recordCodexCall({ runId, purpose: 'scoring', items: 5, ok: false, errorCode: 'codex_usage_limit', limitUntil: 99_000, at: 3_000 });
+  const summary = await store.summarizeCodexUsage({ sinceMs: 0, untilMs: 10_000 });
   const scoring = summary.totals.find((row) => row.purpose === 'scoring');
   assert.equal(scoring.calls, 2);
   assert.equal(scoring.limited, 1);
@@ -123,22 +123,22 @@ test('calls are stored and summarized per purpose and per run, and quota state f
   assert.equal(run.totalTokens, 14_000);
   assert.equal(run.limitedCalls, 1);
   assert.equal(run.tokensPerScoredJob, 700);
-  store.recordCodexCall({ purpose: 'probe', ok: true, at: 100_000 });
-  assert.equal(store.getLlmQuota().blockedUntil, null, 'a successful call clears the block');
+  await store.recordCodexCall({ purpose: 'probe', ok: true, at: 100_000 });
+  assert.equal((await store.getLlmQuota()).blockedUntil, null, 'a successful call clears the block');
   store.close();
 });
 
-test('the quota check uses only recorded evidence and never spends a call', () => {
+test('the quota check uses only recorded evidence and never spends a call', async () => {
   resetInMemoryQuota();
   const store = tempStore();
   const now = 10_000_000;
-  assert.deepEqual(checkCodexQuota({ store, now }), { available: true, basis: 'unknown', rateLimits: null });
-  store.setLlmBlocked({ until: now + 60_000, at: now });
-  assert.deepEqual(checkCodexQuota({ store, now }), { available: false, until: now + 60_000, basis: 'stored' });
+  assert.deepEqual(await checkCodexQuota({ store, now }), { available: true, basis: 'unknown', rateLimits: null });
+  await store.setLlmBlocked({ until: now + 60_000, at: now });
+  assert.deepEqual(await checkCodexQuota({ store, now }), { available: false, until: now + 60_000, basis: 'stored' });
   resetInMemoryQuota();
-  assert.equal(checkCodexQuota({ store, now: now + 120_000 }).available, true, 'a block ends at its reset time');
-  store.noteLlmSuccess(now + 130_000);
-  assert.deepEqual(checkCodexQuota({ store, now: now + 140_000 }), { available: true, basis: 'recent_success', rateLimits: null });
+  assert.equal((await checkCodexQuota({ store, now: now + 120_000 })).available, true, 'a block ends at its reset time');
+  await store.noteLlmSuccess(now + 130_000);
+  assert.deepEqual(await checkCodexQuota({ store, now: now + 140_000 }), { available: true, basis: 'recent_success', rateLimits: null });
   store.close();
   resetInMemoryQuota();
 });
@@ -165,16 +165,16 @@ test('daily usage splits each call among the sources of the jobs in its batch', 
     { linkedin: 2, whatsapp: 1, ats: 1, other: 1 });
 
   const usage = (input, output) => ({ inputTokens: input, cachedInputTokens: 0, outputTokens: output, reasoningTokens: 0 });
-  store.recordCodexCall({ purpose: 'scoring', items: 5, usage: usage(8000, 2000), ok: true, at: lateNight,
+  await store.recordCodexCall({ purpose: 'scoring', items: 5, usage: usage(8000, 2000), ok: true, at: lateNight,
     sourceMix: { linkedin: 3, whatsapp: 2 } });
-  store.recordCodexCall({ purpose: 'resume_gap', items: 1, usage: usage(3000, 1000), ok: true, at: now, sourceMix: { whatsapp: 1 } });
-  store.recordCodexCall({ purpose: 'probe', usage: usage(500, 10), ok: true, at: now });
-  store.recordCodexCall({ purpose: 'scoring', items: 2, usage: usage(1000, 0), ok: true, at: now });
-  store.recordSourceOutcome({ source: 'linkedin', suitable: true, at: now });
-  store.recordSourceOutcome({ source: 'linkedin', suitable: false, at: now });
-  store.recordSourceOutcome({ source: 'whatsapp', suitable: true, at: now });
+  await store.recordCodexCall({ purpose: 'resume_gap', items: 1, usage: usage(3000, 1000), ok: true, at: now, sourceMix: { whatsapp: 1 } });
+  await store.recordCodexCall({ purpose: 'probe', usage: usage(500, 10), ok: true, at: now });
+  await store.recordCodexCall({ purpose: 'scoring', items: 2, usage: usage(1000, 0), ok: true, at: now });
+  await store.recordSourceOutcome({ source: 'linkedin', suitable: true, at: now });
+  await store.recordSourceOutcome({ source: 'linkedin', suitable: false, at: now });
+  await store.recordSourceOutcome({ source: 'whatsapp', suitable: true, at: now });
 
-  const { days, rows } = store.dailyUsageBySource({ days: 2, now });
+  const { days, rows } = await store.dailyUsageBySource({ days: 2, now });
   assert.deepEqual(days, ['2026-09-29', '2026-09-28']);
   const today = Object.fromEntries(rows.filter((row) => row.day === '2026-09-29').map((row) => [row.source, row]));
   assert.equal(today.linkedin.tokens, 6000);
@@ -193,9 +193,9 @@ test('the dashboard serves daily usage by source for the statistics page', async
   const config = { rootDir: dir, jobsDbPath: path.join(dir, 'jobs.db'), scan: { defaultLookbackDays: 2, maxLookbackDays: 14 },
     sources: { whatsapp: { groups: [] } }, scoring: { model: 'gpt-reserve' } };
   const store = createJobStore(config.jobsDbPath);
-  store.recordCodexCall({ purpose: 'scoring', items: 1, usage: { inputTokens: 100, outputTokens: 20 }, ok: true, sourceMix: { ats: 1 } });
+  await store.recordCodexCall({ purpose: 'scoring', items: 1, usage: { inputTokens: 100, outputTokens: 20 }, ok: true, sourceMix: { ats: 1 } });
   store.close();
-  const server = createDashboardServer({ config, readiness: { inspect: async () => ({ readyFor: {} }) } });
+  const server = await createDashboardServer({ config, readiness: { inspect: async () => ({ readyFor: {} }) } });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   context.after(() => { server.close(); setCodexUsageRecorder(null); });
   const body = await fetch(`http://127.0.0.1:${server.address().port}/api/llm-usage/daily?days=7`).then((response) => response.json());
@@ -232,7 +232,7 @@ test('resume analysis waits for a worthwhile batch or for the oldest job to wait
   const analyzer = {
     version: 'v', async analyzeBatchSettled(jobs, { onProgress }) {
       calls += 1;
-      onProgress?.({ completed: jobs.length, total: jobs.length, failed: 0, results: [], failures: [] });
+      await onProgress?.({ completed: jobs.length, total: jobs.length, failed: 0, results: [], failures: [] });
       return { results: [], failures: [] };
     },
   };
@@ -291,19 +291,19 @@ test('the free quota check reads the newest usage windows from Codex session fil
   assert.equal(readCodexRateLimits({ codexHome: path.join(home, 'missing'), fsModule: fs }), null);
 });
 
-test('an exhausted window in Codex\'s own record skips the run without any call', () => {
+test('an exhausted window in Codex\'s own record skips the run without any call', async () => {
   resetInMemoryQuota();
   const store = tempStore();
   const now = 1_790_600_000_000;
   const exhausted = { observedAt: now - 60_000, primary: { usedPercent: 100, windowMinutes: 300, resetsAt: now + 3_600_000 }, secondary: null };
-  const blocked = checkCodexQuota({ store, now, readRateLimits: () => exhausted });
+  const blocked = await checkCodexQuota({ store, now, readRateLimits: () => exhausted });
   assert.deepEqual([blocked.available, blocked.until, blocked.basis], [false, now + 3_600_000, 'codex_rate_limits']);
-  assert.equal(store.getLlmQuota().blockedUntil, now + 3_600_000);
+  assert.equal((await store.getLlmQuota()).blockedUntil, now + 3_600_000);
   resetInMemoryQuota();
   const fresh = tempStore();
-  const open = checkCodexQuota({ store: fresh, now, readRateLimits: () => ({ ...exhausted, primary: { ...exhausted.primary, usedPercent: 40 } }) });
+  const open = await checkCodexQuota({ store: fresh, now, readRateLimits: () => ({ ...exhausted, primary: { ...exhausted.primary, usedPercent: 40 } }) });
   assert.deepEqual([open.available, open.basis], [true, 'codex_rate_limits']);
-  assert.equal(checkCodexQuota({ store: fresh, now, readRateLimits: () => { throw new Error('unreadable'); } }).available, true);
+  assert.equal((await checkCodexQuota({ store: fresh, now, readRateLimits: () => { throw new Error('unreadable'); } })).available, true);
   store.close();
   fresh.close();
   resetInMemoryQuota();

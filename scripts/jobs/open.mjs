@@ -33,10 +33,10 @@ async function main() {
   const config = loadJobsConfig();
   const store = createJobStore(config.jobsDbPath);
   try {
-    const unopenedJobs = store.listUnopenedSuitable();
+    const unopenedJobs = await store.listUnopenedSuitable();
     const jobs = deduplicateJobs(unopenedJobs);
     const result = await openJobUrls({ jobs, application: config.browser?.application });
-    if (result.opened > 0) store.markOpened(unopenedJobs.map((job) => job.jobKey));
+    if (result.opened > 0) await store.markOpened(unopenedJobs.map((job) => job.jobKey));
     console.log(result.opened > 0
       ? `נפתחו ${result.opened} משרות חדשות ב-${config.browser?.application || 'Google Chrome'}.`
       : 'אין משרות מתאימות חדשות לפתיחה.');

@@ -194,7 +194,7 @@ function linkedinConfig(overrides = {}) {
 
 test('collection records new postings as pending, filters locally, and advances coverage only when complete', async () => {
   const store = tempStore();
-  store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: search.keywords, location: 'Israel' }]);
+  await store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: search.keywords, location: 'Israel' }]);
   const now = Date.UTC(2026, 8, 28, 12);
   const pages = [page([
     { id: '1000001', title: 'Backend Engineer' },
@@ -214,9 +214,9 @@ test('collection records new postings as pending, filters locally, and advances 
     (({ status, found, new: fresh, known, filtered, advanced }) => ({ status, found, fresh, known, filtered, advanced }))(result.searches[0]),
     { status: 'complete', found: 3, fresh: 3, known: 0, filtered: 2, advanced: true },
   );
-  const pending = store.listPendingEvaluation();
+  const pending = await store.listPendingEvaluation();
   assert.deepEqual(pending.map((job) => job.url), ['https://www.linkedin.com/jobs/view/1000001']);
-  const [saved] = store.listLinkedInSearches();
+  const [saved] = await store.listLinkedInSearches();
   assert.equal(saved.coveredUntil, now);
   assert.equal(saved.lastStatus, 'complete');
 
@@ -235,15 +235,15 @@ test('collection records new postings as pending, filters locally, and advances 
 
 test('a failed collection keeps the previous coverage and records the reason', async () => {
   const store = tempStore();
-  store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: search.keywords, location: 'Israel' }]);
-  const [before] = store.listLinkedInSearches();
-  store.recordLinkedInSearchAttempt({ searchId: before.id, queryHash: before.queryHash, status: 'complete', coveredUntil: 1_000 });
+  await store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: search.keywords, location: 'Israel' }]);
+  const [before] = await store.listLinkedInSearches();
+  await store.recordLinkedInSearchAttempt({ searchId: before.id, queryHash: before.queryHash, status: 'complete', coveredUntil: 1_000 });
 
   const result = await scanLinkedIn({ config: linkedinConfig(), store, sleep: noSleep, fetchImpl: async () => response('', 999) });
 
   assert.equal(result.searches[0].status, 'failed');
   assert.equal(result.errors[0].code, 'linkedin_blocked');
-  const [after] = store.listLinkedInSearches();
+  const [after] = await store.listLinkedInSearches();
   assert.equal(after.coveredUntil, 1_000);
   assert.equal(after.lastStatus, 'failed');
   assert.equal(after.lastReason, 'blocked');
@@ -252,15 +252,15 @@ test('a failed collection keeps the previous coverage and records the reason', a
 
 test('an empty first page is not trusted unless LinkedIn answered another search in the same run', async () => {
   const store = tempStore();
-  store.syncLinkedInSearches([
+  await store.syncLinkedInSearches([
     { key: 'a', label: 'A', keywords: 'data analyst', location: 'Israel' },
   ]);
   const lonely = await scanLinkedIn({ config: linkedinConfig(), store, sleep: noSleep, fetchImpl: async () => response('') });
   assert.equal(lonely.searches[0].status, 'failed');
   assert.equal(lonely.searches[0].reason, 'empty_unverified');
-  assert.equal(store.listLinkedInSearches()[0].coveredUntil, null);
+  assert.equal((await store.listLinkedInSearches())[0].coveredUntil, null);
 
-  store.syncLinkedInSearches([
+  await store.syncLinkedInSearches([
     { key: 'a', label: 'A', keywords: 'data analyst', location: 'Israel' },
     { key: 'b', label: 'B', keywords: 'backend', location: 'Israel' },
   ]);
@@ -272,19 +272,19 @@ test('an empty first page is not trusted unless LinkedIn answered another search
 
 test('a fallback page of unrelated jobs is recorded as no matches and never queued for scoring', async () => {
   const store = tempStore();
-  store.syncLinkedInSearches([{ key: 'a', label: 'Analyst', keywords: '"data analyst"', location: 'Israel' }]);
+  await store.syncLinkedInSearches([{ key: 'a', label: 'Analyst', keywords: '"data analyst"', location: 'Israel' }]);
   const result = await scanLinkedIn({ config: linkedinConfig(), store, sleep: noSleep,
     fetchImpl: async () => response(page([{ id: '1000001', title: 'Offshore Chemist' }, { id: '1000002', title: 'BIM Consultant' }])) });
   assert.equal(result.searches[0].status, 'complete');
   assert.equal(result.searches[0].endedBy, 'no_matches_fallback');
   assert.equal(result.candidates.length, 0);
-  assert.equal(store.countJobs(), 0);
+  assert.equal(await store.countJobs(), 0);
   store.close();
 });
 
 test('disabled searches are not requested', async () => {
   const store = tempStore();
-  store.syncLinkedInSearches([{ key: 'a', label: 'A', keywords: 'backend', location: 'Israel', enabled: false }]);
+  await store.syncLinkedInSearches([{ key: 'a', label: 'A', keywords: 'backend', location: 'Israel', enabled: false }]);
   const result = await scanLinkedIn({ config: linkedinConfig(), store, sleep: noSleep, fetchImpl: async () => { throw new Error('must not fetch'); } });
   assert.deepEqual(result.searches, []);
   store.close();
@@ -331,7 +331,7 @@ test('collection keeps only titles in the combined scope of all searches', async
     { key: 'data', label: 'Data Engineering', keywords: '"data engineer"', location: 'Israel', titleIncludes: ['data engineer'] },
     { key: 'analyst', label: 'Data Analyst', keywords: '"data analyst"', location: 'Israel', titleIncludes: ['data analyst'] },
   ];
-  store.syncLinkedInSearches(searches);
+  await store.syncLinkedInSearches(searches);
   const queue = [
     page([{ id: '1000001', title: 'Data Engineer' }, { id: '1000002', title: 'Product Data Analyst' }, { id: '1000003', title: 'Data Scientist' }]), '',
     page([{ id: '1000004', title: 'FP&A Analyst' }, { id: '1000005', title: 'Senior Data Analyst' }]), '',
@@ -339,20 +339,20 @@ test('collection keeps only titles in the combined scope of all searches', async
   const result = await scanLinkedIn({ config: linkedinConfig({ searches }), store, sleep: noSleep, fetchImpl: async () => response(queue.shift()) });
   assert.deepEqual(result.candidates.map((item) => item.title), ['Data Engineer', 'Product Data Analyst', 'Senior Data Analyst']);
   assert.deepEqual(result.searches.map((row) => row.filtered), [1, 1]);
-  assert.match(store.getJob(store.listPendingEvaluation()[0].jobKey).title, /Data Engineer/);
+  assert.match((await store.getJob((await store.listPendingEvaluation())[0].jobKey)).title, /Data Engineer/);
   store.close();
 });
 
 test('"no real matches" is not trusted when the same run was rate limited, so coverage stays put', async () => {
   const store = tempStore();
-  store.syncLinkedInSearches([
+  await store.syncLinkedInSearches([
     { key: 'a', label: 'Backend', keywords: 'backend', location: 'Israel' },
     { key: 'b', label: 'Data', keywords: '"data engineer"', location: 'Israel' },
   ]);
   const queue = [response(page([{ id: '1000001', title: 'Offshore Chemist' }, { id: '1000002', title: 'BIM Consultant' }])), response('', 429), response('', 429)];
   const result = await scanLinkedIn({ config: linkedinConfig(), store, sleep: noSleep, fetchImpl: async () => queue.shift() });
   assert.deepEqual(result.searches.map((row) => [row.status, row.reason]), [['failed', 'empty_unverified'], ['failed', 'rate_limited']]);
-  assert.deepEqual(store.listLinkedInSearches().map((search) => search.coveredUntil), [null, null]);
+  assert.deepEqual((await store.listLinkedInSearches()).map((search) => search.coveredUntil), [null, null]);
   store.close();
 });
 
@@ -364,23 +364,23 @@ function gateStore(context) {
   return store;
 }
 
-test('the hourly LinkedIn gate counts every process\'s requests over the last hour', (context) => {
+test('the hourly LinkedIn gate counts every process\'s requests over the last hour', async (context) => {
   const store = gateStore(context);
   let clock = Date.parse('2026-10-19T15:00:00Z');
   const gate = createLinkedInGate({ store, limit: 3, now: () => clock });
   const queueGate = createLinkedInGate({ store, limit: 1, now: () => clock });
-  assert.equal(gate.allow(), true);
-  gate.record('search');
-  assert.equal(queueGate.allow(), false, 'the queue reader stops earlier');
-  gate.record('posting');
-  gate.record('posting');
-  assert.equal(gate.allow(), false);
+  assert.equal(await gate.allow(), true);
+  await gate.record('search');
+  assert.equal(await queueGate.allow(), false, 'the queue reader stops earlier');
+  await gate.record('posting');
+  await gate.record('posting');
+  assert.equal(await gate.allow(), false);
   clock += 61 * 60 * 1000;
-  assert.equal(gate.allow(), true, 'requests older than an hour no longer count');
+  assert.equal(await gate.allow(), true, 'requests older than an hour no longer count');
   // Fourteen days are kept, older rows are pruned on the next record.
   clock += 15 * 24 * 60 * 60 * 1000;
-  gate.record('posting');
-  assert.equal(store.countLinkedInRequests({ since: 0 }), 1);
+  await gate.record('posting');
+  assert.equal(await store.countLinkedInRequests({ since: 0 }), 1);
 });
 
 test('a search stops before a request once the shared hourly cap is reached', async () => {
@@ -406,7 +406,7 @@ test('Retry-After is read as seconds or a date, with a fallback and clamps', () 
   assert.equal(retryAfterMs('Sat, 24 Oct 2026 09:01:00 GMT', { now }), 60_000);
 });
 
-test('queued LinkedIn postings older than the limit are archived unread; fresh, scored and other jobs stay', (context) => {
+test('queued LinkedIn postings older than the limit are archived unread; fresh, scored and other jobs stay', async (context) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-li-stale-'));
   context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'jobs.db');
@@ -424,7 +424,7 @@ test('queued LinkedIn postings older than the limit are archived unread; fresh, 
   insert.run('scored', li(4400000003), li(4400000003), now - 9 * DAY, now - 9 * DAY, 'linkedin_deferred', 3.1);
   insert.run('ats', 'https://boards.greenhouse.io/x/jobs/1', 'https://boards.greenhouse.io/x/jobs/1', now - 9 * DAY, now - 9 * DAY, 'fetch_failed', null);
 
-  assert.deepEqual(store.archiveStaleLinkedInQueue({ olderThanMs: 5 * DAY, at: now }), { archived: 1 });
+  assert.deepEqual(await store.archiveStaleLinkedInQueue({ olderThanMs: 5 * DAY, at: now }), { archived: 1 });
   const archived = db.prepare('SELECT job_key FROM jobs WHERE archived_at IS NOT NULL').all().map((row) => row.job_key);
   assert.deepEqual(archived, ['old']);
   assert.equal(db.prepare("SELECT canonical_url FROM jobs WHERE job_key = 'old'").get().canonical_url, li(4400000001), 'identity kept for dedup');

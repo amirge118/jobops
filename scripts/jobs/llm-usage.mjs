@@ -110,10 +110,10 @@ function normalizeUsage(usage) {
 // costs ~14k input tokens (Codex's own agent instructions), while a call
 // rejected for the limit costs nothing, so simply running is the cheapest
 // check. The first rejection then stops the rest of that run.
-export function checkCodexQuota({ store, now = Date.now(), readRateLimits = () => null }) {
+export async function checkCodexQuota({ store, now = Date.now(), readRateLimits = () => null }) {
   const memory = inMemoryBlockedUntil(now);
   if (memory) return { available: false, until: memory, basis: 'memory' };
-  const state = store.getLlmQuota();
+  const state = await store.getLlmQuota();
   if (state.blockedUntil && state.blockedUntil > now) {
     noteUsageLimit(state.blockedUntil);
     return { available: false, until: state.blockedUntil, basis: 'stored' };
@@ -123,7 +123,7 @@ export function checkCodexQuota({ store, now = Date.now(), readRateLimits = () =
   try { rateLimits = readRateLimits(); } catch { rateLimits = null; }
   const until = rateLimitBlockedUntil(rateLimits, now);
   if (until) {
-    store.setLlmBlocked({ until, reason: 'usage_limit', at: now });
+    await store.setLlmBlocked({ until, reason: 'usage_limit', at: now });
     noteUsageLimit(until);
     return { available: false, until, basis: 'codex_rate_limits', rateLimits };
   }
