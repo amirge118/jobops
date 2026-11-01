@@ -106,6 +106,43 @@ test('week-over-week numbers compare with the previous stored week', async () =>
   } finally { cleanup(); }
 });
 
+test('an overlapping previous report is not shown as a week-over-week change', async () => {
+  const { store, db, cleanup } = setup();
+  try {
+    store.saveWeeklyReport({ weekStart: '2026-10-18', snapshot: { generatedAt: NOW - 4 * DAY, decisions: { week: { total: 1, positive: 0 } }, found: { suitable: 3 } }, status: 'analyzed', at: NOW - 4 * DAY });
+    const result = await runWeeklyStats({ store, db, config: CONFIG, now: NOW, collect, analyze: async () => ({ headline: 'x', recommendations: [] }) });
+    assert.equal(result.snapshot.previous.comparable, false);
+    assert.equal(result.snapshot.previous.overlapDays, 3);
+    assert.match(result.text, /החלטות: 4(?! \()/);
+  } finally { cleanup(); }
+});
+
+test('a later slot retries a failed analysis: failure changes nothing, success sends once more', async () => {
+  const { store, db, cleanup } = setup();
+  const outbox = () => db.prepare("SELECT job_key FROM notification_outbox WHERE job_key LIKE 'weekly:%' ORDER BY id").all().map((row) => row.job_key);
+  try {
+    const fail = async () => { throw new Error('Codex scoring timed out'); };
+    await runWeeklyStats({ store, db, config: CONFIG, now: NOW, collect, analyze: fail });
+    const sentAt = store.getWeeklyReport().sentAt;
+
+    const retryFailed = await runWeeklyStats({ store, db, config: CONFIG, now: NOW + 1000, collect, analyze: fail });
+    assert.equal(retryFailed.skipped, true);
+    assert.equal(store.getWeeklyReport().createdAt, NOW);
+    assert.deepEqual(outbox(), ['weekly:2026-10-25']);
+
+    const retried = await runWeeklyStats({ store, db, config: CONFIG, now: NOW + 2000, collect, analyze: async () => ({ headline: 'ניתוח מלא', recommendations: [] }) });
+    assert.equal(retried.status, 'analyzed');
+    assert.equal(store.getWeeklyReport().status, 'analyzed');
+    assert.ok(store.getWeeklyReport().sentAt >= sentAt);
+    assert.deepEqual(outbox(), ['weekly:2026-10-25', 'weekly:2026-10-25:analysis']);
+
+    let calls = 0;
+    const after = await runWeeklyStats({ store, db, config: CONFIG, now: NOW + 3000, collect, analyze: async () => { calls += 1; return null; } });
+    assert.equal(after.skipped, true);
+    assert.equal(calls, 0);
+  } finally { cleanup(); }
+});
+
 test('the message stays under the WhatsApp length cap', () => {
   const long = { headline: 'א'.repeat(2_000), recommendations: [] };
   assert.ok(formatWeeklyMessage({ weekStart: '2026-10-25', found: {}, retention: [] }, long).length <= MESSAGE_MAX_CHARS);
@@ -146,6 +183,21 @@ test('tracker outcomes count statuses and list applications waiting over a week'
   assert.equal(outcomes.applied, 2);
   assert.equal(outcomes.interview, 1);
   assert.deepEqual(outcomes.followUpsDue.map((row) => row.company), ['Acme']);
+  assert.equal(outcomes.followUpsDueCount, 1);
+});
+
+test('the follow-up count is the full number even though the list is capped', async () => {
+  const { store, db, cleanup } = setup();
+  try {
+    const rows = Array.from({ length: 12 }, (_, index) => `| ${index + 1} | 2026-10-01 | Co${index} | Backend | 4/5 | Applied | ✅ | | |`).join('\n');
+    const result = await runWeeklyStats({
+      store, db, config: CONFIG, now: NOW, send: false, analyze: async () => null,
+      collect: async () => ({ decisionStats: null, trackerMarkdown: rows, gaps: [], signals: [] }),
+    });
+    assert.equal(result.snapshot.outcomes.followUpsDue.length, 10);
+    assert.equal(result.snapshot.outcomes.followUpsDueCount, 12);
+    assert.ok(result.analysis.recommendations.some((item) => /לעדכן 12 הגשות/.test(item.action)));
+  } finally { cleanup(); }
 });
 
 test('the weekly agent fires on Sunday at 08:15', () => {
@@ -153,4 +205,7 @@ test('the weekly agent fires on Sunday at 08:15', () => {
   const plist = renderScheduledScanAgent(weekly, { nodePath: '/usr/local/bin/node', rootDir: '/tmp/jobops' });
   assert.match(plist, /<key>Weekday<\/key><integer>0<\/integer><key>Hour<\/key><integer>8<\/integer><key>Minute<\/key><integer>15<\/integer>/);
   assert.match(plist, /weekly-stats\.mjs<\/string><string>--send<\/string>/);
+  assert.match(plist, /<array><string>\/usr\/bin\/caffeinate<\/string><string>-is<\/string><string>\/usr\/local\/bin\/node<\/string>/);
+  assert.equal(weekly.times.length, 3);
+  assert.ok(weekly.times.every((time) => time.weekday === 0));
 });

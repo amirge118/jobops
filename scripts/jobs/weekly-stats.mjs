@@ -25,6 +25,9 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const SCHEMA_PATH = path.join(MODULE_DIR, 'weekly-stats.schema.json');
 export const MESSAGE_MAX_CHARS = 1_200;
 const FOLLOW_UP_DAYS = 7;
+// Each report covers the 7 days before it. A previous report younger than this
+// shares too many of those days for a difference to mean a week-over-week change.
+const MIN_COMPARABLE_AGE_DAYS = 6;
 
 // What `prune` may touch. Everything else — job identities, decisions,
 // sightings, WhatsApp message dedup, HireMeTech targets, the tracker — is
@@ -128,7 +131,7 @@ export function parseTrackerOutcomes(markdown, { now = Date.now() } = {}) {
       followUpsDue.push({ company: cells[2], role: cells[3], date: cells[1] });
     }
   }
-  return { ...counts, followUpsDue: followUpsDue.slice(-10) };
+  return { ...counts, followUpsDueCount: followUpsDue.length, followUpsDue: followUpsDue.slice(-10) };
 }
 
 // The numbers compared week over week (and shown in the WhatsApp message).
@@ -141,6 +144,17 @@ export function keyNumbers(snapshot) {
     scored: snapshot.found?.scored ?? 0,
     tokens: snapshot.codex?.tokens ?? 0,
     unknownCompanyShare: snapshot.quality?.unknownCompanyShare ?? 0,
+  };
+}
+
+function previousSummary(previous, now) {
+  if (!previous) return null;
+  const ageDays = (now - (previous.snapshot?.generatedAt ?? previous.createdAt)) / DAY;
+  return {
+    weekStart: previous.weekStart,
+    comparable: ageDays >= MIN_COMPARABLE_AGE_DAYS,
+    overlapDays: Math.max(0, Math.round((7 - ageDays) * 10) / 10),
+    numbers: keyNumbers(previous.snapshot),
   };
 }
 
@@ -266,7 +280,7 @@ export function buildWeeklySnapshot({ db, config, now = Date.now(), decisionStat
     gaps: gaps.slice(0, 8),
     retention: retentionProposal(db, { now }),
   };
-  snapshot.previous = previous ? { weekStart: previous.weekStart, numbers: keyNumbers(previous.snapshot) } : null;
+  snapshot.previous = previousSummary(previous, now);
   return snapshot;
 }
 
@@ -276,7 +290,11 @@ Write a short weekly review in Hebrew for the job seeker. Return only the JSON r
 
 Rules:
 - Every claim must cite a number from the snapshot. Never invent data; if something is missing, say so in questions.
-- Compare with snapshot.previous.numbers when present (week over week).
+- Compare with snapshot.previous.numbers only when snapshot.previous.comparable is true. When it is false the two
+  reports share previous.overlapDays days, so report this week's numbers without calling a difference a change.
+- decisions.week and decisions.month are 7 and 30 days; decisions.sourceValue is 30 days. decisions.scoreBands,
+  decisions.sources and decisions.calibration cover all decisions ever, across criteria versions: say so when citing them.
+- outcomes.followUpsDueCount is the full number of follow-ups due; outcomes.followUpsDue lists only the latest 10.
 - sources: one verdict per source (ATS, WhatsApp, LinkedIn, HireMeTech) by suitable/interesting per scored job and tokens.
 - recommendations: concrete, small steps first — add or drop a WhatsApp group, change or add a LinkedIn search.
   Job counts per group/search (week, month) exist only since labelsSince. When labelTrackingComplete is false, NEVER
@@ -310,7 +328,7 @@ export function fallbackAnalysis(snapshot) {
     recommendations.push({ area: 'ats', action: `להוסיף את ${company.company} לסריקת ATS`, why: `${company.count} משרות שעניינו אותך`, effort: 'small' });
   }
   if ((snapshot.outcomes?.followUpsDue || []).length) {
-    recommendations.unshift({ area: 'outcomes', action: `לעדכן ${snapshot.outcomes.followUpsDue.length} הגשות בלי תשובה (/track)`, why: 'הגשה בלי עדכון יותר משבוע', effort: 'small' });
+    recommendations.unshift({ area: 'outcomes', action: `לעדכן ${snapshot.outcomes.followUpsDueCount} הגשות בלי תשובה (/track)`, why: 'הגשה בלי עדכון יותר משבוע', effort: 'small' });
   }
   return {
     headline: `השבוע: ${snapshot.found.suitable} משרות מתאימות, ${snapshot.decisions?.week?.positive ?? 0} עניינו אותך (בלי ניתוח Codex)`,
@@ -329,7 +347,7 @@ function delta(now, before) {
 
 export function formatWeeklyMessage(snapshot, analysis, { status = 'analyzed' } = {}) {
   const numbers = keyNumbers(snapshot);
-  const before = snapshot.previous?.numbers || {};
+  const before = snapshot.previous?.comparable ? snapshot.previous.numbers : {};
   const lines = [
     `📊 סיכום שבועי (${snapshot.weekStart})${status === 'fallback' ? ' — בלי ניתוח Codex' : ''}`,
     analysis.headline,
@@ -346,11 +364,13 @@ export function formatWeeklyMessage(snapshot, analysis, { status = 'analyzed' } 
 }
 
 // The scheduled run. Idempotent per week: once this week's report was sent,
-// a second run (launchd on wake, a manual retry) does nothing.
+// a later run does nothing, unless Codex failed. Then a later slot retries the
+// analysis, and only a success replaces the report and sends one more message.
 export async function runWeeklyStats({ store, db, config, now = Date.now(), collect, analyze, send = true }) {
   const weekStart = weekStartOf(now);
   const existing = store.getWeeklyReport();
-  if (send && existing?.weekStart === weekStart && existing.sentAt) return { skipped: true, weekStart };
+  const alreadySent = send && existing?.weekStart === weekStart && Boolean(existing.sentAt);
+  if (alreadySent && existing.status !== 'fallback') return { skipped: true, weekStart };
 
   const previous = store.getWeeklyReport({ before: weekStart });
   const snapshot = buildWeeklySnapshot({ db, config, now, previous, ...(await collect()) });
@@ -366,11 +386,12 @@ export async function runWeeklyStats({ store, db, config, now = Date.now(), coll
     status = 'fallback';
     analysis = fallbackAnalysis(snapshot);
   }
+  if (alreadySent && status === 'fallback') return { skipped: true, weekStart, status };
   store.saveWeeklyReport({ weekStart, snapshot, analysis, status, at: now });
   const text = formatWeeklyMessage(snapshot, analysis, { status });
   let queued = false;
   if (send) {
-    queued = store.enqueueJobNotification({ jobKey: `weekly:${weekStart}`, text, at: now });
+    queued = store.enqueueJobNotification({ jobKey: `weekly:${weekStart}${alreadySent ? ':analysis' : ''}`, text, at: now });
     store.markWeeklyReportSent(weekStart, now);
   }
   return { skipped: false, weekStart, status, queued, text, snapshot, analysis };
@@ -471,7 +492,7 @@ async function main(argv = process.argv.slice(2)) {
         analyze: argv.includes('--no-analysis') ? async () => null : await codexAnalyzer(config, store),
       });
       if (result.skipped) {
-        console.log(`הדוח של השבוע (${result.weekStart}) כבר נשלח.`);
+        console.log(`הדוח של השבוע (${result.weekStart}) כבר נשלח${result.status === 'fallback' ? '; ניסיון הניתוח החוזר נכשל' : ''}.`);
         return;
       }
       console.log(result.text);

@@ -31,6 +31,8 @@ test('coverage counts wanted jobs from watched companies and lists the rest', ()
       { decision: 'interested', company: 'Rubrik', title: 'B' },
       { decision: 'interested', company: 'Rubrik', title: 'C' },
       { decision: 'interested', company: 'Unknown', title: 'D' },
+      { decision: 'interested', company: 'לא ידוע', title: 'F' },
+      { decision: 'interested', company: 'לא צוין', title: 'G' },
       { decision: 'not_relevant', company: 'Gamma', title: 'E' },
     ],
     watchedCompanies: ['acme ltd'],

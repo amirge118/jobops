@@ -87,6 +87,8 @@ const PLACEHOLDER_IDENTITIES = new Set([
   'משרה לא ידועה',
   'משרה לא מזוהה',
   'חברה לא מזוהה',
+  'לא ידוע',
+  'לא צוין',
 ]);
 
 // Legal/generic trailing words: "Check Point Software Technologies Ltd" and

@@ -81,14 +81,16 @@ export const SCHEDULES = [
   },
   // The weekly statistics report (scripts/jobs/weekly-stats.mjs): Sunday
   // 08:15, before the day's scans and off LinkedIn's 08:30 slot. A token-free snapshot, one Codex analysis,
-  // and a WhatsApp summary; launchd runs a slot missed in sleep on wake, and
-  // a second run in the same week does nothing.
+  // and a WhatsApp summary; launchd runs a slot missed in sleep on wake. The
+  // later slots do nothing unless the analysis failed, and then retry it.
+  // caffeinate stops the Mac sleeping again in the middle of the Codex call.
   {
     key: 'weekly-stats',
     label: 'com.amirgefen.jobops.weekly-stats',
     script: ['scripts', 'jobs', 'weekly-stats.mjs'],
     args: ['--send'],
-    times: [{ weekday: 0, hour: 8, minute: 15 }],
+    keepAwake: true,
+    times: [{ weekday: 0, hour: 8, minute: 15 }, { weekday: 0, hour: 12, minute: 15 }, { weekday: 0, hour: 18, minute: 15 }],
   },
   // A token-free check every 30 minutes: it processes the locally collected
   // WhatsApp backlog only once enough new jobs are waiting, or once the
@@ -117,6 +119,7 @@ export function renderScheduledScanAgent(schedule, { nodePath = process.execPath
     .map(({ weekday, hour, minute }) => `<dict>${weekday == null ? '' : `<key>Weekday</key><integer>${weekday}</integer>`}<key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>`)
     .join('')}</array>`;
   const argsXml = schedule.args.map((arg) => `<string>${xml(arg)}</string>`).join('');
+  const wrapper = schedule.keepAwake ? '<string>/usr/bin/caffeinate</string><string>-is</string>' : '';
   // Without a log, a skipped or failed scheduled run leaves no trace at all.
   const logPath = scheduleLogPath(schedule, rootDir);
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -125,7 +128,7 @@ export function renderScheduledScanAgent(schedule, { nodePath = process.execPath
 <dict>
   <key>Label</key><string>${xml(schedule.label)}</string>
   <key>ProgramArguments</key>
-  <array><string>${xml(nodePath)}</string><string>${xml(jobsPath)}</string>${argsXml}</array>
+  <array>${wrapper}<string>${xml(nodePath)}</string><string>${xml(jobsPath)}</string>${argsXml}</array>
   <key>WorkingDirectory</key><string>${xml(rootDir)}</string>
   <key>StandardOutPath</key><string>${xml(logPath)}</string>
   <key>StandardErrorPath</key><string>${xml(logPath)}</string>

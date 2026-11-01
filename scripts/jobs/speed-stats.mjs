@@ -3,6 +3,7 @@
 // tested without a database and recomputed on every dashboard load.
 
 import { normalizeCompanyIdentity } from './company-registry.mjs';
+import { companyIdentityKey } from './core.mjs';
 import { POSITIVE_DECISIONS as POSITIVE } from './decisions.mjs';
 
 const HOUR_MS = 60 * 60 * 1_000;
@@ -85,7 +86,7 @@ export function buildSpeedStats({
   // 4. Coverage: wanted jobs whose company is watched on its own board.
   const watched = new Set(watchedCompanies.map(identity).filter(Boolean));
   const positive = decisions.filter((item) => POSITIVE.has(item.decision));
-  const named = positive.filter((item) => identity(item.company) && !/^unknown$/i.test(String(item.company).trim()));
+  const named = positive.filter((item) => identity(item.company) && companyIdentityKey(item.company));
   const unwatched = new Map();
   for (const item of named) {
     if (watched.has(identity(item.company))) continue;
