@@ -948,6 +948,8 @@ npm run scan:dry
   and confirm on `/profile`; search rules and pre-filters are per-user settings, not code (ADR 0010).
 - **Sources belong to the owner:** one WhatsApp connection and one LinkedIn network feed everyone, so only the
   owner changes them; the picker shows group names, never their addresses (ADR 0011).
+- **Applications are rows:** `/tracker` lists and edits them, and `data/applications.md` is a copy for skills.
+  Suitable jobs appear only on the Decisions page; scans no longer append to `data/pipeline.md` (ADR 0012).
 - **One storage layer:** all SQL sits under `scripts/jobs/store/`, behind an async driver module and
   numbered migrations, so the database can be replaced later (ADR 0007).
 - **No scoring API key:** matching runs through the locally signed-in Codex CLI and explicitly

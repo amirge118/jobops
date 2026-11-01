@@ -10,16 +10,18 @@ import { canonicalScoringHash, scoringCriteria } from './scoring-hash.mjs';
 // skills that read them, and as the way in for what was there before. The demo
 // shares the real project folder and must never read or write these files.
 export const DOCUMENT_FILES = Object.freeze({
-  profile: '01-candidate-profile.md',
-  preferences: '02-preferences.md',
-  resume: '03-current-resume.md',
+  profile: 'profile/01-candidate-profile.md',
+  preferences: 'profile/02-preferences.md',
+  resume: 'profile/03-current-resume.md',
+  stories: 'data/story-bank.md',
 });
 export const DOCUMENT_KINDS = Object.freeze(Object.keys(DOCUMENT_FILES));
+const COPY_FILES = Object.freeze({ ...DOCUMENT_FILES, applications: 'data/applications.md' });
 
 const hashOf = (content) => createHash('sha256').update(content).digest('hex');
 
 function filePath(config, kind) {
-  return path.join(config.rootDir, 'profile', DOCUMENT_FILES[kind]);
+  return path.join(config.rootDir, COPY_FILES[kind]);
 }
 
 function readFile(config, kind) {
@@ -33,7 +35,7 @@ export async function importMissingFromFiles({ store, config, userId }) {
   for (const kind of DOCUMENT_KINDS) {
     if (await store.getCurrentDocument(userId, kind)) continue;
     const content = readFile(config, kind);
-    if (content !== null) missing.push({ kind, content });
+    if (content?.trim()) missing.push({ kind, content });
   }
   if (!missing.length) return [];
 
@@ -56,9 +58,7 @@ export async function driftedKinds({ store, config, userId }) {
   if (config.demo) return [];
   const drifted = [];
   for (const kind of DOCUMENT_KINDS) {
-    const content = readFile(config, kind);
-    const exported = await store.getProfileFileExport(userId, kind);
-    if (content !== null && exported !== null && hashOf(content) !== exported) drifted.push(kind);
+    if (await fileHasDrifted({ store, config, userId }, kind)) drifted.push(kind);
   }
   return drifted;
 }
@@ -82,6 +82,13 @@ export async function exportDocument({ store, config, userId }, { kind, content 
   }
   await store.saveProfileFileExport(userId, kind, hashOf(content));
   return 'written';
+}
+
+export async function fileHasDrifted({ store, config, userId }, kind) {
+  if (config.demo) return false;
+  const content = readFile(config, kind);
+  const exported = await store.getProfileFileExport(userId, kind);
+  return content !== null && exported !== null && hashOf(content) !== exported;
 }
 
 export function readDocumentFile(config, kind) {

@@ -33,3 +33,5 @@ Input: job URL, pasted JD text, or `pipeline` (process `data/pipeline.md` Pendin
 2. **Report:** save to `reports/{###}-{company-slug}-{YYYY-MM-DD}.md` (### = max existing + 1, zero-padded). Header must include Date, URL, Score, Legitimacy, Status.
 3. **Tracker:** add/update row in `data/applications.md` with status `Evaluated` (or `SKIP`). NEVER create a duplicate row for an existing company+role — update it. Canonical statuses only (see `templates/states.yml`).
 4. Tell the user the score, the 3 strongest match points, the biggest gap, and your apply/skip recommendation.
+
+- `data/applications.md` is a copy of the rows on the dashboard's `/tracker` page. After editing it, run `npm run tracker:adopt`, or the app keeps its saved rows and refuses to overwrite your edit.

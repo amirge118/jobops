@@ -26,3 +26,5 @@ Read `data/applications.md` and present:
 ## Canonical states
 `Evaluated → Applied → Responded → Interview → Offer` plus terminal `Rejected / Discarded / SKIP`.
 No bold, no dates, no free text in the Status column.
+
+- `data/applications.md` is a copy of the rows on the dashboard's `/tracker` page. After editing it, run `npm run tracker:adopt`, or the app keeps its saved rows and refuses to overwrite your edit.

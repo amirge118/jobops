@@ -27,6 +27,7 @@ import { createWeeklyReportsRepository } from './repositories/weekly-reports.mjs
 import { createPulseRepository } from './repositories/pulse.mjs';
 import { createProfileDocumentsRepository } from './repositories/profile-documents.mjs';
 import { createRescoreRepository } from './repositories/rescore.mjs';
+import { createApplicationsRepository } from './repositories/applications.mjs';
 import { createUsersRepository } from './repositories/users.mjs';
 import { createWeeklyStatsRepository } from './repositories/weekly-stats.mjs';
 
@@ -52,6 +53,7 @@ const REPOSITORIES = [
   createWeeklyReportsRepository,
   createPulseRepository,
   createUsersRepository,
+  createApplicationsRepository,
   createRescoreRepository,
   createProfileDocumentsRepository,
   createWeeklyStatsRepository,

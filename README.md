@@ -190,6 +190,11 @@ thresholds and the free title filters, which AI can suggest for your field. Sour
 groups to read, up to six LinkedIn searches, alerts, and which companies you blocked. After a change, existing scores
 stay until you see the estimated AI cost and confirm a re-score, optionally including recent rejections.
 
+## Tracks where every application stands
+
+The `/tracker` page lists your applications with status filters, inline status and notes, and what is due for
+a follow-up. Interview stories live on `/profile` with the same version history.
+
 ## Shows what your CV is missing for a perfect fit
 
 Every suitable job is checked against your exact current CV, and the result is kept after you

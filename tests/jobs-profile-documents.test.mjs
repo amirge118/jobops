@@ -197,7 +197,7 @@ test('a failed file copy does not undo the save', async (context) => {
 
 test('the demo never reads or writes the real files', async (context) => {
   const { service, store, load, rootDir } = setup(context, { demo: true });
-  assert.deepEqual((await service.overview()).documents, { profile: null, preferences: null, resume: null }, 'real files are not imported');
+  assert.deepEqual((await service.overview()).documents, { profile: null, preferences: null, resume: null, stories: null }, 'real files are not imported');
   await assert.rejects(load(), /Missing candidate profile/);
   const result = await service.saveDocument('resume', 'demo text\n', { baseVersion: null });
   assert.equal(result.fileCopy, 'skipped');

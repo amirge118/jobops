@@ -675,3 +675,10 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 16px
 .profile-group .button { margin-top: 10px; }
 .profile-subtitle { margin: 16px 0 4px; font-size: 14px; }
 .profile-notice p { margin: 0 0 6px; }
+
+/* Tracker page */
+.tracker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+.tracker-table { width: 100%; border-collapse: collapse; }
+.tracker-table th, .tracker-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-strong); text-align: start; vertical-align: top; }
+.tracker-table input, .tracker-table select { box-sizing: border-box; width: 100%; min-width: 110px; }
+.tracker-follow-up td:first-child { color: var(--accent-text); font-weight: 600; }

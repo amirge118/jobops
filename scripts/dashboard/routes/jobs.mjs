@@ -1,8 +1,7 @@
-import path from 'node:path';
-
 import { WANTED_JOB_DECISIONS } from '../../jobs/decisions.mjs';
 import { createJobStore, JOB_DECISIONS } from '../../jobs/store.mjs';
-import { recordApplicationInTracker } from '../../jobs/tracker.mjs';
+import { resolveCurrentUser } from '../../jobs/current-user.mjs';
+import { createTrackerService } from '../../jobs/tracker/tracker-service.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from '../../liveness-browser.mjs';
 import { readJson, requireObjectBody, sendJson } from '../http.mjs';
 
@@ -36,11 +35,15 @@ export function createJobsRoutes({ config, snapshot }) {
       let tracker = null;
       if (body.decision === 'applied') {
         try {
-          // The demo shares the real rootDir; its tracker lives in the demo's temp dir.
-          tracker = recordApplicationInTracker(config.demo ? path.dirname(config.jobsDbPath) : config.rootDir, {
-            company: job.company, title: job.title, score: job.score, applyUrl: job.apply_url,
-            date: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jerusalem' }),
-          });
+          const store = createJobStore(config.jobsDbPath);
+          try {
+            tracker = await createTrackerService({ store, config, userId: resolveCurrentUser().id }).recordApplied({
+              company: job.company, title: job.title, score: job.score, applyUrl: job.apply_url,
+              date: new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jerusalem' }),
+            });
+          } finally {
+            store.close();
+          }
         } catch (error) {
           tracker = { action: 'failed', reason: String(error?.message || error).slice(0, 200) };
         }

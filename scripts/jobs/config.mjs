@@ -25,7 +25,6 @@ export function loadJobsConfig(configPath = process.env.JOBOPS_JOBS_CONFIG) {
   config.configPath = resolvedPath;
   config.dataDir = path.join(ROOT_DIR, 'data');
   config.reportsDir = path.join(ROOT_DIR, 'reports', 'daily');
-  config.pipelinePath = path.join(ROOT_DIR, 'data', 'pipeline.md');
   config.jobsDbPath = path.join(ROOT_DIR, 'data', 'jobs.db');
   const whatsapp = config.sources.whatsapp;
   if (whatsapp?.authPath) whatsapp.authAbsPath = path.resolve(ROOT_DIR, whatsapp.authPath);

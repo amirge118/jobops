@@ -310,8 +310,9 @@ async function defaultCollectors(config, reportStore) {
   const { createDashboardQueries } = await import('../dashboard/queries.mjs');
   const { aggregateGaps } = await import('./gap-insights.mjs');
   const { createJobStore } = await import('./store.mjs');
-  const trackerPath = path.join(config.rootDir, 'data', 'applications.md');
-  const trackerMarkdown = fs.existsSync(trackerPath) ? fs.readFileSync(trackerPath, 'utf8') : '';
+  const { createTrackerService } = await import('./tracker/tracker-service.mjs');
+  const { resolveCurrentUser } = await import('./current-user.mjs');
+  const trackerMarkdown = await createTrackerService({ store: reportStore, config, userId: resolveCurrentUser().id }).markdown();
   const decisionStats = await createDashboardQueries(config, null).decisionStats();
   const store = createJobStore(config.jobsDbPath);
   let gaps = [];

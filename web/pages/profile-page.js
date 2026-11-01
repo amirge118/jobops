@@ -7,7 +7,7 @@ import { createRescoreBanner } from './profile-rescore-banner.js';
 import { createSearchForm } from './profile-search-form.js';
 import { createSourcesSection } from './profile-sources-section.js';
 
-const KIND_LABELS = { resume: 'קורות החיים', preferences: 'ההעדפות', profile: 'המידע הנוסף' };
+const KIND_LABELS = { resume: 'קורות החיים', preferences: 'ההעדפות', profile: 'המידע הנוסף', stories: 'הסיפורים לראיונות' };
 const feedbackLine = document.querySelector('#page-feedback');
 const drift = document.querySelector('#file-drift');
 
@@ -61,6 +61,7 @@ async function refreshFromServer() {
 const refreshQuietly = () => Promise.all([refreshFromServer(), rescoreBanner.refresh()]).catch(() => {});
 
 editors.resume = createDocumentEditor({ root: document.querySelector('#editor-resume'), kind: 'resume', feedback, onSaved: refreshQuietly });
+editors.stories = createDocumentEditor({ root: document.querySelector('#editor-stories'), kind: 'stories', feedback });
 editors.preferences = createDocumentEditor({ root: document.querySelector('#editor-preferences'), kind: 'preferences', feedback, onSaved: () => rescoreBanner.refresh() });
 editors.profile = createDocumentEditor({ root: document.querySelector('#editor-profile'), kind: 'profile', feedback, onSaved: refreshQuietly });
 identityForm = createIdentityForm({

@@ -16,7 +16,6 @@ import {
   createHireMeTechResolver, hireMeTechProfileExists, hireMeTechProfilePath, launchHireMeTechContext,
 } from './jobs/hiremetech-resolve.mjs';
 import { openJobUrls } from './jobs/open.mjs';
-import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
 import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
 import { createGapCoverageChecker, refreshGapCoverage } from './jobs/gap-coverage.mjs';
@@ -1382,7 +1381,6 @@ async function runJobsLocked(options, config) {
       const paths = reportPaths(config.reportsDir, generatedAt);
       fs.writeFileSync(paths.dated, report, 'utf8');
       fs.writeFileSync(paths.latest, report, 'utf8');
-      appendMatchingJobs(config.pipelinePath, matchingJobs);
       const notified = await queueJobNotifications({ store, jobs: matchingJobs, config });
       if (notified) console.log(`${notified} התראות WhatsApp על משרות חזקות נוספו לתור; ה-Collector ישלח אותן.`);
       // Mark equivalent source records together so a duplicate cannot surface tomorrow.

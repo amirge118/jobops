@@ -27,6 +27,7 @@ import { createProfileRoutes } from './dashboard/routes/profile.mjs';
 import { createSearchSettingsRoutes } from './dashboard/routes/search-settings.mjs';
 import { createSourceSettingsRoutes } from './dashboard/routes/source-settings.mjs';
 import { createSourcesRoutes } from './dashboard/routes/sources.mjs';
+import { createTrackerRoutes } from './dashboard/routes/tracker.mjs';
 import { CONFIG_RESTART_EXIT_CODE, watchConfigForRestart } from './dashboard/config-watch.mjs';
 import { DASHBOARD_LABEL } from './dashboard/service.mjs';
 import { applySourceChange } from './dashboard/source-change.mjs';
@@ -98,6 +99,7 @@ export async function createDashboardServer({
     createCompaniesRoutes({ config, queries, companyResearch, probeSource, resolveWithBrowser, browserProbe }),
     createActionsRoutes({ config, readinessService, startAction }),
     createJobsRoutes({ config, snapshot }),
+    createTrackerRoutes({ config }),
   ];
 
   const server = http.createServer(async (request, response) => {
