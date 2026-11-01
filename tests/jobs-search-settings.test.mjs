@@ -79,6 +79,7 @@ test('changing what the prompt is built from makes scores outdated; thresholds a
 
 test('a re-score waits for a request, counts the cost, and only touches what is outdated', async (context) => {
   const { store, config } = setup(context);
+  await loadCandidateContext({ store, config, userId: USER });
   await saveUserSettings(store, USER, { 'search.maxLevel': 'Lead' }, config);
   const { profileHash: current } = await loadCandidateContext({ store, config, userId: USER });
   const now = Date.now();
@@ -126,6 +127,7 @@ test('old rejections are not offered until something actually changed', async (c
 
 test('rejected re-scores are capped', async (context) => {
   const { store, config } = setup(context);
+  await loadCandidateContext({ store, config, userId: USER });
   await saveUserSettings(store, USER, { 'search.maxLevel': 'Lead' }, config);
   const raw = new Database(config.jobsDbPath);
   context.after(() => raw.close());
