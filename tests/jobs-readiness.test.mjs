@@ -3,9 +3,19 @@ import assert from 'node:assert/strict';
 
 import {
   blockersForAction,
+  createReadinessService,
   inspectRuntimeReadiness,
 } from '../scripts/dashboard/readiness.mjs';
 import { assertExternalRuntime, collectorNeedsRestart } from '../scripts/start-local.mjs';
+
+test('readiness service resolves an async collector before inspecting it', async () => {
+  const seen = [];
+  const service = createReadinessService({}, async () => ({ status: 'connected' }), {
+    inspect: async ({ collector }) => { seen.push(collector); return { checkedAt: Date.now() }; },
+  });
+  await service.inspect();
+  assert.deepEqual(seen, [{ status: 'connected' }]);
+});
 
 test('local launcher refuses a Codex sandbox and accepts a normal terminal', () => {
   assert.throws(

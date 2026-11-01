@@ -173,7 +173,8 @@ export function createReadinessService(config, getCollector, {
     async inspect({ force = false } = {}) {
       if (!force && cached && Date.now() - cached.checkedAt < ttlMs) return cached;
       if (pending) return pending;
-      pending = Promise.resolve(inspect({ config, collector: getCollector() }))
+      pending = Promise.resolve(getCollector())
+        .then((collector) => inspect({ config, collector }))
         .then((result) => { cached = result; return result; })
         .finally(() => { pending = null; });
       return pending;
