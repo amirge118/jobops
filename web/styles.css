@@ -150,7 +150,6 @@ strong { font-weight: 600; }
 .companies-section,
 .whatsapp-history-panel,
 .linkedin-panel,
-.source-performance-panel,
 .readiness-panel,
 .scan-result-panel,
 .health-panel,
@@ -163,7 +162,6 @@ strong { font-weight: 600; }
 .control-panel,
 .whatsapp-history-panel,
 .linkedin-panel,
-.source-performance-panel,
 .scan-result-panel,
 .health-panel,
 .audit-panel { padding: 14px 16px; }
@@ -337,6 +335,8 @@ details > summary:hover { color: var(--ink); }
 .llm-usage-table { min-width: 560px; }
 .llm-usage-table td > small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
 #llm-quota[data-state="blocked"] { color: var(--red); }
+.llm-runs { margin: 10px 0 0; padding: 10px 0 0; }
+.llm-runs > summary { padding: 0 16px 8px; }
 .llm-daily-summary { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-bottom: 10px; }
 .llm-source-card .decision-bar-track { margin: 4px 0; }
 .llm-source-card[data-source="linkedin"] .decision-bar-track i { background: var(--blue); }
@@ -602,7 +602,7 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 16px
 .stats-tables .table-wrap { border: 1px solid var(--line); border-radius: var(--r-sm); }
 .stats-table { min-width: 0; }
 .recent-table { min-width: 600px; }
-.stats-section > .table-wrap { margin: 0 16px; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.stats-section > .table-wrap, .llm-runs .table-wrap { margin: 0 16px; border: 1px solid var(--line); border-radius: var(--r-sm); }
 .recent-table a { color: inherit; text-decoration: none; }
 .recent-table a:hover .job-title { text-decoration: underline; }
 .stats-subtitle { margin: 12px 16px 6px; font-size: 12px; font-weight: 600; }

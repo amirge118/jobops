@@ -52,6 +52,13 @@
             <div id="stats-empty" class="empty-state"><strong>עדיין לא נרשמו החלטות</strong><span>כל לחיצה על "הגשתי" או על סיבה ל"לא הגשתי" בעמוד ההחלטות תופיע כאן.</span><a class="button button-secondary" href="/decisions">עבור להחלטות</a></div>
           </div>
         </section>
+        <section class="page-section stats-section" aria-labelledby="llm-usage-title">
+          <div class="section-heading"><div><h2 id="llm-usage-title">צריכת Codex ומכסה</h2><p id="llm-quota">טוען…</p></div><span id="llm-model" class="source-badge"></span></div>
+          <div class="table-wrap"><table class="stats-table llm-usage-table"><thead><tr><th>שימוש</th><th>קריאות (24 שעות)</th><th>טוקנים (24 שעות)</th><th>קריאות (שבוע)</th><th>טוקנים (שבוע)</th><th>טוקנים לפריט (שבוע)</th></tr></thead><tbody id="llm-usage-body"></tbody></table></div>
+          <details class="source-details llm-runs"><summary>לפי ריצה</summary>
+            <div class="table-wrap"><table class="stats-table llm-usage-table"><thead><tr><th>ריצה</th><th>מקורות</th><th>קריאות</th><th>פריטים</th><th>טוקנים</th><th>לפריט</th></tr></thead><tbody id="llm-runs-body"></tbody></table></div>
+          </details>
+        </section>
         <section class="page-section stats-section" aria-labelledby="llm-daily-title">
           <div class="section-heading"><div><h2 id="llm-daily-title">צריכת Codex לפי מקור</h2><p>טוקנים של ניקוד וניתוח קורות חיים, מחולקים לפי המקור שהביא כל משרה. <span id="llm-daily-model"></span></p></div>
             <div class="stats-window" role="group" aria-label="טווח צריכה"><button type="button" data-llm-days="7" aria-pressed="true">7 ימים</button><button type="button" data-llm-days="14">14 יום</button><button type="button" data-llm-days="30">30 יום</button></div></div>

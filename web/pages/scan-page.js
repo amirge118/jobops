@@ -28,9 +28,7 @@ const elements = {
   backlogTotal: document.querySelector('#backlog-total'), backlogSummary: document.querySelector('#backlog-summary'),
   backlogGroups: document.querySelector('#history-groups-body'), processRecentBacklog: document.querySelector('#process-recent-backlog'),
   requestHistory: document.querySelector('#request-history'), historyRequestStatus: document.querySelector('#history-request-status'),
-  sourcePerformanceBody: document.querySelector('#source-performance-body'),
-  llmModel: document.querySelector('#llm-model'), llmQuota: document.querySelector('#llm-quota'),
-  llmUsageBody: document.querySelector('#llm-usage-body'), llmRunsBody: document.querySelector('#llm-runs-body'),
+  llmQuotaAlert: document.querySelector('#llm-quota-alert'), llmQuotaAlertText: document.querySelector('#llm-quota-alert-text'),
   linkedinHours: document.querySelector('#linkedin-hours'), linkedinHoursField: document.querySelector('#linkedin-hours-field'),
   linkedinPanel: document.querySelector('#linkedin-panel'), linkedinEnabled: document.querySelector('#linkedin-enabled'),
   linkedinSummary: document.querySelector('#linkedin-summary'), linkedinSearches: document.querySelector('#linkedin-searches-body'),
@@ -271,66 +269,12 @@ function renderWhatsAppHistory(history, insights) {
     ${groupResults ? `<small>${escapeHtml(groupResults)}</small>` : ''}`;
 }
 
-const sourceRowLabels = { ats: 'ATS', whatsapp: 'WhatsApp', linkedin: 'LinkedIn' };
-
-function costLabel(value) {
-  return value == null ? '—' : value.toFixed(1);
-}
-
-function renderSourcePerformance(insights) {
-  const short = insights?.windows?.['36h']?.sourcePerformance;
-  const week = insights?.windows?.['7d']?.sourcePerformance;
-  if (!short || !week) { elements.sourcePerformanceBody.innerHTML = ''; return; }
-  elements.sourcePerformanceBody.innerHTML = Object.keys(sourceRowLabels).filter((source) => short[source] && week[source]).map((source) => `<tr>
-    <td><strong>${escapeHtml(sourceRowLabels[source])}</strong></td>
-    <td>${Number(short[source].processed)}</td>
-    <td>${Number(short[source].suitable)}</td>
-    <td>${escapeHtml(costLabel(short[source].costPerSuitable))}</td>
-    <td>${Number(week[source].processed)}</td>
-    <td>${Number(week[source].suitable)}</td>
-    <td>${escapeHtml(costLabel(week[source].costPerSuitable))}</td>
-  </tr>`).join('');
-}
-
-const llmPurposeLabels = { scoring: 'ניקוד משרות', resume_gap: 'ניתוח קורות חיים', company_research: 'מחקר חברה', probe: 'בדיקת מכסה', other: 'אחר' };
-const tokens = (value) => Number(value || 0).toLocaleString('en-US');
-
-function tokenTotal(row) {
-  return Number(row?.inputTokens || 0) + Number(row?.outputTokens || 0);
-}
-
-function renderLlmUsage(usage) {
-  if (!usage) return;
-  elements.llmModel.textContent = `מודל: ${usage.model}${usage.reasoningEffort ? ` · ${usage.reasoningEffort}` : ''}`;
-  const quota = usage.quota || {};
-  const blocked = quota.blockedUntil && quota.blockedUntil > Date.now();
-  elements.llmQuota.dataset.state = blocked ? 'blocked' : 'ok';
-  const windowText = (label, window) => (window ? `${label}: ${Math.round(window.usedPercent)}% נוצלו${window.resetsAt ? `, מתאפס ${formatTime(window.resetsAt)}` : ''}` : '');
-  const limits = usage.rateLimits;
-  const windows = limits ? [windowText('חלון 5 שעות', limits.primary), windowText('שבועי', limits.secondary)].filter(Boolean).join(' · ') : '';
-  elements.llmQuota.textContent = blocked
-    ? `המכסה נגמרה ותתחדש בערך ב-${formatTime(quota.blockedUntil)}. סריקות מדולגות עד אז; אין צורך בפעולה.${windows ? ` (${windows})` : ''}`
-    : `${windows ? `${windows} (לפי Codex, נכון ל-${formatTime(limits.observedAt)})` : 'יש מכסה'}${quota.lastSkipAt ? ` · ריצה אחרונה שדולגה בגלל מכסה ${formatTime(quota.lastSkipAt)}` : ''}.`;
-  const purposes = [...new Set([...(usage.day || []), ...(usage.week || [])].map((row) => row.purpose))];
-  const find = (rows, purpose) => (rows || []).find((row) => row.purpose === purpose);
-  elements.llmUsageBody.innerHTML = purposes.map((purpose) => {
-    const day = find(usage.day, purpose);
-    const week = find(usage.week, purpose);
-    const perItem = week?.items ? Math.round(tokenTotal(week) / week.items) : null;
-    return `<tr>
-      <td><strong>${escapeHtml(llmPurposeLabels[purpose] || purpose)}</strong>${week?.limited ? `<small>${Number(week.limited)} קריאות נחסמו במכסה</small>` : ''}</td>
-      <td>${Number(day?.calls || 0)}</td><td>${tokens(tokenTotal(day))}</td>
-      <td>${Number(week?.calls || 0)}</td><td>${tokens(tokenTotal(week))}</td>
-      <td>${perItem == null ? '—' : tokens(perItem)}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="6">עדיין לא נמדדו קריאות. המדידה מתחילה מהריצה הבאה.</td></tr>';
-  elements.llmRunsBody.innerHTML = (usage.runs || []).map((run) => `<tr>
-    <td>#${Number(run.runId)}<small>${escapeHtml(formatTime(run.startedAt))}</small></td>
-    <td>${escapeHtml((run.sources || []).join(', ') || '—')}</td>
-    <td>${Number(run.calls)}${run.failedCalls ? `<small>${Number(run.failedCalls)} נכשלו</small>` : ''}</td>
-    <td>${Number(run.items)}</td><td>${tokens(run.totalTokens)}</td>
-    <td>${run.items ? tokens(Math.round(run.totalTokens / run.items)) : '—'}</td>
-  </tr>`).join('') || '<tr><td colspan="6">אין עדיין ריצות מדודות.</td></tr>';
+// The usage itself is on the statistics page; here only what stops the scans.
+function renderLlmQuotaAlert(usage) {
+  const blockedUntil = usage?.quota?.blockedUntil;
+  const blocked = Boolean(blockedUntil && blockedUntil > Date.now());
+  elements.llmQuotaAlert.hidden = !blocked;
+  if (blocked) elements.llmQuotaAlertText.textContent = `תתחדש בערך ב-${formatTime(blockedUntil)}. סריקות מדולגות עד אז; אין צורך בפעולה.`;
 }
 
 function atsCountLabel(ats) {
@@ -485,9 +429,8 @@ async function loadScan({ refreshReadiness = false } = {}) {
     renderDiagnosis(state.diagnosis, state.lastRun);
     renderRunAudit(state.lastRun);
     renderWhatsAppHistory(state.whatsappHistory, state.insights);
-    renderSourcePerformance(state.insights);
     renderLinkedIn(state.linkedin);
-    renderLlmUsage(state.llmUsage);
+    renderLlmQuotaAlert(state.llmUsage);
     elements.updated.textContent = `עודכן ${formatTime(Date.now())}`;
     window.dispatchEvent(new Event('jobops:refresh-summary'));
   } catch (error) {

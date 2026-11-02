@@ -737,8 +737,9 @@ rather than sent late. Set `notifications.whatsapp.enabled: false` to turn it of
 Every Codex call runs `codex exec --json`. The final agent message is the structured answer, and
 `turn.completed` reports input, cached-input, output, and reasoning tokens. Each call is stored in
 the `codex_calls` table (purpose, model, jobs in the batch, tokens, duration, outcome; kept for 90
-days). Each CLI run prints a token line, and the scan page's "צריכת Codex" panel shows 24-hour and
-7-day totals per purpose, tokens per scored item, and a per-run breakdown.
+days). Each CLI run prints a token line, and the statistics page shows the quota, 24-hour and 7-day
+totals per purpose, tokens per scored item, a per-run breakdown (`/api/llm-usage`), and tokens per
+day and source. The scan page only warns when the quota has run out.
 
 `scoring.model` in `config/jobs.yml` selects the model for all Codex calls (currently
 `gpt-reserve`, Codex's "fast and affordable" tier). Without it, `codex exec` uses its own default

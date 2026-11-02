@@ -39,6 +39,11 @@ export function createOverviewRoutes({ config, queries, readinessService, snapsh
       return true;
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/llm-usage') {
+      sendJson(response, 200, await queries.llmUsage());
+      return true;
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/llm-usage/daily') {
       const days = Number(url.searchParams.get('days') || 14);
       sendJson(response, 200, await queries.dailyLlmUsage(days));

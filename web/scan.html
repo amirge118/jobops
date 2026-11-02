@@ -12,6 +12,7 @@
     <div id="app-shell"></div>
     <div class="shell">
       <aside id="demo-banner" class="demo-banner" hidden><strong>מצב הדגמה</strong><span>כל המידע במסך הזה סינתטי.</span></aside>
+      <aside id="llm-quota-alert" class="demo-banner" hidden><strong>מכסת Codex נגמרה</strong><span id="llm-quota-alert-text"></span><a href="/decision-stats">פירוט הצריכה</a></aside>
 
       <main class="page-main">
         <section class="control-panel" aria-labelledby="scan-title">
@@ -101,21 +102,6 @@
             <div class="history-groups-wrap"><table class="history-groups"><thead><tr><th>קבוצה</th><th>קורא עכשיו?</th><th>ממתין לעיבוד</th><th>עובד לאחרונה</th><th></th></tr></thead><tbody id="history-groups-body"></tbody></table></div>
           </section>
         </div>
-
-        <section id="llm-usage-panel" class="source-performance-panel llm-usage-panel" aria-labelledby="llm-usage-title">
-          <div class="history-heading"><h2 id="llm-usage-title">צריכת Codex</h2><span id="llm-model" class="source-badge"></span></div>
-          <p id="llm-quota" class="history-summary">טוען…</p>
-          <div class="audit-table-wrap"><table class="audit-table llm-usage-table"><thead><tr><th>שימוש</th><th>קריאות (24 שעות)</th><th>טוקנים (24 שעות)</th><th>קריאות (שבוע)</th><th>טוקנים (שבוע)</th><th>טוקנים לפריט (שבוע)</th></tr></thead><tbody id="llm-usage-body"></tbody></table></div>
-          <details class="source-details llm-runs"><summary>לפי ריצה</summary>
-            <div class="audit-table-wrap"><table class="audit-table llm-usage-table"><thead><tr><th>ריצה</th><th>מקורות</th><th>קריאות</th><th>פריטים</th><th>טוקנים</th><th>לפריט</th></tr></thead><tbody id="llm-runs-body"></tbody></table></div>
-          </details>
-        </section>
-
-        <section id="source-performance-panel" class="source-performance-panel" aria-labelledby="source-performance-title">
-          <div class="history-heading"><h2 id="source-performance-title">עלות לכל משרה מתאימה, לפי מקור</h2></div>
-          <p class="history-summary">כמה משרות כל מקור שלח לניקוד מול כמה יצאו מתאימות. משרות שסוננו מקומית לפני ניקוד לא נכללות.</p>
-          <div class="audit-table-wrap"><table class="audit-table"><thead><tr><th>מקור</th><th>עובדו (36 שעות)</th><th>מתאימות (36 שעות)</th><th>עלות לכל התאמה (36 שעות)</th><th>עובדו (שבוע)</th><th>מתאימות (שבוע)</th><th>עלות לכל התאמה (שבוע)</th></tr></thead><tbody id="source-performance-body"></tbody></table></div>
-        </section>
       </main>
       <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
     </div>

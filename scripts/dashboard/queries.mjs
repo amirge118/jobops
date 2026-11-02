@@ -3,7 +3,7 @@ import { DEFAULT_EXACT_MATCH_SCORE, DEFAULT_MINIMUM_SCORE } from '../jobs/core.m
 import { resolveCurrentUser } from '../jobs/current-user.mjs';
 import { applyUserSettings } from '../jobs/user-settings.mjs';
 import { loadCandidateContext } from '../jobs/candidate/candidate-context.mjs';
-import { aggregateGroupStats, aggregateSourcePerformance, STATS_WINDOWS } from '../jobs/insights.mjs';
+import { aggregateGroupStats, STATS_WINDOWS } from '../jobs/insights.mjs';
 import { RESUME_GAP_VERSION } from '../jobs/resume-gap.mjs';
 import { buildDecisionStats } from '../jobs/decision-stats.mjs';
 import { buildSourceValue, SOURCE_VALUE_WINDOW_DAYS } from '../jobs/source-value.mjs';
@@ -137,14 +137,13 @@ export function createDashboardQueries(config, action) {
 
   // Rolling-window view across every finished run, not just the last one —
   // a single run's numbers can't tell "which WhatsApp group actually brings
-  // jobs" or "is ATS or WhatsApp costing more per suitable job" apart from
-  // noise. See scripts/jobs/insights.mjs for how a window is summed.
+  // jobs" apart from noise. See scripts/jobs/insights.mjs for how a window is summed.
   const insights = async (store) => {
     const now = Date.now();
     const windows = {};
     for (const [key, spanMs] of Object.entries(STATS_WINDOWS)) {
       const runs = await store.listRuns({ sinceMs: now - spanMs });
-      windows[key] = { groups: aggregateGroupStats(runs), sourcePerformance: aggregateSourcePerformance(runs), runsCounted: runs.length };
+      windows[key] = { groups: aggregateGroupStats(runs), runsCounted: runs.length };
     }
     return { windows };
   };
@@ -237,6 +236,10 @@ export function createDashboardQueries(config, action) {
 
     async linkedin() {
       return await withStore(async (store) => await linkedin(store));
+    },
+
+    async llmUsage() {
+      return await withStore(llmUsage);
     },
 
     async dailyLlmUsage(days = 14) {

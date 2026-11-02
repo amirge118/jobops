@@ -1,13 +1,18 @@
-// Daily Codex token usage per source, on the statistics page. Kept in its
-// own module so the decision-statistics controller stays independent.
+// Codex quota and token usage, per purpose, run, and day and source, on the
+// statistics page. Kept in its own module so the decision-statistics controller
+// stays independent.
 import { requestJson } from '../shared/api-client.js';
-import { escapeHtml } from '../shared/formatters.js';
+import { escapeHtml, formatTime } from '../shared/formatters.js';
 
 const elements = {
   summary: document.querySelector('#llm-daily-summary'),
   body: document.querySelector('#llm-daily-body'),
   model: document.querySelector('#llm-daily-model'),
   range: document.querySelector('[data-llm-days]')?.parentElement,
+  usageModel: document.querySelector('#llm-model'),
+  quota: document.querySelector('#llm-quota'),
+  usageBody: document.querySelector('#llm-usage-body'),
+  runsBody: document.querySelector('#llm-runs-body'),
 };
 
 const sourceLabels = {
@@ -62,6 +67,56 @@ function render(data) {
   </tr>`).join('') || '<tr><td colspan="6">אין נתונים בטווח.</td></tr>';
 }
 
+const purposeLabels = {
+  scoring: 'ניקוד משרות', resume_gap: 'ניתוח קורות חיים', gap_coverage: 'בדיקת כיסוי פערים', weekly_stats: 'דוח שבועי',
+  company_research: 'מחקר חברה', probe: 'בדיקת מכסה', other: 'אחר',
+};
+
+function tokenTotal(row) {
+  return Number(row?.inputTokens || 0) + Number(row?.outputTokens || 0);
+}
+
+function renderUsage(usage) {
+  elements.usageModel.textContent = `מודל: ${usage.model}${usage.reasoningEffort ? ` · ${usage.reasoningEffort}` : ''}`;
+  const quota = usage.quota || {};
+  const blocked = quota.blockedUntil && quota.blockedUntil > Date.now();
+  elements.quota.dataset.state = blocked ? 'blocked' : 'ok';
+  const windowText = (label, window) => (window ? `${label}: ${Math.round(window.usedPercent)}% נוצלו${window.resetsAt ? `, מתאפס ${formatTime(window.resetsAt)}` : ''}` : '');
+  const limits = usage.rateLimits;
+  const windows = limits ? [windowText('חלון 5 שעות', limits.primary), windowText('שבועי', limits.secondary)].filter(Boolean).join(' · ') : '';
+  elements.quota.textContent = blocked
+    ? `המכסה נגמרה ותתחדש בערך ב-${formatTime(quota.blockedUntil)}. סריקות מדולגות עד אז; אין צורך בפעולה.${windows ? ` (${windows})` : ''}`
+    : `${windows ? `${windows} (לפי Codex, נכון ל-${formatTime(limits.observedAt)})` : 'יש מכסה'}${quota.lastSkipAt ? ` · ריצה אחרונה שדולגה בגלל מכסה ${formatTime(quota.lastSkipAt)}` : ''}.`;
+  const purposes = [...new Set([...(usage.day || []), ...(usage.week || [])].map((row) => row.purpose))];
+  const find = (rows, purpose) => (rows || []).find((row) => row.purpose === purpose);
+  elements.usageBody.innerHTML = purposes.map((purpose) => {
+    const day = find(usage.day, purpose);
+    const week = find(usage.week, purpose);
+    const perItem = week?.items ? Math.round(tokenTotal(week) / week.items) : null;
+    return `<tr>
+      <td><strong>${escapeHtml(purposeLabels[purpose] || purpose)}</strong>${week?.limited ? `<small>${Number(week.limited)} קריאות נחסמו במכסה</small>` : ''}</td>
+      <td>${Number(day?.calls || 0)}</td><td>${tokens(tokenTotal(day))}</td>
+      <td>${Number(week?.calls || 0)}</td><td>${tokens(tokenTotal(week))}</td>
+      <td>${perItem == null ? '—' : tokens(perItem)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6">עדיין לא נמדדו קריאות. המדידה מתחילה מהריצה הבאה.</td></tr>';
+  elements.runsBody.innerHTML = (usage.runs || []).map((run) => `<tr>
+    <td>#${Number(run.runId)}<small>${escapeHtml(formatTime(run.startedAt))}</small></td>
+    <td>${escapeHtml((run.sources || []).join(', ') || '—')}</td>
+    <td>${Number(run.calls)}${run.failedCalls ? `<small>${Number(run.failedCalls)} נכשלו</small>` : ''}</td>
+    <td>${Number(run.items)}</td><td>${tokens(run.totalTokens)}</td>
+    <td>${run.items ? tokens(Math.round(run.totalTokens / run.items)) : '—'}</td>
+  </tr>`).join('') || '<tr><td colspan="6">אין עדיין ריצות מדודות.</td></tr>';
+}
+
+async function loadUsage() {
+  try {
+    renderUsage(await requestJson('/api/llm-usage'));
+  } catch (error) {
+    elements.quota.textContent = error.message;
+  }
+}
+
 async function load(days) {
   try {
     render(await requestJson(`/api/llm-usage/daily?days=${Number(days)}`));
@@ -77,4 +132,5 @@ elements.range?.addEventListener('click', (event) => {
   load(button.dataset.llmDays);
 });
 
+loadUsage();
 load(7);

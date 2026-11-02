@@ -134,9 +134,10 @@ Scoring runs on your ChatGPT plan through `codex exec`, so the real budget is yo
 limit, not money.
 
 - 🧮 **Every call is measured** — tokens in, cached, out, and reasoning, per purpose (scoring,
-  resume analysis, company research), per run, and per day. The statistics page splits daily usage
-  by source and shows **tokens per suitable job** for LinkedIn, WhatsApp, and ATS — the number
-  that says which source is worth its cost.
+  resume analysis, company research), per run, and per day. The statistics page shows all of it
+  with the remaining quota, splits daily usage by source, and shows **tokens per suitable job** for
+  LinkedIn, WhatsApp, and ATS — the number that says which source is worth its cost. The scan page
+  only warns when the quota has run out.
 - 💸 **A cheaper model by default** — `scoring.model` picks the model for every call (currently
   Codex's fast and affordable tier); a stronger model can be kept for resume analysis only.
 - 📦 **Scores in batches** — every Codex call pays ~10k fixed tokens (Codex's own instructions plus

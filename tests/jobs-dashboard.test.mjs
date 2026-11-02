@@ -227,8 +227,10 @@ test('dashboard exposes rolling 36h/7d group stats and ATS-vs-WhatsApp source pe
   const short = scan.insights.windows['36h'];
   assert.equal(short.runsCounted, 1);
   assert.deepEqual(short.groups, [{ name: 'Group A', received: 5, processed: 2, suitable: 1, notSuitable: 1, filtered: 2, failed: 0, runs: 1 }]);
-  assert.equal(short.sourcePerformance.ats.costPerSuitable, 4);
-  assert.equal(short.sourcePerformance.whatsapp.costPerSuitable, 2);
+  assert.ok(scan.llmUsage.quota, 'the scan page still gets the quota for its alert');
+  const usage = await fetch(`${baseUrl}/api/llm-usage`).then((response) => response.json());
+  assert.ok(Array.isArray(usage.day) && Array.isArray(usage.week) && Array.isArray(usage.runs));
+  assert.ok(usage.quota && usage.model);
 
   const week = scan.insights.windows['7d'];
   assert.equal(week.runsCounted, 2);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { aggregateGroupStats, aggregateSourcePerformance } from '../scripts/jobs/insights.mjs';
+import { aggregateGroupStats } from '../scripts/jobs/insights.mjs';
 
 function run({ groups = [], scopes = [] }) {
   return { details: { whatsapp: { groups }, processing: { scopes } } };
@@ -32,26 +32,4 @@ test('aggregateGroupStats sums received/processed/filtered/suitable/failed acros
 
 test('aggregateGroupStats tolerates runs with no WhatsApp data at all', () => {
   assert.deepEqual(aggregateGroupStats([{ details: {} }, { details: null }]), []);
-});
-
-test('aggregateSourcePerformance compares ATS and WhatsApp cost-per-suitable-job, excluding locally filtered items', () => {
-  const runs = [
-    run({
-      scopes: [
-        { source: 'ats', name: 'ATS', processed: 10, suitable: 2, notSuitable: 8, filtered: 0, failed: 1 },
-        { source: 'whatsapp', name: 'Group A', processed: 20, suitable: 1, notSuitable: 19, filtered: 15, failed: 2 },
-      ],
-    }),
-  ];
-
-  const performance = aggregateSourcePerformance(runs);
-  assert.deepEqual(performance.ats, { processed: 10, suitable: 2, notSuitable: 8, filtered: 0, failed: 1, costPerSuitable: 5 });
-  assert.deepEqual(performance.whatsapp, { processed: 20, suitable: 1, notSuitable: 19, filtered: 15, failed: 2, costPerSuitable: 20 });
-});
-
-test('aggregateSourcePerformance reports null cost when a source has no suitable jobs yet', () => {
-  const runs = [run({ scopes: [{ source: 'ats', name: 'ATS', processed: 5, suitable: 0, notSuitable: 5, filtered: 0, failed: 0 }] })];
-  const performance = aggregateSourcePerformance(runs);
-  assert.equal(performance.ats.costPerSuitable, null);
-  assert.deepEqual(performance.whatsapp, { processed: 0, suitable: 0, notSuitable: 0, filtered: 0, failed: 0, costPerSuitable: null });
 });
