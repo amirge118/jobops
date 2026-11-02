@@ -37,15 +37,16 @@ test('setup creates private files from templates and never overwrites them', (co
   fs.writeFileSync(path.join(rootDir, 'templates', 'current-resume.example.md'), 'replace this resume\n');
 
   const first = setupProject({ rootDir });
-  assert.equal(first.created.length, 4);
+  assert.deepEqual(first.created, ['config/jobs.yml'], 'the CV and search are filled in on the start page');
   assert.equal(first.directories.includes('auth'), true);
   assert.equal(first.directories.includes('output'), false);
   assert.equal(fs.existsSync(path.join(rootDir, 'output')), false);
-  fs.writeFileSync(path.join(rootDir, 'profile', '01-candidate-profile.md'), 'my profile\n');
+  assert.equal(fs.existsSync(path.join(rootDir, 'profile', '01-candidate-profile.md')), false, 'a placeholder must not pass for a real CV');
+  fs.writeFileSync(path.join(rootDir, 'config', 'jobs.yml'), 'mine: true\n');
 
   const second = setupProject({ rootDir });
   assert.equal(second.created.length, 0);
-  assert.equal(fs.readFileSync(path.join(rootDir, 'profile', '01-candidate-profile.md'), 'utf8'), 'my profile\n');
+  assert.equal(fs.readFileSync(path.join(rootDir, 'config', 'jobs.yml'), 'utf8'), 'mine: true\n');
 });
 
 test('doctor reports actionable readiness without exposing WhatsApp identifiers', () => {

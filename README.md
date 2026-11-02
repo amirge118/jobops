@@ -231,6 +231,10 @@ npm run demo
 
 ## Run it on your own search
 
+After `npm run setup` and `npm run web`, the `/start` page walks you through your CV, what you are looking for, the
+filters, your sources and a first scan. You can skip any step and return later, and download your data at any time.
+
+
 ```bash
 npm ci
 npx playwright install chromium

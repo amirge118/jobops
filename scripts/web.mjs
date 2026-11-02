@@ -18,6 +18,7 @@ import { serveDashboardAsset } from './dashboard/static.mjs';
 import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { sendCompanyError, sendJson } from './dashboard/http.mjs';
 import { guardRequest } from './dashboard/request-guard.mjs';
+import { createAccountRoutes } from './dashboard/routes/account.mjs';
 import { createActionsRoutes } from './dashboard/routes/actions.mjs';
 import { createCompaniesRoutes } from './dashboard/routes/companies.mjs';
 import { createJobsRoutes } from './dashboard/routes/jobs.mjs';
@@ -90,6 +91,7 @@ export async function createDashboardServer({
   }
 
   const routes = [
+    createAccountRoutes({ config }),
     createOverviewRoutes({ config, queries, readinessService, snapshot }),
     createPersonalAreaRoutes({ config }),
     createProfileRoutes({ config }),

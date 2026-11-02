@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
+import { serviceLabel } from './service-labels.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const COLLECTOR_LABEL = 'com.amirgefen.jobops.whatsapp-collector';
+export const COLLECTOR_LABEL = serviceLabel('whatsapp-collector');
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${COLLECTOR_LABEL}.plist`);
 

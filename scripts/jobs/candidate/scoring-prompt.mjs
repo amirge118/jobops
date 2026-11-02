@@ -1,3 +1,4 @@
+import { outputLanguage } from '../llm/output-language.mjs';
 import { rolePreset } from './scoring-presets.mjs';
 
 const CONTACT_LINE = /^- \*\*(?:Phone|Email|LinkedIn|GitHub):\*\*.*\n?/gim;
@@ -20,9 +21,11 @@ function levelCap({ maxLevel, levelCapTitles = [] }) {
   return `A role above ${maxLevel} per the preferences' level deal-breaker (title or stated level ${titles}), unless the title also offers ${maxLevel} as an alternative (e.g. "${maxLevel}/${example}"): seniority <= 2 and domainMatches false.`;
 }
 
-const EVIDENCE_RULES = `Evidence: for each of cvMatch, seniority, roleScope, location, sector return one concise Hebrew sentence (at most 15 words) that names the specific job requirement and the profile fact (or its absence) behind the number. Never write generic evidence.
-- Return one short Hebrew summary (at most 20 words), one concise Hebrew decision reason (at most 15 words), and up to two Hebrew uncertainties (at most 12 words each) per job. Brevity is required: every output token is paid for.
+function evidenceRules(language) {
+  return `Evidence: for each of cvMatch, seniority, roleScope, location, sector return one concise ${language} sentence (at most 15 words) that names the specific job requirement and the profile fact (or its absence) behind the number. Never write generic evidence.
+- Return one short ${language} summary (at most 20 words), one concise ${language} decision reason (at most 15 words), and up to two ${language} uncertainties (at most 12 words each) per job. Brevity is required: every output token is paid for.
 - Preserve every supplied jobKey exactly and return exactly one result for each job.`;
+}
 
 function anchors(preset, country) {
   return [
@@ -73,5 +76,5 @@ ${anchors(preset, country)}
 Hard caps (apply after the anchors):
 ${hardCaps}
 
-${EVIDENCE_RULES}`;
+${evidenceRules(outputLanguage(config))}`;
 }

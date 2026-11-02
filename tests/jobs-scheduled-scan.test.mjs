@@ -17,7 +17,7 @@ test('a scheduled scan agent fires jobs.mjs at every configured time, unattended
   const whatsapp = SCHEDULES.find((schedule) => schedule.key === 'whatsapp');
   const plist = renderScheduledScanAgent(whatsapp, { nodePath: '/opt/node', rootDir: '/tmp/jobops' });
 
-  assert.match(plist, /<key>Label<\/key><string>com\.amirgefen\.jobops\.scan-whatsapp<\/string>/);
+  assert.match(plist, /<key>Label<\/key><string>com\.[a-z0-9.-]+\.scan-whatsapp<\/string>/);
   assert.match(plist, /<string>\/opt\/node<\/string><string>\/tmp\/jobops\/scripts\/jobs\.mjs<\/string><string>--whatsapp-only<\/string>/);
   const hours = [...plist.matchAll(/<key>Hour<\/key><integer>(\d+)<\/integer>/g)].map((match) => Number(match[1]));
   assert.deepEqual(hours, [10, 15, 20]);
@@ -31,7 +31,7 @@ test('the ATS agent fires hourly with its own distinct label', () => {
   const ats = SCHEDULES.find((schedule) => schedule.key === 'ats');
   const plist = renderScheduledScanAgent(ats, { nodePath: '/opt/node', rootDir: '/tmp/jobops' });
 
-  assert.match(plist, /<key>Label<\/key><string>com\.amirgefen\.jobops\.scan-ats<\/string>/);
+  assert.match(plist, /<key>Label<\/key><string>com\.[a-z0-9.-]+\.scan-ats<\/string>/);
   assert.match(plist, /<string>--ats-only<\/string>/);
   const hours = [...plist.matchAll(/<key>Hour<\/key><integer>(\d+)<\/integer>/g)].map((match) => Number(match[1]));
   assert.equal(hours.length, 14);

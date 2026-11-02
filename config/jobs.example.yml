@@ -92,6 +92,10 @@ filters:
 
 # What the scorer is told about the kind of job you want. A value saved on the
 # dashboard's /profile page overrides these. rolePreset: backend or generic.
+# Background service names on this machine. Keep them once installed.
+service:
+  labelPrefix: com.jobops
+
 search:
   rolePreset: generic
   focusRole: "Backend engineer"
@@ -100,6 +104,10 @@ search:
   levelCapTitles: []
   avoidPeopleManagement: false
   homeCountry: ""
+
+# The language AI summaries and reasons are written in: Hebrew, English, Arabic or Russian.
+ai:
+  outputLanguage: Hebrew
 
 decision:
   minimumScore: 3.6

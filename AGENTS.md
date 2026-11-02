@@ -24,6 +24,7 @@ evaluate fit, tailor CVs, track applications, prep interviews.
 | `scripts/jobs/llm/` | The one seam for which AI runs a structured request; Codex only for now | system |
 | `scripts/jobs/user-settings.mjs` | Per-user settings allowlist; a stored value overrides `config/jobs.yml`, which overrides the code default (ADR 0010) | system |
 | `scripts/jobs/tracker/` | Applications as rows per user; `data/applications.md` is a copy of them (ADR 0012) | system |
+| `scripts/jobs/service-labels.mjs` | Names of background services on this machine, from `service.labelPrefix` | system |
 | `scripts/jobs/effective-config.mjs` | What a process runs with: `config/jobs.yml` plus settings saved in the app | system |
 | `scripts/dashboard/routes/` | Dashboard API routes by domain, behind `request-guard.mjs` (ADR 0008) | system |
 | `scripts/web.mjs` | Local-only dashboard server and bounded action runner | system |

@@ -12,9 +12,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { serviceLabel } from '../jobs/service-labels.mjs';
 import { DASHBOARD_PORT, findDashboardPids, stopDashboard } from '../local-dashboard-process.mjs';
 
-export const DASHBOARD_LABEL = 'com.amirgefen.jobops.dashboard';
+export const DASHBOARD_LABEL = serviceLabel('dashboard');
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${DASHBOARD_LABEL}.plist`);
 

@@ -9,13 +9,15 @@ export async function loadCandidateContext({ store, config, userId }) {
   const [profile, preferences, resume] = await Promise.all(['profile', 'preferences', 'resume']
     .map((kind) => store.getCurrentDocument(userId, kind)));
   if (!profile) throw new Error('Missing candidate profile');
-  if (!preferences) throw new Error('Missing candidate preferences');
   const effective = await applyUserSettings(config, store, userId);
-  const canonicalHash = canonicalScoringHash(profile.content, preferences.content, scoringCriteria(effective));
+  // The form on the page is enough; free text about the search is optional.
+  if (!preferences && !effective.search?.focusRole && !effective.filters?.domains?.length) throw new Error('Missing candidate preferences');
+  const preferencesText = preferences?.content ?? '';
+  const canonicalHash = canonicalScoringHash(profile.content, preferencesText, scoringCriteria(effective));
   const currentResume = resume?.content ?? '';
   return {
     profile: profile.content,
-    preferences: preferences.content,
+    preferences: preferencesText,
     profileHash: await store.getScoringHashAlias(userId, canonicalHash) ?? canonicalHash,
     currentResume,
     resumeHash: resumeHashOf(currentResume),

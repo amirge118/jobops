@@ -3,6 +3,7 @@
 // A key is the setting's path in the config object, and a stored value overrides
 // config/jobs.yml, which overrides the code default.
 
+import { OUTPUT_LANGUAGES } from './llm/output-language.mjs';
 import { normalizeLinkedInSearch } from './store/repositories/linkedin.mjs';
 
 const MAX_LIST_ITEMS = 200;
@@ -70,6 +71,7 @@ export const USER_SETTINGS = Object.freeze({
   'sources.whatsapp.markRead': boolean,
   'sources.linkedin.searches': linkedinSearches,
   'sources.linkedin.acceptedAreas': list,
+  'ai.outputLanguage': oneOf(...OUTPUT_LANGUAGES),
   'search.rolePreset': oneOf('backend', 'generic'),
   'search.focusRole': text,
   'search.excludedRoleTypes': list,

@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadJobsConfig } from './config.mjs';
+import { serviceLabel } from './service-labels.mjs';
 import { createJobStore } from './store.mjs';
 import { inShabbatQuiet } from './health-check.mjs';
 import { SCHEDULES } from './scheduled-scan-service.mjs';
@@ -26,7 +27,7 @@ const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 const TIME_ZONE = 'Asia/Jerusalem';
 const DEAD_COLLECTOR = ['interrupted', 'unconfirmed', 'stopped', 'failed', 'pairing_required'];
-const ALWAYS_ON_AGENTS = ['com.amirgefen.jobops.whatsapp-collector', 'com.amirgefen.jobops.dashboard'];
+const ALWAYS_ON_AGENTS = [serviceLabel('whatsapp-collector'), serviceLabel('dashboard')];
 
 const iso = (ms) => (ms ? new Date(Number(ms)).toISOString() : null);
 const local = (ms) => (ms ? new Date(Number(ms)).toLocaleString('he-IL', { timeZone: TIME_ZONE, day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : null);

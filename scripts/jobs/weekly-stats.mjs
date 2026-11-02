@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { WANTED_JOB_DECISIONS } from './decisions.mjs';
+import { outputLanguage } from './llm/output-language.mjs';
 
 const DAY = 24 * 60 * 60 * 1000;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -193,9 +194,9 @@ export async function buildWeeklySnapshot({ store, config, now = Date.now(), dec
   return snapshot;
 }
 
-export function weeklyPrompt(snapshot) {
-  return `You are the analyst of a personal job-search system (Israel, backend/AI engineer). Below is this week's statistics snapshot as JSON.
-Write a short weekly review in Hebrew for the job seeker. Return only the JSON required by the output schema.
+export function weeklyPrompt(snapshot, language = 'Hebrew') {
+  return `You are the analyst of a personal job-search system. Below is this week's statistics snapshot as JSON.
+Write a short weekly review in ${language} for the job seeker. Return only the JSON required by the output schema.
 
 Rules:
 - Every claim must cite a number from the snapshot. Never invent data; if something is missing, say so in questions.
@@ -340,7 +341,7 @@ async function codexAnalyzer(config, store) {
     setCodexUsageRecorder(async (entry) => await store.recordCodexCall(entry));
     try {
       return await runCodexExec({
-        prompt: weeklyPrompt(snapshot),
+        prompt: weeklyPrompt(snapshot, outputLanguage(config)),
         schemaPath: SCHEMA_PATH,
         cwd: config.rootDir,
         model: config.scoring?.model || null,

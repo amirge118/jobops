@@ -88,6 +88,8 @@ for (const tab of document.querySelectorAll('.profile-tabs [role="tab"]')) {
   });
 }
 
+document.querySelector(`.profile-tabs [data-tab="${window.location.hash.slice(1)}"]`)?.click();
+
 window.addEventListener('beforeunload', (event) => {
   if (Object.values(editors).some((editor) => editor.isDirty()) || identityForm.isDirty() || searchForm.isDirty()) event.preventDefault();
 });
