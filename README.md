@@ -47,7 +47,7 @@ and no third-party application server are in the loop.
 - 🖥️ **A real dashboard, not just a CLI** — scan, review matches, and manage tracked companies
   from a local web UI at `127.0.0.1:4177`.
 - 📊 **Learns from your choices** — every match gets a one-click decision: **applied** (also adds
-  or updates its row in `data/applications.md`), or one of four reasons you did not apply — *not
+  or updates its row on the `/tracker` page), or one of four reasons you did not apply — *not
   interesting* (the role fits, this job doesn't), *role not relevant*, *too senior*, *company not
   interesting* — or just *follow the company*. Only "not relevant" and "too senior" count as the
   score being wrong; the statistics page flags those to tune the anchors and the threshold.
@@ -177,7 +177,7 @@ The statistics page shows where time is lost between a job going live and your d
 hours from finding a job to deciding on it per source, how long LinkedIn takes to surface a
 posting (from each card's "N hours ago"), which source saw the same job first and by how much,
 how many wanted jobs come from companies you watch (and which ones you don't yet), and — from
-`data/applications.md` — what happened after "applied".
+your tracked applications — what happened after "applied".
 
 ## Your CV and search live in the app
 
@@ -248,11 +248,13 @@ npm run dashboard:service:install  # optional: keep the dashboard running in the
 With the dashboard service installed, the dashboard starts at login, comes back after a crash,
 and no longer depends on the terminal that started it. It also restarts itself when
 `config/jobs.yml` changes (once no action is running and the new file loads), so new groups or
-searches show up without a manual restart. The WhatsApp collector still needs
-`launchctl kickstart -k gui/$(id -u)/com.amirgefen.jobops.whatsapp-collector` to pick up new groups.
+searches show up without a manual restart. Saving groups on `/profile` restarts the WhatsApp
+collector for you; after editing the file by hand it needs
+`launchctl kickstart -k gui/$(id -u)/com.jobops.whatsapp-collector` (the prefix is
+`service.labelPrefix` in `config/jobs.yml`) to pick up new groups.
 
-Then open `http://127.0.0.1:4177` and configure your sources in `config/jobs.yml` and
-`portals.yml`.
+Then open `http://127.0.0.1:4177/start`, which walks through the setup. Sources are on `/profile`;
+their defaults and every limit live in `config/jobs.yml`, and watched companies in `portals.yml`.
 
 ## Learn more
 
