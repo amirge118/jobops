@@ -233,6 +233,38 @@ test('collection records new postings as pending, filters locally, and advances 
   store.close();
 });
 
+test('the search furthest behind runs first, so a shared hourly cap cannot starve the same one', async () => {
+  const store = tempStore();
+  await store.syncLinkedInSearches(['current', 'behind', 'tied', 'never'].map((key) => ({ key, label: key, keywords: key, location: 'Israel' })));
+  const byKey = new Map((await store.listLinkedInSearches()).map((row) => [row.keywords, row]));
+  const covered = { current: 3_000, behind: 1_000, tied: 3_000 };
+  for (const [key, coveredUntil] of Object.entries(covered)) {
+    const { id, queryHash } = byKey.get(key);
+    await store.recordLinkedInSearchAttempt({ searchId: id, queryHash, status: 'complete', coveredUntil });
+  }
+  const now = Date.UTC(2026, 10, 2, 12);
+  const scan = async (gate) => {
+    const asked = [];
+    await scanLinkedIn({
+      config: linkedinConfig(), store, now, sleep: noSleep, gate,
+      fetchImpl: async (url) => {
+        asked.push(new URL(url).searchParams.get('keywords'));
+        return response('');
+      },
+    });
+    return asked;
+  };
+
+  // A never-covered search comes first, and a tie keeps the configured order.
+  assert.deepEqual(await scan(null), ['never', 'behind', 'current', 'tied']);
+
+  // Room for one request goes to the search that needs it most, not to the first configured.
+  let left = 1;
+  const oneRequest = { allow: async () => left > 0, record: async () => { left -= 1; } };
+  assert.deepEqual(await scan(oneRequest), ['never']);
+  store.close();
+});
+
 test('a failed collection keeps the previous coverage and records the reason', async () => {
   const store = tempStore();
   await store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: search.keywords, location: 'Israel' }]);

@@ -442,7 +442,12 @@ export async function scanLinkedIn({
   const budget = createLinkedInBudget(linkedin.limits || {}, { gate, onRefusal });
   if (cooldown && now < cooldown.until) budget.haltedBy = 'cooldown';
   const passesArea = buildLinkedInAreaFilter(linkedin.acceptedAreas || DEFAULT_LINKEDIN_AREAS);
-  const searches = (await store.listLinkedInSearches()).filter((search) => search.enabled);
+  // Searches share one hourly cap, so whichever runs last gets what is left. In
+  // a fixed order the last search stopped at the cap in 31 of 50 runs, and each
+  // stop left it a longer window to read (2026-11-02). Most behind goes first.
+  const searches = (await store.listLinkedInSearches())
+    .filter((search) => search.enabled)
+    .sort((a, b) => (a.coveredUntil ?? 0) - (b.coveredUntil ?? 0));
   // Title scope lives only in config (it filters results, it is not part of
   // what LinkedIn is asked, so it does not change a search's query hash). A
   // title is in scope when it matches ANY search's terms: an analyst role
