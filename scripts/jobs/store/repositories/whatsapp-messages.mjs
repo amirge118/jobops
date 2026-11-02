@@ -3,6 +3,18 @@ import { parseJson } from '../shared.mjs';
 
 export function createWhatsappMessagesRepository({ db, store }) {
   return {
+    async saveKnownWhatsAppGroups(groups, at = Date.now()) {
+      await db.transaction(async () => {
+        await db.prepare('DELETE FROM whatsapp_known_groups').run();
+        const insert = db.prepare('INSERT INTO whatsapp_known_groups (jid, name, participants, seen_at) VALUES (?, ?, ?, ?)');
+        for (const { jid, name, participants } of groups) await insert.run(jid, name, participants, at);
+      })();
+    },
+
+    async listKnownWhatsAppGroups() {
+      return await db.prepare('SELECT jid, name, participants FROM whatsapp_known_groups ORDER BY name').all();
+    },
+
     async shouldProcessMessage(messageId) {
       const row = await db.prepare('SELECT status FROM processed_messages WHERE message_id = ?').get(messageId);
       return !row || row.status !== 'done';

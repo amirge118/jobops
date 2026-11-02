@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadJobsConfig } from './jobs/config.mjs';
+import { loadEffectiveConfig } from './jobs/effective-config.mjs';
 import { syncConfiguredCompanyEntries } from './jobs/company-catalog.mjs';
 import { createDemoEnvironment, runDemoAction } from './jobs/demo.mjs';
 import { createJobStore } from './jobs/store.mjs';
@@ -17,6 +18,7 @@ import { serveDashboardAsset } from './dashboard/static.mjs';
 import { createActionController, runCommand } from './dashboard/actions.mjs';
 import { sendCompanyError, sendJson } from './dashboard/http.mjs';
 import { guardRequest } from './dashboard/request-guard.mjs';
+import { createAccountRoutes } from './dashboard/routes/account.mjs';
 import { createActionsRoutes } from './dashboard/routes/actions.mjs';
 import { createCompaniesRoutes } from './dashboard/routes/companies.mjs';
 import { createJobsRoutes } from './dashboard/routes/jobs.mjs';
@@ -24,9 +26,12 @@ import { createOverviewRoutes } from './dashboard/routes/overview.mjs';
 import { createPersonalAreaRoutes } from './dashboard/routes/personal-area.mjs';
 import { createProfileRoutes } from './dashboard/routes/profile.mjs';
 import { createSearchSettingsRoutes } from './dashboard/routes/search-settings.mjs';
+import { createSourceSettingsRoutes } from './dashboard/routes/source-settings.mjs';
 import { createSourcesRoutes } from './dashboard/routes/sources.mjs';
+import { createTrackerRoutes } from './dashboard/routes/tracker.mjs';
 import { CONFIG_RESTART_EXIT_CODE, watchConfigForRestart } from './dashboard/config-watch.mjs';
 import { DASHBOARD_LABEL } from './dashboard/service.mjs';
+import { applySourceChange } from './dashboard/source-change.mjs';
 import { createReadinessService } from './dashboard/readiness.mjs';
 import { setCodexUsageRecorder } from './jobs/llm-usage.mjs';
 
@@ -45,7 +50,7 @@ function parseArgs(argv) {
 
 export async function createDashboardServer({
   config = loadJobsConfig(), execute = runCommand, readiness = null, researchCompany = null,
-  probeSource = probeCompanySource, browserResolve = null,
+  probeSource = probeCompanySource, browserResolve = null, onSourcesChanged = () => {},
 } = {}) {
   const staticDir = path.join(config.rootDir, 'web');
   const bootstrapStore = createJobStore(config.jobsDbPath);
@@ -86,14 +91,17 @@ export async function createDashboardServer({
   }
 
   const routes = [
+    createAccountRoutes({ config }),
     createOverviewRoutes({ config, queries, readinessService, snapshot }),
     createPersonalAreaRoutes({ config }),
     createProfileRoutes({ config }),
     createSearchSettingsRoutes({ config, readinessService, startAction }),
+    createSourceSettingsRoutes({ config, onSourcesChanged }),
     createSourcesRoutes({ config, queries }),
     createCompaniesRoutes({ config, queries, companyResearch, probeSource, resolveWithBrowser, browserProbe }),
     createActionsRoutes({ config, readinessService, startAction }),
     createJobsRoutes({ config, snapshot }),
+    createTrackerRoutes({ config }),
   ];
 
   const server = http.createServer(async (request, response) => {
@@ -125,12 +133,15 @@ export async function startDashboard(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const demo = options.demo ? await createDemoEnvironment({ rootDir: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..') }) : null;
   if (demo) demo.store.close();
-  const config = demo?.config || loadJobsConfig();
-  const server = await createDashboardServer({ config, execute: demo ? runDemoAction : runCommand });
+  const config = demo?.config || await loadEffectiveConfig();
+  const managed = !demo && process.env.XPC_SERVICE_NAME === DASHBOARD_LABEL;
+  const server = await createDashboardServer({
+    config, execute: demo ? runDemoAction : runCommand,
+    onSourcesChanged: () => applySourceChange({ managed, isBusy: () => server.isBusy() }),
+  });
   if (demo) server.once('close', demo.cleanup);
   if (!demo) {
     // Only the LaunchAgent copy restarts itself; a terminal run would just end.
-    const managed = process.env.XPC_SERVICE_NAME === DASHBOARD_LABEL;
     const stopWatching = watchConfigForRestart({
       configPath: config.configPath,
       isBusy: server.isBusy,

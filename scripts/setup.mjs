@@ -8,9 +8,6 @@ import { ROOT_DIR } from './jobs/config.mjs';
 
 const COPIES = [
   ['config/jobs.example.yml', 'config/jobs.yml'],
-  ['templates/candidate-profile.example.md', 'profile/01-candidate-profile.md'],
-  ['templates/preferences.example.md', 'profile/02-preferences.md'],
-  ['templates/current-resume.example.md', 'profile/03-current-resume.md'],
 ];
 const DIRECTORIES = ['auth', 'data', 'documents', 'profile', 'reports'];
 

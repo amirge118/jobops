@@ -13,11 +13,7 @@ import { readCodexRateLimits } from '../jobs/llm-usage.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildSpeedStats, parseTrackerRows } from '../jobs/speed-stats.mjs';
-
-function readTrackerRows(config) {
-  try { return parseTrackerRows(fs.readFileSync(path.join(config.rootDir, 'data', 'applications.md'), 'utf8')); }
-  catch { return []; }
-}
+import { createTrackerService } from '../jobs/tracker/tracker-service.mjs';
 
 function safeRateLimits() {
   try { return readCodexRateLimits({ fsModule: fs }); } catch { return null; }
@@ -274,7 +270,7 @@ export function createDashboardQueries(config, action) {
           sightings: await store.listSightingTimes(),
           linkedinPostings: await store.listLinkedInPostingTimes({ since: Date.now() - SOURCE_VALUE_WINDOW_DAYS * 24 * 60 * 60 * 1_000 }),
           watchedCompanies: (await store.listCompanies({ status: 'watched', limit: 1_000 })).map((company) => company.name),
-          trackerRows: readTrackerRows(config),
+          trackerRows: parseTrackerRows(await createTrackerService({ store, config, userId: resolveCurrentUser().id }).markdown()),
         }),
       }));
     },

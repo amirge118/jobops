@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>מועמדויות — jobOps</title><link rel="stylesheet" href="/styles.css"></head>
+  <body data-page="tracker">
+    <div id="app-shell"></div>
+    <div class="shell">
+      <main class="page-main">
+        <section class="page-hero"><div><h1>מועמדויות</h1><p>כל מקום שפנית אליו, איפה זה עומד, ומה מחכה למעקב.</p></div></section>
+        <div id="tracker-drift" class="profile-notice" role="status" hidden></div>
+        <section class="page-section profile-panel">
+          <div class="tracker-toolbar">
+            <label for="tracker-search">חיפוש</label><input id="tracker-search" type="search" dir="auto">
+            <label for="tracker-status">סטטוס</label><select id="tracker-status"></select>
+            <label><input id="tracker-follow-ups" type="checkbox"> רק מה שמחכה למעקב</label>
+          </div>
+          <p id="tracker-summary" class="profile-hint"></p>
+          <div class="table-wrap"><table class="tracker-table"><thead><tr><th>תאריך</th><th>חברה</th><th>תפקיד</th><th>ציון</th><th>סטטוס</th><th>הערות</th></tr></thead><tbody id="tracker-rows"></tbody></table></div>
+          <details class="profile-history"><summary>הוספת מועמדות ידנית</summary><form id="tracker-add" class="profile-fields"></form></details>
+        </section>
+        <p id="page-feedback" class="company-feedback" role="status" aria-live="polite"></p>
+      </main>
+      <footer><span>המידע נשאר מקומי במחשב שלך.</span></footer>
+    </div>
+    <script type="module" src="/shared/app-shell.js"></script>
+    <script type="module" src="/pages/tracker-page.js"></script>
+  </body>
+</html>

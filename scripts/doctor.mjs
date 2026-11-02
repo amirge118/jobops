@@ -32,11 +32,7 @@ export function inspectProject({
   const major = Number(String(nodeVersion).split('.')[0]);
   checks.push({ label: 'Node.js', status: major >= 22 ? 'pass' : 'fail', detail: `גרסה ${nodeVersion}; נדרשת 22 ומעלה` });
 
-  const requiredFiles = [
-    ['Config', 'config/jobs.yml'],
-    ['פרופיל מועמד', 'profile/01-candidate-profile.md'],
-    ['העדפות', 'profile/02-preferences.md'],
-  ];
+  const requiredFiles = [['Config', 'config/jobs.yml']];
   for (const [label, relativePath] of requiredFiles) {
     const exists = fileExists(path.join(rootDir, relativePath));
     checks.push({ label, status: exists ? 'pass' : 'fail', detail: exists ? `${relativePath} קיים` : `${relativePath} חסר; הרץ npm run setup` });

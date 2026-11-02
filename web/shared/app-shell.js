@@ -3,7 +3,7 @@ import { startAdaptivePolling } from './polling.js';
 
 const page = document.body.dataset.page;
 const shell = document.querySelector('#app-shell');
-const pageLabels = { scan: 'סריקה ותוצאה', decisions: 'החלטות', companies: 'חברות במעקב', profile: 'קורות חיים', 'personal-area': 'אזור אישי', 'decision-stats': 'סטטיסטיקה' };
+const pageLabels = { start: 'התחלה', scan: 'סריקה ותוצאה', decisions: 'החלטות', companies: 'חברות במעקב', tracker: 'מועמדויות', profile: 'קורות חיים', 'personal-area': 'אזור אישי', 'decision-stats': 'סטטיסטיקה' };
 
 shell.innerHTML = `
   <header class="topbar">
@@ -22,6 +22,13 @@ shell.innerHTML = `
       </div>
     </div>
   </header>`;
+
+// Shown until everything is set up, and always on its own page.
+if (page !== 'start') {
+  const startLink = document.querySelector('.app-nav a[href="/start"]');
+  startLink.hidden = true;
+  requestJson('/api/onboarding').then(({ complete }) => { startLink.hidden = complete; }).catch(() => {});
+}
 
 let actionRunning = false;
 

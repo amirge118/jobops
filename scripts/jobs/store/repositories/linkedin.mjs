@@ -4,7 +4,7 @@ import { parseJson, serializeAuditDetails } from '../shared.mjs';
 
 const LINKEDIN_KEYWORDS_PATTERN = /^[\p{L}\p{N} "'()+#.&/,-]+$/u;
 
-function normalizeLinkedInSearch(input = {}) {
+export function normalizeLinkedInSearch(input = {}) {
   const text = (value, max) => String(value ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, max);
   const keywords = text(input.keywords, 200);
   const label = text(input.label, 80) || keywords.slice(0, 80);
@@ -225,6 +225,9 @@ export function createLinkedinRepository({ db, store }) {
       `).run({ at: Number(at) });
     },
 
+    // A block stops every LinkedIn request; recent activity (another run's
+    // searches or page reads) only spaces out page reads, so frequent
+    // WhatsApp runs can never starve the scheduled LinkedIn scan.
     async getLinkedInCooldown({ now = Date.now(), afterActivityMs = 15 * 60 * 1000 } = {}) {
       const row = await db.prepare('SELECT * FROM linkedin_state WHERE id = 1').get();
       const block = row?.blocked_until > now ? { until: row.blocked_until, reason: row.blocked_reason || 'blocked' } : null;

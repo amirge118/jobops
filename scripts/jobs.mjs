@@ -16,7 +16,6 @@ import {
   createHireMeTechResolver, hireMeTechProfileExists, hireMeTechProfilePath, launchHireMeTechContext,
 } from './jobs/hiremetech-resolve.mjs';
 import { openJobUrls } from './jobs/open.mjs';
-import { appendMatchingJobs } from './jobs/pipeline.mjs';
 import { renderMinimalReport } from './jobs/report.mjs';
 import { createResumeGapAnalyzer } from './jobs/resume-gap.mjs';
 import { createGapCoverageChecker, refreshGapCoverage } from './jobs/gap-coverage.mjs';
@@ -1159,11 +1158,13 @@ async function runJobsLocked(options, config) {
   try {
     const sources = [];
     const fullScan = !options.whatsappBacklog && !options.retryOnly;
-    if (fullScan && !options.whatsappOnly && !options.linkedinOnly && config.sources.ats?.enabled) sources.push('ats');
-    if (fullScan && !options.atsOnly && !options.linkedinOnly && config.sources.whatsapp?.enabled) sources.push('whatsapp');
+    const atsEnabled = config.sources.ats?.enabled && await store.isSourceEnabled('ats');
+    const whatsappEnabled = config.sources.whatsapp?.enabled && await store.isSourceEnabled('whatsapp');
+    if (fullScan && !options.whatsappOnly && !options.linkedinOnly && atsEnabled) sources.push('ats');
+    if (fullScan && !options.atsOnly && !options.linkedinOnly && whatsappEnabled) sources.push('whatsapp');
     if (fullScan && !options.atsOnly && !options.whatsappOnly && linkedinEnabled) sources.push('linkedin');
     if (options.linkedinOnly && !linkedinEnabled) console.log('LinkedIn כבוי (config/jobs.yml או לוח הבקרה); אין מה לסרוק.');
-    if (options.whatsappBacklog && config.sources.whatsapp?.enabled) sources.push('whatsapp-backlog');
+    if (options.whatsappBacklog && whatsappEnabled) sources.push('whatsapp-backlog');
     if (options.retryOnly) sources.push('retry');
     if (sources.length === 0) throw new Error('No job sources are enabled for this run');
     const window = options.whatsappBacklog
@@ -1380,7 +1381,6 @@ async function runJobsLocked(options, config) {
       const paths = reportPaths(config.reportsDir, generatedAt);
       fs.writeFileSync(paths.dated, report, 'utf8');
       fs.writeFileSync(paths.latest, report, 'utf8');
-      appendMatchingJobs(config.pipelinePath, matchingJobs);
       const notified = await queueJobNotifications({ store, jobs: matchingJobs, config });
       if (notified) console.log(`${notified} התראות WhatsApp על משרות חזקות נוספו לתור; ה-Collector ישלח אותן.`);
       // Mark equivalent source records together so a duplicate cannot surface tomorrow.

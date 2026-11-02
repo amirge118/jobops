@@ -18,10 +18,12 @@
           <div class="company-toolbar" aria-label="סינון חברות"><label><span>חיפוש</span><input id="company-list-search" type="search" placeholder="שם חברה או ספק ATS"></label><div class="company-status-filters"><button type="button" data-status-filter="all" aria-pressed="true">הכול</button><button type="button" data-status-filter="watched" aria-pressed="false">במעקב</button><button type="button" data-status-filter="candidate" aria-pressed="false">ממתינות</button><button type="button" data-status-filter="unscannable" aria-pressed="false">לא ניתן לסרוק</button><button type="button" data-status-filter="paused" aria-pressed="false">מושהות</button></div></div>
           <div class="table-wrap"><table class="companies-table"><thead><tr><th>חברה</th><th>מקור</th><th>מצב</th><th>למה זה המצב?</th><th>פעולות</th></tr></thead><tbody id="companies-body"></tbody></table><div id="companies-empty" class="empty-state"><strong>אין חברות בתצוגה הזו</strong><span>אפשר לשנות את החיפוש או את מסנן המצב.</span></div></div>
         </section>
+        <details id="blocked-companies" class="page-section profile-history" hidden><summary>חברות שחסמת</summary><p class="profile-hint">משרות חדשות מהחברות האלה נדחות בלי ניקוד. ביטול חסימה חל על משרות חדשות בלבד.</p><ul id="blocked-list" class="profile-versions"></ul></details>
       </main>
       <footer><span>המידע נשאר מקומי במחשב שלך.</span><span id="last-updated"></span></footer>
     </div>
     <script type="module" src="/shared/app-shell.js"></script>
     <script type="module" src="/pages/companies-page.js"></script>
+    <script type="module" src="/pages/blocked-companies-section.js"></script>
   </body>
 </html>

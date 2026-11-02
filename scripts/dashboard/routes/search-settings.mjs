@@ -2,6 +2,7 @@ import { resolveCurrentUser } from '../../jobs/current-user.mjs';
 import { createFilterSuggester } from '../../jobs/candidate/filter-suggestion.mjs';
 import { estimateRescore, requestRescore } from '../../jobs/candidate/rescore.mjs';
 import { resolveLocationFilter, resolveTitleFilter } from '../../jobs/candidate/search-filters.mjs';
+import { outputLanguage } from '../../jobs/llm/output-language.mjs';
 import { createJobStore } from '../../jobs/store.mjs';
 import { applyUserSettings, saveUserSettings } from '../../jobs/user-settings.mjs';
 import { readJson, requireObjectBody, sendJson } from '../http.mjs';
@@ -14,6 +15,7 @@ function effectiveSearch(config) {
   const location = resolveLocationFilter(config) ?? { always_allow: [], allow: [], block: [] };
   return {
     filters: { domains: [], acceptedLocations: [], preferredSectors: [], ...config.filters },
+    ai: { outputLanguage: outputLanguage(config) },
     decision: { minimumScore: config.decision?.minimumScore ?? null, exactMatchScore: config.decision?.exactMatchScore ?? null },
     search: {
       rolePreset: 'generic', focusRole: '', excludedRoleTypes: [], maxLevel: '', levelCapTitles: [], avoidPeopleManagement: false, homeCountry: '',

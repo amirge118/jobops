@@ -5,8 +5,9 @@ import { createDocumentEditor } from './profile-document-editor.js';
 import { createIdentityForm } from './profile-identity-form.js';
 import { createRescoreBanner } from './profile-rescore-banner.js';
 import { createSearchForm } from './profile-search-form.js';
+import { createSourcesSection } from './profile-sources-section.js';
 
-const KIND_LABELS = { resume: 'קורות החיים', preferences: 'ההעדפות', profile: 'המידע הנוסף' };
+const KIND_LABELS = { resume: 'קורות החיים', preferences: 'ההעדפות', profile: 'המידע הנוסף', stories: 'הסיפורים לראיונות' };
 const feedbackLine = document.querySelector('#page-feedback');
 const drift = document.querySelector('#file-drift');
 
@@ -37,6 +38,7 @@ function showDrift(kinds) {
 const editors = {};
 let identityForm;
 const rescoreBanner = createRescoreBanner({ root: document.querySelector('#rescore-banner'), feedback });
+const sourcesSection = createSourcesSection({ root: document.querySelector('#sources-root'), feedback });
 const searchForm = createSearchForm({ form: document.querySelector('#search-form'), feedback, onSaved: () => rescoreBanner.refresh() });
 
 async function load() {
@@ -44,7 +46,7 @@ async function load() {
   for (const [kind, editor] of Object.entries(editors)) await editor.load(overview.documents[kind]);
   identityForm.load(overview.identity);
   showDrift(overview.fileDrift);
-  await Promise.all([searchForm.load(), rescoreBanner.refresh()]);
+  await Promise.all([searchForm.load(), rescoreBanner.refresh(), sourcesSection.load()]);
   document.querySelector('#last-updated').textContent = `עודכן ${formatTime(Date.now())}`;
 }
 
@@ -59,6 +61,7 @@ async function refreshFromServer() {
 const refreshQuietly = () => Promise.all([refreshFromServer(), rescoreBanner.refresh()]).catch(() => {});
 
 editors.resume = createDocumentEditor({ root: document.querySelector('#editor-resume'), kind: 'resume', feedback, onSaved: refreshQuietly });
+editors.stories = createDocumentEditor({ root: document.querySelector('#editor-stories'), kind: 'stories', feedback });
 editors.preferences = createDocumentEditor({ root: document.querySelector('#editor-preferences'), kind: 'preferences', feedback, onSaved: () => rescoreBanner.refresh() });
 editors.profile = createDocumentEditor({ root: document.querySelector('#editor-profile'), kind: 'profile', feedback, onSaved: refreshQuietly });
 identityForm = createIdentityForm({
@@ -84,6 +87,8 @@ for (const tab of document.querySelectorAll('.profile-tabs [role="tab"]')) {
     }
   });
 }
+
+document.querySelector(`.profile-tabs [data-tab="${window.location.hash.slice(1)}"]`)?.click();
 
 window.addEventListener('beforeunload', (event) => {
   if (Object.values(editors).some((editor) => editor.isDirty()) || identityForm.isDirty() || searchForm.isDirty()) event.preventDefault();

@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { resolveCurrentUser } from '../current-user.mjs';
 import { openSqliteDatabase } from './database.mjs';
 import { runMigrations } from './migrations/index.mjs';
 import { createJobIdentity } from './job-identity.mjs';
@@ -27,6 +28,7 @@ import { createWeeklyReportsRepository } from './repositories/weekly-reports.mjs
 import { createPulseRepository } from './repositories/pulse.mjs';
 import { createProfileDocumentsRepository } from './repositories/profile-documents.mjs';
 import { createRescoreRepository } from './repositories/rescore.mjs';
+import { createApplicationsRepository } from './repositories/applications.mjs';
 import { createUsersRepository } from './repositories/users.mjs';
 import { createWeeklyStatsRepository } from './repositories/weekly-stats.mjs';
 
@@ -52,20 +54,23 @@ const REPOSITORIES = [
   createWeeklyReportsRepository,
   createPulseRepository,
   createUsersRepository,
+  createApplicationsRepository,
   createRescoreRepository,
   createProfileDocumentsRepository,
   createWeeklyStatsRepository,
 ];
 
+// A store works for one user: what they decided, learned and receive is theirs,
+// and shared data such as postings and sources is the same for everyone.
 // readonly opens an existing database without writing anything, schema
 // included: /pulse and the other read-only tools must never change the data.
-export function createJobStore(databasePath, { readonly = false } = {}) {
+export function createJobStore(databasePath, { readonly = false, userId = resolveCurrentUser().id } = {}) {
   if (!readonly) fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = openSqliteDatabase(databasePath, { readonly });
   if (!readonly) runMigrations(db.raw);
 
   const store = {};
-  const context = { db, store, identity: createJobIdentity(db) };
+  const context = { db, store, userId, identity: createJobIdentity(db) };
   for (const createRepository of REPOSITORIES) {
     for (const [name, method] of Object.entries(createRepository(context))) {
       if (name in store) throw new Error(`Duplicate store method: ${name}`);

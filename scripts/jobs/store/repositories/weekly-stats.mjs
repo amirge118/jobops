@@ -33,7 +33,7 @@ export const RETENTION_CATEGORIES = Object.freeze({
 // An archived job loses its company; the decision keeps it.
 const UNKNOWN_COMPANY = "(company IS NULL OR LOWER(TRIM(company)) IN ('', 'unknown', 'unknown company', 'חברה לא ידועה', 'לא ידוע', 'לא צוין'))";
 
-export function createWeeklyStatsRepository({ db }) {
+export function createWeeklyStatsRepository({ db, userId }) {
   return {
     async retentionProposal({ now = Date.now() } = {}) {
       return await Promise.all(Object.entries(RETENTION_CATEGORIES).map(async ([category, rule]) => {
@@ -58,7 +58,7 @@ export function createWeeklyStatsRepository({ db }) {
     async weeklySnapshotFacts(now) {
       const weekAgo = now - 7 * DAY;
       return {
-        decisions: await db.prepare('SELECT job_key, decision FROM job_decisions').all(),
+        decisions: await db.prepare('SELECT job_key, decision FROM job_decisions WHERE user_id = ?').all(userId),
         labels: await db.prepare(`
           SELECT l.job_key, l.label, l.first_seen_at, j.first_suitable_at IS NOT NULL AS suitable
           FROM job_source_labels l LEFT JOIN jobs j ON j.job_key = l.job_key WHERE l.first_seen_at >= ?
@@ -84,11 +84,11 @@ export function createWeeklyStatsRepository({ db }) {
         `).get(weekAgo),
         named: await db.prepare(`
           SELECT COUNT(*) AS total, SUM(${UNKNOWN_COMPANY}) AS unknown FROM (
-            SELECT company FROM job_decisions WHERE decided_at >= @since
+            SELECT company FROM job_decisions WHERE user_id = @userId AND decided_at >= @since
             UNION ALL
             SELECT company FROM jobs WHERE first_suitable_at >= @since AND archived_at IS NULL AND suitable = 1
           )
-        `).get({ since: weekAgo }),
+        `).get({ since: weekAgo, userId }),
         failureCodes: await db.prepare(`
           SELECT last_error_code AS code, COUNT(*) AS count FROM jobs
           WHERE last_error_code IS NOT NULL AND archived_at IS NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 6

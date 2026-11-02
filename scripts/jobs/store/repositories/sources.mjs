@@ -1,4 +1,4 @@
-export function createSourcesRepository({ db, store }) {
+export function createSourcesRepository({ db, store, userId }) {
   return {
     async recordSourceScanStats(rows, { runId = null, at = Date.now() } = {}) {
       const insert = db.prepare(`
@@ -35,9 +35,9 @@ export function createSourcesRepository({ db, store }) {
             j.first_scored_at AS firstScoredAt, j.first_suitable_at AS firstSuitableAt, d.decision
           FROM job_source_sightings s
           LEFT JOIN jobs j ON j.job_key = s.job_key
-          LEFT JOIN job_decisions d ON d.job_key = s.job_key
+          LEFT JOIN job_decisions d ON d.job_key = s.job_key AND d.user_id = ?
           WHERE s.first_seen_at >= ? OR j.first_suitable_at >= ?
-        `).all(from, from),
+        `).all(userId, from, from),
         watchedCompanies: (await db.prepare("SELECT name FROM companies WHERE status = 'watched' ORDER BY name COLLATE NOCASE")
           .all()).map((row) => row.name),
       };

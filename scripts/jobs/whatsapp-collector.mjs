@@ -7,6 +7,7 @@ import { DisconnectReason, jidNormalizedUser } from '@whiskeysockets/baileys';
 import { notificationSettings, sendPendingNotifications } from './notifications.mjs';
 
 import { loadJobsConfig } from './config.mjs';
+import { loadEffectiveConfig } from './effective-config.mjs';
 import { describeFailure } from './diagnostics.mjs';
 import { acquireSingleInstance } from './single-instance.mjs';
 import { connectWhatsApp, disconnectWhatsApp, shouldRetryWhatsAppConnection } from './sources/whatsapp-client.mjs';
@@ -355,6 +356,13 @@ export async function runWhatsAppCollector({
           details: { groups: safeGroups },
         });
 
+        // What the page's group picker offers. A failure here must not stop collecting.
+        try {
+          await store.saveKnownWhatsAppGroups(Object.values(await connected.groupFetchAllParticipating()).map((group) => ({
+            jid: group.id, name: group.subject, participants: group.participants?.length ?? null,
+          })));
+        } catch { /* The picker keeps its previous list. */ }
+
         let lastDisconnect;
         while (!stopping) {
           const outcome = await Promise.race([
@@ -446,7 +454,7 @@ export async function runWhatsAppCollector({
 }
 
 export async function startWhatsAppCollector() {
-  const config = loadJobsConfig();
+  const config = await loadEffectiveConfig();
   const lock = acquireSingleInstance(path.join(config.dataDir, 'whatsapp-collector.lock'));
   const store = createJobStore(config.jobsDbPath);
   try {

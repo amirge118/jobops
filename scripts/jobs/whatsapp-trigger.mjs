@@ -17,6 +17,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { loadJobsConfig } from './config.mjs';
+import { loadEffectiveConfig } from './effective-config.mjs';
 import { canonicalizeJobUrl } from './core.mjs';
 import { knownNonJobReason } from './fetch-page.mjs';
 import { createJobStore } from './store.mjs';
@@ -82,7 +83,7 @@ function runBacklogProcessing(rootDir, lookbackDays) {
 }
 
 export async function runWhatsAppTrigger({ now = Date.now(), run = runBacklogProcessing, log = console.log } = {}) {
-  const config = loadJobsConfig();
+  const config = await loadEffectiveConfig();
   if (!config.sources.whatsapp?.enabled) {
     log('WhatsApp כבוי; אין מה לבדוק.');
     return { run: false, reason: 'disabled' };

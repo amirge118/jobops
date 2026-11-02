@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { serviceLabel } from './service-labels.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,13 +27,13 @@ export const SCHEDULES = [
   // scores new titles that pass the filters). :05 stays off the other slots.
   {
     key: 'ats',
-    label: 'com.amirgefen.jobops.scan-ats',
+    label: serviceLabel('scan-ats'),
     args: ['--ats-only', '--wait-for-lock', '20'],
     times: hourly({ from: 8, to: 21, minute: 5 }),
   },
   {
     key: 'whatsapp',
-    label: 'com.amirgefen.jobops.scan-whatsapp',
+    label: serviceLabel('scan-whatsapp'),
     args: ['--whatsapp-only'],
     times: [{ hour: 10, minute: 0 }, { hour: 15, minute: 0 }, { hour: 20, minute: 0 }],
   },
@@ -44,7 +45,7 @@ export const SCHEDULES = [
   // rare collision into a short delay.
   {
     key: 'linkedin',
-    label: 'com.amirgefen.jobops.scan-linkedin',
+    label: serviceLabel('scan-linkedin'),
     args: ['--linkedin-only', '--wait-for-lock', '20'],
     times: hourly({ from: 8, to: 22, minute: 30, every: 2 }),
   },
@@ -54,7 +55,7 @@ export const SCHEDULES = [
   // pages in a headless browser; Codex only researches never-researched ones.
   {
     key: 'companies',
-    label: 'com.amirgefen.jobops.resolve-companies',
+    label: serviceLabel('resolve-companies'),
     script: ['scripts', 'jobs', 'company-auto-resolve.mjs'],
     args: [],
     times: [{ hour: 13, minute: 20 }],
@@ -64,7 +65,7 @@ export const SCHEDULES = [
   // WhatsApp alert only for problems that are new since the last check.
   {
     key: 'health',
-    label: 'com.amirgefen.jobops.health-check',
+    label: serviceLabel('health-check'),
     script: ['scripts', 'health-check.mjs'],
     args: [],
     times: hourly({ from: 9, to: 22, minute: 50 }),
@@ -75,7 +76,7 @@ export const SCHEDULES = [
   // 10 minutes for the scan lock turns a collision into a short delay.
   {
     key: 'linkedin-queue',
-    label: 'com.amirgefen.jobops.linkedin-queue',
+    label: serviceLabel('linkedin-queue'),
     args: ['--linkedin-queue', '--wait-for-lock', '10'],
     intervalSeconds: 1800,
   },
@@ -86,7 +87,7 @@ export const SCHEDULES = [
   // caffeinate stops the Mac sleeping again in the middle of the Codex call.
   {
     key: 'weekly-stats',
-    label: 'com.amirgefen.jobops.weekly-stats',
+    label: serviceLabel('weekly-stats'),
     script: ['scripts', 'jobs', 'weekly-stats.mjs'],
     args: ['--send'],
     keepAwake: true,
@@ -97,7 +98,7 @@ export const SCHEDULES = [
   // oldest has waited long enough (see scripts/jobs/whatsapp-trigger.mjs).
   {
     key: 'whatsapp-trigger',
-    label: 'com.amirgefen.jobops.whatsapp-trigger',
+    label: serviceLabel('whatsapp-trigger'),
     script: ['scripts', 'jobs', 'whatsapp-trigger.mjs'],
     args: [],
     intervalSeconds: 1800,

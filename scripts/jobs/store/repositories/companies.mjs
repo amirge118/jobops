@@ -56,7 +56,7 @@ function mapCompany(row, sources = []) {
   };
 }
 
-export function createCompaniesRepository({ db, store }) {
+export function createCompaniesRepository({ db, store, userId }) {
   const getCompanyRow = db.prepare('SELECT * FROM companies WHERE id = ?');
   const listCompanySources = db.prepare('SELECT * FROM company_job_sources WHERE company_id = ? ORDER BY id');
   const getCompanySnapshot = async (id) => {
@@ -579,9 +579,17 @@ export function createCompaniesRepository({ db, store }) {
       return { updated };
     },
 
+    async listBlockedCompanies() {
+      return await db.prepare('SELECT company_key AS key, name AS company, blocked_at AS blockedAt FROM blocked_companies WHERE user_id = ? ORDER BY blocked_at DESC').all(userId);
+    },
+
+    async unblockCompany(key) {
+      return (await db.prepare('DELETE FROM blocked_companies WHERE user_id = ? AND company_key = ?').run(userId, String(key))).changes > 0;
+    },
+
     async isCompanyBlocked(company) {
       const key = companyIdentityKey(company);
-      return Boolean(key && await db.prepare('SELECT 1 FROM blocked_companies WHERE company_key = ?').get(key));
+      return Boolean(key && await db.prepare('SELECT 1 FROM blocked_companies WHERE user_id = ? AND company_key = ?').get(userId, key));
     },
 
     async getHireMeTechTarget(jobId) {

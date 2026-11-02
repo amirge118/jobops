@@ -3,6 +3,9 @@
 // A key is the setting's path in the config object, and a stored value overrides
 // config/jobs.yml, which overrides the code default.
 
+import { OUTPUT_LANGUAGES } from './llm/output-language.mjs';
+import { normalizeLinkedInSearch } from './store/repositories/linkedin.mjs';
+
 const MAX_LIST_ITEMS = 200;
 const MAX_TEXT_CHARS = 200;
 
@@ -26,6 +29,29 @@ function score(value) {
   return value;
 }
 
+// Each search adds requests, and blocking risks the whole LinkedIn source, so the
+// number of searches is limited here, while rate limits stay out of settings.
+const MAX_LINKEDIN_SEARCHES = 6;
+
+function linkedinSearches(value) {
+  if (!Array.isArray(value) || value.length > MAX_LINKEDIN_SEARCHES) throw new Error(`Expected up to ${MAX_LINKEDIN_SEARCHES} searches`);
+  const searches = value.map((search) => {
+    const { key, label, keywords, location, geoId } = normalizeLinkedInSearch(search);
+    if (!key) throw new Error('Every search needs a key');
+    return { key, label, keywords, ...(location ? { location } : {}), ...(geoId ? { geoId } : {}), ...(search.titleIncludes?.length ? { titleIncludes: list(search.titleIncludes) } : {}) };
+  });
+  if (new Set(searches.map(({ key }) => key)).size !== searches.length) throw new Error('Search keys must be unique');
+  return searches;
+}
+
+function whatsappGroups(value) {
+  if (!Array.isArray(value) || value.length > MAX_LIST_ITEMS) throw new Error(`Expected a list of up to ${MAX_LIST_ITEMS} groups`);
+  return value.map(({ name, jid }) => {
+    if (typeof jid !== 'string' || !/^[0-9-]+@g\.us$/.test(jid)) throw new Error('Invalid group');
+    return { name: text(name), jid };
+  });
+}
+
 function oneOf(...allowed) {
   return (value) => {
     if (!allowed.includes(value)) throw new Error(`Expected one of: ${allowed.join(', ')}`);
@@ -41,6 +67,11 @@ export const USER_SETTINGS = Object.freeze({
   'decision.exactMatchScore': score,
   'notifications.whatsapp.enabled': boolean,
   'notifications.whatsapp.minScore': score,
+  'sources.whatsapp.groups': whatsappGroups,
+  'sources.whatsapp.markRead': boolean,
+  'sources.linkedin.searches': linkedinSearches,
+  'sources.linkedin.acceptedAreas': list,
+  'ai.outputLanguage': oneOf(...OUTPUT_LANGUAGES),
   'search.rolePreset': oneOf('backend', 'generic'),
   'search.focusRole': text,
   'search.excludedRoleTypes': list,

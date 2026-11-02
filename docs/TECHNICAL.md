@@ -133,7 +133,7 @@ npm run start:local
 
 **Dashboard service.** Started from a terminal, the dashboard lives in that terminal's process
 group, so closing the tab (or the session that owns it) stops it. `npm run dashboard:service:install`
-(`scripts/dashboard/service.mjs`) installs the LaunchAgent `com.amirgefen.jobops.dashboard`: it
+(`scripts/dashboard/service.mjs`) installs the LaunchAgent `com.jobops.dashboard`: it
 runs `scripts/web.mjs` without `--open`, with `RunAtLoad` and `KeepAlive` (restart after a crash,
 throttled to 10 seconds), and logs to `logs/dashboard.log`. While it is installed,
 `start:local`/`restart:local` reload it through `launchctl bootout`/`bootstrap` (then open the
@@ -198,7 +198,7 @@ their minimal deduplication identity is retained.
 ### Health check
 
 `scripts/jobs/health-check.mjs` runs hourly at :50 from 09:50 to 22:50 (LaunchAgent
-`com.amirgefen.jobops.health-check`, `npm run jobs:health-check`) and makes no Codex calls.
+`com.jobops.health-check`, `npm run jobs:health-check`) and makes no Codex calls.
 `store.listHealthFacts()` gathers raw facts; `evaluateHealth()` is pure and turns them into
 findings with thresholds in `HEALTH_THRESHOLDS`. Rules, each meant to catch something that will
 not fix itself:
@@ -253,7 +253,7 @@ them passes `--open`, so unattended matches wait for review on `/decisions` rath
 flood of Chrome tabs while no one is watching. Each agent writes stdout and stderr to
 `logs/scheduled/<key>.log`, so a skipped run (lock, cooldown, quota) or a crash leaves a trace.
 
-**LinkedIn queue reader and the shared hourly cap.** `com.amirgefen.jobops.linkedin-queue` runs
+**LinkedIn queue reader and the shared hourly cap.** `com.jobops.linkedin-queue` runs
 `jobs.mjs --linkedin-queue --wait-for-lock 10` every 30 minutes (`StartInterval` 1800). It is a
 retry run limited to queued LinkedIn postings (`selectLinkedInQueue`): newest first, at most one
 run's posting budget (`limits.maxDetailFetchesPerRun`), nothing while LinkedIn is cooling down, and
@@ -298,8 +298,8 @@ npm run jobs:schedule:uninstall  # remove all three; the database and config are
 The schedule itself lives in `SCHEDULES` in
 [`scripts/jobs/scheduled-scan-service.mjs`](../scripts/jobs/scheduled-scan-service.mjs) — edit
 the `times` array for either entry and reinstall to change it. Each entry becomes its own
-LaunchAgent (`com.amirgefen.jobops.scan-ats`, `com.amirgefen.jobops.scan-whatsapp`,
-`com.amirgefen.jobops.scan-linkedin`) because one
+LaunchAgent (`com.jobops.scan-ats`, `com.jobops.scan-whatsapp`,
+`com.jobops.scan-linkedin`) because one
 `StartCalendarInterval` always fires the same fixed command, so a source that runs at several
 times a day and one that runs once cannot share a single agent.
 
@@ -346,7 +346,7 @@ deliberately not filtered: four of them were marked interested.
 The persistent Collector stores group messages locally at no cost; only processing (page reads
 and Codex scoring) uses ChatGPT/Codex quota, and every Codex batch resends a fixed ~2.4k-token
 prompt. `scripts/jobs/whatsapp-trigger.mjs` therefore runs every 30 minutes as its own
-LaunchAgent (`com.amirgefen.jobops.whatsapp-trigger`, `StartInterval` 1800) and spends no tokens
+LaunchAgent (`com.jobops.whatsapp-trigger`, `StartInterval` 1800) and spends no tokens
 deciding. It counts the **new jobs** in the collected backlog: unique job links from pending
 messages that are not already in SQLite and are not known non-job links (a link shared in all
 four groups counts once). It then starts the same local-backlog processing as the dashboard's
@@ -680,7 +680,7 @@ without it the whole offline queue stalls (seen 2026-10-19 09:44–12:44).
 ### Automatic company resolution
 
 `scripts/jobs/company-auto-resolve.mjs` runs daily at 13:20 (LaunchAgent
-`com.amirgefen.jobops.resolve-companies`) over every `candidate` company that was never checked or
+`com.jobops.resolve-companies`) over every `candidate` company that was never checked or
 whose retry time has come. Each one ends in exactly one of two places:
 
 1. **Watched**: a source that returned jobs *and* evidently belongs to the company. It is labeled
@@ -951,6 +951,14 @@ npm run scan:dry
   are edited on `/profile`; `profile/*.md` are a copy for skills, and a hand edit waits for adoption (ADR 0009).
 - **Re-scoring is the person's decision:** a changed profile leaves verdicts as they are until they see the cost
   and confirm on `/profile`; search rules and pre-filters are per-user settings, not code (ADR 0010).
+- **Sources belong to the owner:** one WhatsApp connection and one LinkedIn network feed everyone, so only the
+  owner changes them; the picker shows group names, never their addresses (ADR 0011).
+- **Applications are rows:** `/tracker` lists and edits them, and `data/applications.md` is a copy for skills.
+  Suitable jobs appear only on the Decisions page; scans no longer append to `data/pipeline.md` (ADR 0012).
+- **A store works for one user:** decisions, blocks, gap data, reports and alerts are filtered by the store's user,
+  and negative tests cover reads and writes across users (ADR 0013).
+- **Starting takes no developer:** `/start` shows steps read from what you already did, the system's state, and a
+  download of your data. See `docs/multi-user-readiness.md` for what remains before others can use it (ADR 0014).
 - **One storage layer:** all SQL sits under `scripts/jobs/store/`, behind an async driver module and
   numbered migrations, so the database can be replaced later (ADR 0007).
 - **No scoring API key:** matching runs through the locally signed-in Codex CLI and explicitly

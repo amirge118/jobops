@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCodexBinary, runCodexExec } from './llm/codex-provider.mjs';
+import { outputLanguage } from './llm/output-language.mjs';
 import { sourceMixOf } from './store.mjs';
 
 function firstSource(sourcesJson) {
@@ -69,9 +70,9 @@ function normalizeScreenPass(value) {
   return { level: value.level, reason };
 }
 
-function promptPrefix(profile, currentResume) {
+function promptPrefix(profile, currentResume, language) {
   return `You analyze gaps between a job and the candidate's exact current resume.
-Return only the JSON required by the output schema. Write explanation, suggestion, note and reason in concise Hebrew: at most 20 words each (priority at most 10 words). Brevity is required: every output token is paid for.
+Return only the JSON required by the output schema. Write explanation, suggestion, note and reason in concise ${language}: at most 20 words each (priority at most 10 words). Brevity is required: every output token is paid for.
 
 Verified candidate profile (evidence source; it may contain facts omitted from the resume):
 ${String(profile || '').trim()}
@@ -129,7 +130,7 @@ export function createResumeGapAnalyzer({ config = {}, runCodex = runCodexExec }
       const batchResults = [];
       const batchFailures = [];
       try {
-        const prompt = `${promptPrefix(profile, currentResume)}\n\nJobs:\n${JSON.stringify(batch.map(jobPayload), null, 2)}`;
+        const prompt = `${promptPrefix(profile, currentResume, outputLanguage(config))}\n\nJobs:\n${JSON.stringify(batch.map(jobPayload), null, 2)}`;
         const response = await runCodex({
           prompt,
           schemaPath,

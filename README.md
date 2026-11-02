@@ -187,8 +187,14 @@ you to review; nothing is saved or invented without your approval. Changing a ph
 re-scores anything.
 
 The page also holds what you are looking for: target domains, excluded roles, level, locations, score
-thresholds and the free title filters, which AI can suggest for your field. After a change, existing scores
+thresholds and the free title filters, which AI can suggest for your field. Sources are there too: which WhatsApp
+groups to read, up to six LinkedIn searches, alerts, and which companies you blocked. After a change, existing scores
 stay until you see the estimated AI cost and confirm a re-score, optionally including recent rejections.
+
+## Tracks where every application stands
+
+The `/tracker` page lists your applications with status filters, inline status and notes, and what is due for
+a follow-up. Interview stories live on `/profile` with the same version history.
 
 ## Shows what your CV is missing for a perfect fit
 
@@ -225,6 +231,10 @@ npm run demo
 ```
 
 ## Run it on your own search
+
+After `npm run setup` and `npm run web`, the `/start` page walks you through your CV, what you are looking for, the
+filters, your sources and a first scan. You can skip any step and return later, and download your data at any time.
+
 
 ```bash
 npm ci

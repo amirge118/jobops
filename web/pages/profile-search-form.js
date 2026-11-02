@@ -4,6 +4,8 @@ const LIST = 'list';
 const TEXT = 'text';
 const SCORE = 'score';
 const BOOLEAN = 'boolean';
+const LANGUAGE = 'language';
+const LANGUAGES = [['Hebrew', 'עברית'], ['English', 'English'], ['Arabic', 'العربية'], ['Russian', 'Русский']];
 
 const GROUPS = [
   {
@@ -19,6 +21,7 @@ const GROUPS = [
       { key: 'search.maxLevel', label: 'הדרגה הגבוהה ביותר', type: TEXT, placeholder: 'למשל: Senior' },
       { key: 'search.levelCapTitles', label: 'כותרות מעל הדרגה הזו', type: LIST },
       { key: 'search.avoidPeopleManagement', label: 'לא מחפש תפקיד ניהול אנשים', type: BOOLEAN },
+      { key: 'ai.outputLanguage', label: 'שפת הסיכומים והסיבות', type: LANGUAGE },
     ],
   },
   {
@@ -53,6 +56,11 @@ const GROUPS = [
 const valueAt = (source, key) => key.split('.').reduce((value, part) => value?.[part], source);
 
 function createInput(field) {
+  if (field.type === LANGUAGE) {
+    const select = document.createElement('select');
+    select.append(...LANGUAGES.map(([value, label]) => new Option(label, value)));
+    return select;
+  }
   if (field.type === LIST) return Object.assign(document.createElement('textarea'), { rows: 4, dir: 'auto' });
   if (field.type === BOOLEAN) return Object.assign(document.createElement('input'), { type: 'checkbox' });
   if (field.type === SCORE) return Object.assign(document.createElement('input'), { type: 'number', min: 0, max: 5, step: 0.1 });
