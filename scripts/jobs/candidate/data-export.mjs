@@ -10,11 +10,13 @@ export async function exportPersonalData({ store, userId, now = Date.now() }) {
   const documents = {};
   for (const kind of DOCUMENT_KINDS) documents[kind] = (await store.getCurrentDocument(userId, kind))?.content ?? null;
   const settings = Object.fromEntries(Object.entries(await store.listUserSettings(userId)).filter(([key]) => !NOT_PERSONAL_SETTINGS.has(key)));
+  const resumeFile = await store.getCurrentProfileFile(userId);
   const applications = (await store.listApplications(userId)).map(({ numberLabel, date, company, role, score, status, notes }) => ({ number: numberLabel, date, company, role, score, status, notes }));
   return {
     exportedAt: new Date(now).toISOString(),
     identity: parseIdentity(documents.profile ?? ''),
     documents,
+    resumeFile: resumeFile && { fileName: resumeFile.fileName, mimeType: resumeFile.mimeType, createdAt: new Date(resumeFile.createdAt).toISOString(), contentBase64: resumeFile.content.toString('base64') },
     settings,
     applications,
     decisions: await store.listJobDecisions(),

@@ -9,6 +9,7 @@ What stands between jobOps and a second real user, as of 2026-11-02. Decisions a
 | Storage layer | Async, by domain, numbered migrations, one driver module | 0007 |
 | Request safety | Foreign `Host` and `Origin` refused, JSON required on writes | 0008 |
 | CV, profile, preferences, stories | Versioned documents per user, edited in the app | 0009, 0012 |
+| CV file and its explanation | Uploaded file and cached AI text per user; files unencrypted until hosting decides | 0015 |
 | Search rules and pre-filters | Per-user settings with a closed allowlist | 0010 |
 | Re-scoring | Only after seeing the cost and confirming | 0010 |
 | Sources | Shared, owner-only changes, no addresses in the page | 0011 |

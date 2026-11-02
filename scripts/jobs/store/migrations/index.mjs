@@ -5,6 +5,8 @@ import { up as rescoreRequests } from './004-rescore-requests.mjs';
 import { up as knownGroups } from './005-known-whatsapp-groups.mjs';
 import { up as applications } from './006-applications-and-stories.mjs';
 import { up as userOwnedTables } from './007-user-owned-tables.mjs';
+import { up as profileFiles } from './008-profile-files.mjs';
+import { up as cvInsights } from './009-cv-insights.mjs';
 
 // Append-only: a shipped migration never changes, and each runs once per
 // database. A schema or data change is a new entry here, including a new
@@ -17,6 +19,8 @@ export const MIGRATIONS = Object.freeze([
   { version: 5, name: 'known_whatsapp_groups', up: knownGroups },
   { version: 6, name: 'applications_and_stories', up: applications },
   { version: 7, name: 'user_owned_tables', up: userOwnedTables },
+  { version: 8, name: 'profile_files', up: profileFiles },
+  { version: 9, name: 'cv_insights', up: cvInsights },
 ]);
 
 export function runMigrations(db, migrations = MIGRATIONS) {

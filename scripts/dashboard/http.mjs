@@ -13,13 +13,16 @@ export function sendJson(response, statusCode, payload) {
 
 // A route expecting larger documents passes its own maxBytes.
 export async function readJson(request, { maxBytes = MAX_BODY_BYTES } = {}) {
-  let body = '';
+  // Reads to the end even past the limit, keeping nothing: leaving the loop early
+  // would close the connection before the refusal could be sent.
+  const chunks = [];
+  let size = 0;
   for await (const chunk of request) {
-    body += chunk;
-    if (Buffer.byteLength(body) > maxBytes) {
-      throw Object.assign(new Error('Request body is too large'), { statusCode: 413 });
-    }
+    size += chunk.length;
+    if (size <= maxBytes) chunks.push(chunk);
   }
+  if (size > maxBytes) throw Object.assign(new Error('Request body is too large'), { statusCode: 413 });
+  const body = Buffer.concat(chunks).toString('utf8');
   if (!body) return {};
   try {
     return JSON.parse(body);

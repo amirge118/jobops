@@ -3,7 +3,7 @@ import { startAdaptivePolling } from './polling.js';
 
 const page = document.body.dataset.page;
 const shell = document.querySelector('#app-shell');
-const pageLabels = { start: 'התחלה', scan: 'סריקה ותוצאה', decisions: 'החלטות', companies: 'חברות במעקב', tracker: 'מועמדויות', profile: 'קורות חיים', 'personal-area': 'אזור אישי', 'decision-stats': 'סטטיסטיקה' };
+const pageLabels = { start: 'התחלה', scan: 'סריקה ותוצאה', decisions: 'החלטות', companies: 'חברות במעקב', tracker: 'מועמדויות', profile: 'קורות חיים', settings: 'הגדרות חיפוש', 'personal-area': 'אזור אישי', 'decision-stats': 'סטטיסטיקה' };
 
 shell.innerHTML = `
   <header class="topbar">

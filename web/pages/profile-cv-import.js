@@ -3,7 +3,7 @@ import { postJson } from '../shared/api-client.js';
 export function createCvImport({ onDraft, feedback }) {
   const text = document.querySelector('#cv-text');
   const run = document.querySelector('#cv-import-run');
-  const warnings = document.querySelector('#cv-warnings');
+  const warnings = document.querySelector('#cv-import-warnings');
 
   run.addEventListener('click', async () => {
     run.disabled = true;

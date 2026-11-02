@@ -22,7 +22,7 @@ export function createRescoreBanner({ root, feedback }) {
       root.append(Object.assign(document.createElement('p'), { textContent: `${estimate.requested} משרות ממתינות לניקוד מחדש בסריקה הקרובה.` }));
     }
     if (!estimate.active && !estimate.rejected) return;
-    const intro = Object.assign(document.createElement('p'), { textContent: 'ההעדפות השתנו, והציונים הקיימים נשארים כמו שהם עד שתאשר. משרות חדשות כבר מנוקדות לפי ההעדפות החדשות.' });
+    const intro = Object.assign(document.createElement('p'), { textContent: 'המידע שעליו מבוסס הציון השתנה, והציונים הקיימים נשארים כמו שהם עד שתאשר. משרות חדשות כבר מנוקדות לפי המידע החדש.' });
     const cost = Object.assign(document.createElement('p'), { textContent: describe(false) });
     const includeRejected = Object.assign(document.createElement('input'), { type: 'checkbox', id: 'rescore-rejected' });
     const rejectedLabel = Object.assign(document.createElement('label'), { htmlFor: includeRejected.id, textContent: ` לכלול ${estimate.rejected} משרות שנדחו ב-${estimate.rejectedWindowDays} הימים האחרונים. הן ייקראו שוב מהמקור, וזה חשוב כשמרחיבים את החיפוש.` });

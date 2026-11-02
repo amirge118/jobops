@@ -50,7 +50,7 @@ function parseArgs(argv) {
 
 export async function createDashboardServer({
   config = loadJobsConfig(), execute = runCommand, readiness = null, researchCompany = null,
-  probeSource = probeCompanySource, browserResolve = null, onSourcesChanged = () => {},
+  probeSource = probeCompanySource, browserResolve = null, onSourcesChanged = () => {}, draftCv, cvInsights,
 } = {}) {
   const staticDir = path.join(config.rootDir, 'web');
   const bootstrapStore = createJobStore(config.jobsDbPath);
@@ -94,7 +94,7 @@ export async function createDashboardServer({
     createAccountRoutes({ config }),
     createOverviewRoutes({ config, queries, readinessService, snapshot }),
     createPersonalAreaRoutes({ config }),
-    createProfileRoutes({ config }),
+    createProfileRoutes({ config, draftCv, cvInsights }),
     createSearchSettingsRoutes({ config, readinessService, startAction }),
     createSourceSettingsRoutes({ config, onSourcesChanged }),
     createSourcesRoutes({ config, queries }),

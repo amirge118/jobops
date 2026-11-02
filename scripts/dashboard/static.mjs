@@ -8,6 +8,7 @@ const PAGE_ROUTES = new Map([
   ['/personal-area', 'personal-area.html'],
   ['/start', 'start.html'],
   ['/profile', 'profile.html'],
+  ['/settings', 'settings.html'],
   ['/tracker', 'tracker.html'],
   ['/decision-stats', 'decision-stats.html'],
 ]);

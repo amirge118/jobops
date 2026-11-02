@@ -27,6 +27,7 @@ import { createLinkedinRepository } from './repositories/linkedin.mjs';
 import { createWeeklyReportsRepository } from './repositories/weekly-reports.mjs';
 import { createPulseRepository } from './repositories/pulse.mjs';
 import { createProfileDocumentsRepository } from './repositories/profile-documents.mjs';
+import { createProfileFilesRepository } from './repositories/profile-files.mjs';
 import { createRescoreRepository } from './repositories/rescore.mjs';
 import { createApplicationsRepository } from './repositories/applications.mjs';
 import { createUsersRepository } from './repositories/users.mjs';
@@ -57,6 +58,7 @@ const REPOSITORIES = [
   createApplicationsRepository,
   createRescoreRepository,
   createProfileDocumentsRepository,
+  createProfileFilesRepository,
   createWeeklyStatsRepository,
 ];
 

@@ -181,12 +181,16 @@ your tracked applications — what happened after "applied".
 
 ## Your CV and search live in the app
 
-The `/profile` page edits your CV, contact details, what you are looking for and any extra facts,
-with a version history you can restore. Paste an existing CV and AI organizes it into sections for
-you to review; nothing is saved or invented without your approval. Changing a phone number never
+On the `/profile` page you upload your CV as a PDF or Word file. Its text is read on your computer, and the file itself
+is never sent to AI. The page then explains how the system understands you, what to improve in the file with the exact
+words each note is about, and what recurring jobs ask for that the CV lacks. The text stays one click away for fixing
+a misread, or for pasting when a PDF is scanned, with a version history you can restore.
+
+A new CV does not change any score by itself. Scores rest on your facts, so the page proposes what the file says and
+those facts lack, each quoted from the file, and only what you approve goes in. Changing a phone number never
 re-scores anything.
 
-The page also holds what you are looking for: target domains, excluded roles, level, locations, score
+The `/settings` page holds what you are looking for: target domains, excluded roles, level, locations, score
 thresholds and the free title filters, which AI can suggest for your field. Sources are there too: which WhatsApp
 groups to read, up to six LinkedIn searches, alerts, and which companies you blocked. After a change, existing scores
 stay until you see the estimated AI cost and confirm a re-score, optionally including recent rejections.
@@ -194,7 +198,7 @@ stay until you see the estimated AI cost and confirm a re-score, optionally incl
 ## Tracks where every application stands
 
 The `/tracker` page lists your applications with status filters, inline status and notes, and what is due for
-a follow-up. Interview stories live on `/profile` with the same version history.
+a follow-up. Interview stories live on `/personal-area`, with a version history.
 
 ## Shows what your CV is missing for a perfect fit
 
@@ -248,12 +252,12 @@ npm run dashboard:service:install  # optional: keep the dashboard running in the
 With the dashboard service installed, the dashboard starts at login, comes back after a crash,
 and no longer depends on the terminal that started it. It also restarts itself when
 `config/jobs.yml` changes (once no action is running and the new file loads), so new groups or
-searches show up without a manual restart. Saving groups on `/profile` restarts the WhatsApp
+searches show up without a manual restart. Saving groups on `/settings` restarts the WhatsApp
 collector for you; after editing the file by hand it needs
 `launchctl kickstart -k gui/$(id -u)/com.jobops.whatsapp-collector` (the prefix is
 `service.labelPrefix` in `config/jobs.yml`) to pick up new groups.
 
-Then open `http://127.0.0.1:4177/start`, which walks through the setup. Sources are on `/profile`;
+Then open `http://127.0.0.1:4177/start`, which walks through the setup. Sources are on `/settings`;
 their defaults and every limit live in `config/jobs.yml`, and watched companies in `portals.yml`.
 
 ## Learn more

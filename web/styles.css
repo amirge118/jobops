@@ -676,6 +676,38 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 16px
 .profile-subtitle { margin: 16px 0 4px; font-size: 14px; }
 .profile-notice p { margin: 0 0 6px; }
 
+/* CV tab: the file, then what it says */
+#cv-file-card { margin: 0 0 16px; }
+.cv-drop { display: grid; justify-items: center; gap: 6px; padding: 32px 16px; border: 1px dashed var(--line-strong); border-radius: 6px; text-align: center; }
+.cv-drop strong { font-size: 15px; }
+.cv-drop .profile-hint { max-width: 56ch; margin: 0 0 8px; }
+#cv-file-card[data-over="true"] .cv-drop, #cv-file-card[data-over="true"] .cv-file { border-color: var(--accent); background: var(--accent-soft); }
+#cv-file-card[data-busy="true"] { opacity: 0.6; pointer-events: none; }
+.cv-file { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid var(--line-strong); border-radius: 6px; }
+.cv-file-details { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.cv-file-details small { color: var(--faint); }
+.cv-progress { margin: 0 0 12px; color: var(--accent-text); }
+.cv-block { margin: 0 0 20px; }
+.cv-block .profile-subtitle { margin: 0 0 8px; font-size: 15px; }
+.cv-block p { margin: 0 0 8px; line-height: 1.6; }
+.cv-headline { font-weight: 600; }
+.cv-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 0; }
+.cv-chips small { color: var(--faint); }
+.cv-chip { padding: 2px 8px; border-radius: 999px; background: var(--raised); }
+.cv-facts, .cv-notes { display: grid; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }
+.cv-fact { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.cv-fact label { display: flex; gap: 8px; align-items: flex-start; min-width: 0; overflow-wrap: anywhere; cursor: pointer; }
+.cv-fact input { flex: none; margin-top: 4px; }
+.cv-fact .button { flex: none; }
+.cv-fact p { margin: 4px 0; }
+.cv-fact-conflict { border-color: var(--gold); background: var(--gold-soft); }
+.cv-note { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.cv-note p { margin: 4px 0 0; color: var(--muted); }
+.cv-note blockquote { margin: 6px 0 0; padding: 0 8px; border-inline-start: 2px solid var(--line-strong); color: var(--faint); overflow-wrap: anywhere; }
+#resume-text .profile-import { margin: 12px 0 0; }
+#stories summary { cursor: pointer; font-weight: 600; }
+#stories .profile-hint { margin-top: 12px; }
+
 /* Tracker page */
 .tracker-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
 .tracker-table { width: 100%; border-collapse: collapse; }

@@ -3,7 +3,7 @@ import { requestJson, postJson } from '../shared/api-client.js';
 import { formatTime } from '../shared/formatters.js';
 
 const sourceLabels = {
-  import: 'ייבוא', editor: 'עריכה', identity: 'פרטים אישיים', restore: 'שחזור', file: 'מקובץ', from_resume: 'מקורות חיים',
+  import: 'ייבוא', upload: 'העלאת קובץ', editor: 'עריכה', identity: 'פרטים אישיים', restore: 'שחזור', file: 'מקובץ', from_resume: 'מקורות חיים',
 };
 
 function element(tag, props = {}, ...children) {

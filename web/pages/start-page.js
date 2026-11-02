@@ -1,10 +1,10 @@
 import { requestJson } from '../shared/api-client.js';
 
 const STEPS = {
-  resume: { title: 'קורות החיים שלך', text: 'מדביקים את הטקסט, והמערכת מארגנת אותו בסעיפים לאישור שלך.', href: '/profile', action: 'לקורות החיים' },
-  search: { title: 'מה אתה מחפש', text: 'תפקיד, תחומים, מיקום ודרגה. על זה מבוסס הציון של כל משרה.', href: '/profile#preferences', action: 'להגדרת החיפוש' },
-  filters: { title: 'סינון ראשוני', text: 'מילות המפתח שמסננות כותרות לפני הניקוד. אפשר לקבל הצעה מותאמת לתחום שלך.', href: '/profile#preferences', action: 'למסננים' },
-  sources: { title: 'מקורות', text: 'מאיפה להביא משרות: חברות במעקב, חיפושי LinkedIn או קבוצות.', href: '/profile#sources', action: 'למקורות' },
+  resume: { title: 'קורות החיים שלך', text: 'מעלים קובץ PDF או Word, והמערכת מסבירה איך היא מבינה אותו.', href: '/profile', action: 'לקורות החיים' },
+  search: { title: 'מה אתה מחפש', text: 'תפקיד, תחומים, מיקום ודרגה. על זה מבוסס הציון של כל משרה.', href: '/settings#preferences', action: 'להגדרת החיפוש' },
+  filters: { title: 'סינון ראשוני', text: 'מילות המפתח שמסננות כותרות לפני הניקוד. אפשר לקבל הצעה מותאמת לתחום שלך.', href: '/settings#preferences', action: 'למסננים' },
+  sources: { title: 'מקורות', text: 'מאיפה להביא משרות: חברות במעקב, חיפושי LinkedIn או קבוצות.', href: '/settings#sources', action: 'למקורות' },
   scan: { title: 'סריקה ראשונה', text: 'מריצים סריקה ורואים את המשרות המתאימות בעמוד ההחלטות.', href: '/scan', action: 'לסריקה' },
 };
 

@@ -69,7 +69,7 @@ function render(data) {
 
 const purposeLabels = {
   scoring: 'ניקוד משרות', resume_gap: 'ניתוח קורות חיים', gap_coverage: 'בדיקת כיסוי פערים', weekly_stats: 'דוח שבועי',
-  company_research: 'מחקר חברה', probe: 'בדיקת מכסה', other: 'אחר',
+  company_research: 'מחקר חברה', probe: 'בדיקת מכסה', cv_import: 'ארגון קורות חיים', cv_analysis: 'הסבר קורות חיים', cv_profile_diff: 'השוואת קורות חיים לעובדות', other: 'אחר',
 };
 
 function tokenTotal(row) {

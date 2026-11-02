@@ -948,9 +948,10 @@ npm run scan:dry
 - **Other websites can't drive the dashboard:** every request passes a guard that refuses foreign
   `Host` and `Origin` values and non-JSON bodies (ADR 0008).
 - **Documents own the candidate text:** the CV, profile and preferences live in the database and
-  are edited on `/profile`; `profile/*.md` are a copy for skills, and a hand edit waits for adoption (ADR 0009).
+  are edited on `/profile` and `/settings`; `profile/*.md` are a copy for skills, and a hand edit waits for adoption (ADR 0009).
+- **The CV starts from a file:** an uploaded PDF or DOCX is read locally in a limited worker and never sent to AI; what AI says about it is display only, and facts reach the profile only by approval (ADR 0015).
 - **Re-scoring is the person's decision:** a changed profile leaves verdicts as they are until they see the cost
-  and confirm on `/profile`; search rules and pre-filters are per-user settings, not code (ADR 0010).
+  and confirm on `/profile` or `/settings`; search rules and pre-filters are per-user settings, not code (ADR 0010).
 - **Sources belong to the owner:** one WhatsApp connection and one LinkedIn network feed everyone, so only the
   owner changes them; the picker shows group names, never their addresses (ADR 0011).
 - **Applications are rows:** `/tracker` lists and edits them, and `data/applications.md` is a copy for skills.

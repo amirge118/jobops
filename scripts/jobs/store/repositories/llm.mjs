@@ -70,7 +70,7 @@ export function createLlmRepository({ db, store }) {
         const mix = parseJson(call.source_mix, null);
         const shares = mix && Object.values(mix).some((count) => count > 0)
           ? Object.entries(mix).filter(([, count]) => count > 0)
-          : [[['probe', 'company_research', 'gap_coverage'].includes(call.purpose) ? 'system' : 'unclassified', 1]];
+          : [[['probe', 'company_research', 'gap_coverage', 'cv_import', 'cv_analysis', 'cv_profile_diff'].includes(call.purpose) ? 'system' : 'unclassified', 1]];
         const total = shares.reduce((sum, [, count]) => sum + Number(count), 0);
         for (const [source, count] of shares) {
           const row = rowFor(day, source);

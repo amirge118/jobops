@@ -5,47 +5,40 @@
     <div id="app-shell"></div>
     <div class="shell">
       <main class="page-main">
-        <section class="page-hero"><div><h1>קורות חיים</h1><p>הפרטים שלך, ומה שהמערכת מסתמכת עליו כשהיא בודקת התאמה למשרות.</p></div></section>
+        <section class="page-hero"><div><h1>קורות חיים</h1><p>מעלים קובץ, ורואים איך המערכת מבינה אותך ומה כדאי לשפר.</p></div></section>
         <div id="file-drift" class="profile-notice" role="status" hidden></div>
         <div id="rescore-banner" class="profile-notice" role="status" hidden></div>
         <nav class="profile-tabs" role="tablist" aria-label="חלקי הפרופיל">
           <button type="button" role="tab" data-tab="resume" aria-selected="true">קורות חיים</button>
           <button type="button" role="tab" data-tab="identity" aria-selected="false">פרטים אישיים</button>
-          <button type="button" role="tab" data-tab="preferences" aria-selected="false">מה אני מחפש</button>
-          <button type="button" role="tab" data-tab="sources" aria-selected="false">מקורות והתראות</button>
-          <button type="button" role="tab" data-tab="profile" aria-selected="false">מידע נוסף</button>
-          <button type="button" role="tab" data-tab="stories" aria-selected="false">סיפורים לראיונות</button>
+          <button type="button" role="tab" data-tab="profile" aria-selected="false">עובדות נוספות</button>
         </nav>
         <section id="tab-resume" class="page-section profile-panel" role="tabpanel">
-          <details id="cv-import" class="profile-import">
-            <summary>ייבוא מקורות חיים קיימים</summary>
-            <p class="profile-hint">הדבק את הטקסט של קורות החיים. המערכת תארגן אותו בסעיפים בלי להוסיף דבר, ושום דבר לא יישמר לפני שתאשר.</p>
-            <label for="cv-text">טקסט קורות החיים</label>
-            <textarea id="cv-text" dir="auto" rows="8"></textarea>
-            <button id="cv-import-run" type="button" class="button button-secondary">ארגן בסעיפים</button>
-            <ul id="cv-warnings" class="profile-warnings" hidden></ul>
+          <div id="cv-file-card"></div>
+          <p id="cv-progress" class="cv-progress" role="status" aria-live="polite" hidden></p>
+          <ul id="cv-warnings" class="profile-warnings" hidden></ul>
+          <div id="cv-explanation"></div>
+          <details id="resume-text" class="profile-import">
+            <summary>הטקסט שהמערכת קראה</summary>
+            <p class="profile-hint">אפשר לתקן כאן טעות בקריאה, או להדביק טקסט אם הקובץ סרוק. שמירה לא מפעילה ניקוד מחדש של משרות.</p>
+            <div id="editor-resume"></div>
+            <details id="cv-import" class="profile-import">
+              <summary>הדבקת טקסט במקום קובץ</summary>
+              <p class="profile-hint">המערכת תארגן את הטקסט בסעיפים בלי להוסיף דבר, ושום דבר לא יישמר לפני שתאשר.</p>
+              <label for="cv-text">טקסט קורות החיים</label>
+              <textarea id="cv-text" dir="auto" rows="8"></textarea>
+              <button id="cv-import-run" type="button" class="button button-secondary">ארגן בסעיפים</button>
+              <ul id="cv-import-warnings" class="profile-warnings" hidden></ul>
+            </details>
           </details>
-          <p class="profile-hint">משמש לזיהוי מה חסר לך למשרות שמתאימות. שמירה לא מפעילה ניקוד מחדש של משרות.</p>
-          <div id="editor-resume"></div>
         </section>
         <section id="tab-identity" class="page-section profile-panel" role="tabpanel" hidden>
           <p class="profile-hint">פרטי הקשר שלך. שינוי כאן לא משפיע על ציוני המשרות.</p>
           <form id="identity-form" class="profile-fields"></form>
         </section>
-        <section id="tab-preferences" class="page-section profile-panel" role="tabpanel" hidden>
-          <form id="search-form" class="profile-search"></form>
-          <h2 class="profile-subtitle">במילים שלך</h2>
-          <p class="profile-hint">שכר, סביבת עבודה וכל מה שלא נכנס לשדות למעלה. הטקסט הזה נשלח לניקוד, ולכן שינוי בו משפיע על הציונים.</p>
-          <div id="editor-preferences"></div>
-        </section>
-        <section id="tab-sources" class="page-section profile-panel" role="tabpanel" hidden><div id="sources-root"></div></section>
         <section id="tab-profile" class="page-section profile-panel" role="tabpanel" hidden>
-          <p class="profile-hint">כל העובדות עליך, גם כאלה שלא נכנסות לקורות החיים. זה מקור האמת לכתיבת קורות חיים מותאמים ולניקוד, ולכן שינוי בו משפיע על הציונים.</p>
+          <p class="profile-hint">כל העובדות עליך, גם כאלה שלא נכנסות לקורות החיים. על זה מבוסס הציון של כל משרה, וממנו נכתבים קורות חיים מותאמים, ולכן שינוי כאן משפיע על הציונים.</p>
           <div id="editor-profile"></div>
-        </section>
-        <section id="tab-stories" class="page-section profile-panel" role="tabpanel" hidden>
-          <p class="profile-hint">סיפורים מהניסיון שלך לתשובות בראיונות: מצב, משימה, פעולה, תוצאה ומה למדת. לא משפיע על הציונים.</p>
-          <div id="editor-stories"></div>
         </section>
         <p id="page-feedback" class="company-feedback" role="status" aria-live="polite"></p>
       </main>

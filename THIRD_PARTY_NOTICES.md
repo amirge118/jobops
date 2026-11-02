@@ -34,3 +34,9 @@ two MIT-licensed projects; no source code was copied:
 
 - [JobSpy](https://github.com/speedyapply/JobSpy), Copyright (c) 2023 Cullen Watson
 - [linkedin-job-scraper](https://github.com/hendrixfreire/linkedin-job-scraper), Copyright (c) 2026 hendrixfreire
+
+## Runtime libraries for reading CV files
+
+The dashboard reads uploaded CV files with [PDF.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist`, Apache-2.0) and
+[Mammoth](https://github.com/mwilliamson/mammoth.js) (`mammoth`, BSD-2-Clause). Their full license texts ship with
+the packages under `node_modules/`.

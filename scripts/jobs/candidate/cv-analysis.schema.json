@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["headline", "summary", "strengths", "targetRoles", "improvements"],
+  "properties": {
+    "headline": { "type": "string" },
+    "summary": { "type": "string" },
+    "strengths": { "type": "array", "items": { "type": "string" } },
+    "targetRoles": { "type": "array", "items": { "type": "string" } },
+    "improvements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "why", "quote"],
+        "properties": {
+          "title": { "type": "string" },
+          "why": { "type": "string" },
+          "quote": { "type": "string" }
+        }
+      }
+    }
+  }
+}
