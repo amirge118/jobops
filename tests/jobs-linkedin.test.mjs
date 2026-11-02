@@ -476,6 +476,46 @@ test('queued LinkedIn postings older than the limit are archived unread; fresh, 
   assert.equal(db.prepare("SELECT canonical_url FROM jobs WHERE job_key = 'old'").get().canonical_url, li(4400000001), 'identity kept for dedup');
 });
 
+test('a search retries a connection failure once; a second failure fails it without a halt', async () => {
+  const run = async (outcomes, gate = null) => {
+    const waits = [];
+    const body = page(Array.from({ length: 10 }, (_, index) => ({ id: String(5_100_000 + index) })));
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls += 1;
+      const outcome = outcomes.shift();
+      if (outcome) throw outcome;
+      return response(calls <= 2 ? body : '');
+    };
+    const budget = createLinkedInBudget({}, { gate });
+    const result = await runLinkedInSearch({ search, window, budget, fetchImpl, sleep: async (ms) => waits.push(ms), isFirstRequest: () => true });
+    return { result, waits, calls, budget };
+  };
+  const offline = () => new TypeError('fetch failed');
+
+  const recovered = await run([offline()]);
+  assert.equal(recovered.result.status, 'complete');
+  assert.equal(recovered.result.cards.length, 10);
+  assert.deepEqual(recovered.waits, [30_000]);
+  assert.equal(recovered.budget.requests, 3, 'the retry counts as a request');
+
+  const failed = await run([offline(), offline()]);
+  assert.equal(failed.result.status, 'failed');
+  assert.equal(failed.result.reason, 'network_error');
+  assert.equal(failed.calls, 2);
+  assert.equal(failed.budget.haltedBy, null, 'the next search still runs');
+
+  const timedOut = await run([Object.assign(new Error('aborted'), { name: 'AbortError' })]);
+  assert.equal(timedOut.result.reason, 'timeout');
+  assert.equal(timedOut.calls, 1, 'a timeout is not retried');
+
+  const recorded = [];
+  const fullHour = { allow: async () => recorded.length < 1, record: async (kind) => recorded.push(kind) };
+  const capped = await run([offline()], fullHour);
+  assert.equal(capped.result.reason, 'network_error');
+  assert.equal(capped.calls, 1, 'the retry respects the hourly cap');
+});
+
 test('a search waits out one 429 and retries the page; a second 429 halts it', async () => {
   const run = async (statuses) => {
     const waits = [];

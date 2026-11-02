@@ -29,6 +29,7 @@ export const DEFAULT_LINKEDIN_LIMITS = Object.freeze({
   maxRequestsPerHour: 12,
   maxPostingsPerHour: 7,
   queueReserve: 2,
+  networkRetryDelayMs: 30_000,
   queueMaxAgeDays: 5,
 });
 
@@ -316,7 +317,19 @@ export async function runLinkedInSearch({
     budget.requests += 1;
     await budget.gate?.record('search');
     try {
-      response = await fetchWithTimeout(fetchImpl, url);
+      try {
+        response = await fetchWithTimeout(fetchImpl, url);
+      } catch (error) {
+        if (classifySearchResponse({ error }).status !== 'network_error') throw error;
+        // One connection failure is retried once: a run started in a dark wake
+        // loses the network as the Mac goes back to sleep (2026-11-01 18:34),
+        // and this wait freezes with the process until the next wake.
+        await sleep(budget.limits.networkRetryDelayMs);
+        if (budget.gate && !await budget.gate.allow()) throw error;
+        budget.requests += 1;
+        await budget.gate?.record('search');
+        response = await fetchWithTimeout(fetchImpl, url);
+      }
       // Same policy as posting reads: one 429 is waited out (Retry-After or
       // 45 s) and the page retried once; only a second refusal halts the
       // search (2026-10-24: the 08:30 scan stopped on its 2nd page's 429).

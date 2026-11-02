@@ -274,6 +274,10 @@ Since 2026-10-24 three more rules keep the reads useful and cheap:
   page or 999 stops the run and starts the cooldown. Every refusal is a `refused:<reason>` row in
   `linkedin_requests` with `detail` (HTTP status, `Retry-After`, whether the retry recovered); those
   rows are history and do not count toward the hourly cap.
+- **Retry a search once after a connection failure** (since 2026-11-01). A search page whose request
+  throws a connection error waits `limits.networkRetryDelayMs` (30 s) and is requested once more,
+  within the hourly cap. The wait freezes with the process if the Mac went back to sleep. A second
+  failure still ends the search as `network_error`; timeouts and HTTP 5xx are not retried.
 - **Stale postings are archived unread.** The queue reader archives LinkedIn postings that waited
   more than `limits.queueMaxAgeDays` (5) without being read or scored (`archiveStaleLinkedInQueue`,
   same clearing as `archiveJob`; the job key stays for dedup).
