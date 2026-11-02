@@ -1242,7 +1242,7 @@ async function runJobsLocked(options, config) {
     if (sources.includes('linkedin')) {
       await lifecycle?.stage('collection', 'linkedin');
       sourceStartedAt = Date.now();
-      const passesTitle = buildNegativeTitleFilter(loadTitleFilterNegative(path.join(config.rootDir, 'portals.yml')));
+      const passesTitle = buildNegativeTitleFilter(resolveTitleFilter(config).negative);
       if (linkedinCooldown.scans) {
         console.log(`LinkedIn בהפסקה אחרי ${linkedinCooldown.scans.reason} עד ${new Date(linkedinCooldown.scans.until).toLocaleTimeString('he-IL')}; החיפוש נדחה לריצה הבאה.`);
       }
