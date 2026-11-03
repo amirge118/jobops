@@ -62,7 +62,7 @@ export const SCHEDULES = [
   },
   // Token-free health check (scripts/jobs/health-check.mjs) at :50, after the
   // hourly ATS run: stores what needs attention for the scan page and sends a
-  // WhatsApp alert only for problems that are new since the last check.
+  // WhatsApp alert once per problem, after a later check for those sleep can cause.
   {
     key: 'health',
     label: serviceLabel('health-check'),
@@ -73,7 +73,8 @@ export const SCHEDULES = [
   // The LinkedIn queue reader: every 30 minutes, the newest queued LinkedIn
   // postings (at most one run's read budget, paced by the LinkedIn limits),
   // so the queue drains even when no new WhatsApp jobs arrive. Waiting up to
-  // 10 minutes for the scan lock turns a collision into a short delay.
+  // 10 minutes for the scan lock turns a collision into a short delay. It reads
+  // nothing in the hour before the 08:30 scan (inMorningScanQuiet).
   {
     key: 'linkedin-queue',
     label: serviceLabel('linkedin-queue'),

@@ -211,7 +211,8 @@ not fix itself:
   while one of the latest 5 calls still fails (failures that later successes followed are history).
   Failed calls keep a sanitized `codex_calls.error_reason` (the tail of the message), quoted in
   the finding;
-- an enabled LinkedIn search that last failed and has not succeeded for 12 hours;
+- an enabled LinkedIn search that failed its last 2 scans in a row and has not succeeded for 12 hours (the
+  night alone passes 12 hours, so one failed morning scan is not a finding);
 - the WhatsApp collector not connected, or reconnecting more than 3 times an hour (after 3 hours);
 - the collector connected but no configured-group message stored for 12 hours, counted from the
   later of the newest `processed_messages.wa_timestamp` and the collector run's start (so a fresh
@@ -219,6 +220,11 @@ not fix itself:
   group metadata while delivering no messages to it; re-pairing is the fix;
 - WhatsApp messages pending for more than a day; retryable job failures untouched for a day;
 - resume-gap analysis failures (informational only).
+
+A finding shows on the scan page when it opens and alerts once (`health_findings.alerted_at`). Stuck runs and
+collector findings alert only if a check at least 45 minutes later still finds them, since a sleeping Mac causes
+both and a dark wake can run the check (`alertIsDue`). A check without alerts, like the page's re-check, leaves
+the alert to the next one.
 
 Findings live in `health_findings` (one row per finding key while it persists; `resolved_at`
 closes it and a recurrence reopens it). Only findings that *open* in a check, of severity error
@@ -253,7 +259,8 @@ them passes `--open`, so unattended matches wait for review on `/decisions` rath
 flood of Chrome tabs while no one is watching. Each agent writes stdout and stderr to
 `logs/scheduled/<key>.log`, so a skipped run (lock, cooldown, quota) or a crash leaves a trace.
 
-**LinkedIn queue reader and the shared hourly cap.** `com.jobops.linkedin-queue` runs
+**LinkedIn queue reader and the shared hourly cap.** The reader reads nothing from 07:30 to 08:35 Israel time
+(`inMorningScanQuiet`), so the day's first scan has the cap for the night's coverage. `com.jobops.linkedin-queue` runs
 `jobs.mjs --linkedin-queue --wait-for-lock 10` every 30 minutes (`StartInterval` 1800). It is a
 retry run limited to queued LinkedIn postings (`selectLinkedInQueue`): newest first, at most one
 run's posting budget (`limits.maxDetailFetchesPerRun`), nothing while LinkedIn is cooling down, and

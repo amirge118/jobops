@@ -125,8 +125,8 @@ export function createLinkedinRepository({ db, store }) {
         const succeeded = coveredUntil != null;
         await db.prepare(`
           INSERT INTO linkedin_search_progress (
-            search_id, query_hash, covered_until, last_success_at, last_attempt_at, last_status, last_reason, last_summary_json, gaps_json
-          ) VALUES (@searchId, @queryHash, @coveredUntil, @successAt, @attemptedAt, @status, @reason, @summary, @gaps)
+            search_id, query_hash, covered_until, last_success_at, last_attempt_at, last_status, last_reason, last_summary_json, gaps_json, failed_streak
+          ) VALUES (@searchId, @queryHash, @coveredUntil, @successAt, @attemptedAt, @status, @reason, @summary, @gaps, CASE WHEN @status = 'failed' THEN 1 ELSE 0 END)
           ON CONFLICT(search_id, query_hash) DO UPDATE SET
             covered_until = COALESCE(excluded.covered_until, covered_until),
             last_success_at = COALESCE(excluded.last_success_at, last_success_at),
@@ -134,7 +134,8 @@ export function createLinkedinRepository({ db, store }) {
             last_status = excluded.last_status,
             last_reason = excluded.last_reason,
             last_summary_json = excluded.last_summary_json,
-            gaps_json = excluded.gaps_json
+            gaps_json = excluded.gaps_json,
+            failed_streak = CASE WHEN excluded.last_status = 'failed' THEN failed_streak + 1 ELSE 0 END
         `).run({
           searchId: Number(searchId),
           queryHash: String(queryHash),

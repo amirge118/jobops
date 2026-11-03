@@ -25,7 +25,7 @@ import { createJobStore, sourceKindOf } from './jobs/store.mjs';
 import { queueJobNotifications } from './jobs/notifications.mjs';
 import { scanAts } from './jobs/sources/ats.mjs';
 import { scanWhatsApp, scanWhatsAppBacklog } from './jobs/sources/whatsapp.mjs';
-import { createLinkedInGates, DEFAULT_LINKEDIN_LIMITS, scanLinkedIn } from './jobs/sources/linkedin.mjs';
+import { createLinkedInGates, DEFAULT_LINKEDIN_LIMITS, inMorningScanQuiet, scanLinkedIn } from './jobs/sources/linkedin.mjs';
 import { createRunLifecycle, describeFailure, hasFailureReason, safeTargetUrl } from './jobs/diagnostics.mjs';
 import { acquireSingleInstance } from './jobs/single-instance.mjs';
 import { NON_RETRYABLE_FAILURE_CODES } from './liveness-browser.mjs';
@@ -1302,10 +1302,12 @@ async function runJobsLocked(options, config) {
         retryCandidates = retryCandidates.filter((candidate) => stillPending.has(candidate.jobKey));
       }
       const limit = Number(config.sources.linkedin?.limits?.maxDetailFetchesPerRun ?? 6);
-      const queue = selectLinkedInQueue(retryCandidates, { limit, cooldown: linkedinEnabled ? linkedinCooldown.reads : { reason: 'disabled' } });
+      const morningQuiet = inMorningScanQuiet(Date.now());
+      const queue = selectLinkedInQueue(retryCandidates, { limit, cooldown: linkedinEnabled ? (linkedinCooldown.reads ?? (morningQuiet ? { reason: 'morning_scan' } : null)) : { reason: 'disabled' } });
       retryCandidates = queue.selected;
       console.log(`תור LinkedIn: ${queue.queued} משרות ממתינות; נקראות עכשיו ${queue.selected.length}`
         + (linkedinCooldown.reads && linkedinEnabled ? ` (LinkedIn בהפסקה עד ${new Date(linkedinCooldown.reads.until).toLocaleTimeString('he-IL')})` : '')
+        + (!linkedinCooldown.reads && linkedinEnabled && morningQuiet ? ' (המכסה נשמרת לסריקת הבוקר)' : '')
         + (linkedinEnabled ? '.' : ' (LinkedIn כבוי).'));
     }
     const currentJobKeys = new Set(candidateSightings.map((candidate) => candidate.jobKey));

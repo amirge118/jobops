@@ -16,6 +16,10 @@ export const HEALTH_THRESHOLDS = Object.freeze({
   atsStaleHours: 3, // ATS runs hourly 08-21
   linkedinStaleHours: 5, // LinkedIn runs every 2 hours 08-22
   linkedinFailedHours: 12, // an enabled search without success for this long
+  linkedinFailedStreak: 2, // and failing this many scans in a row: the night alone passes 12 hours
+  // A finding that a Mac waking from sleep also produces alerts only if a later
+  // check, this much later, still finds it. The scan page shows it at once.
+  confirmAfterMinutes: 45,
   codexMinCalls: 5,
   codexFailureRate: 0.3,
   codexConsecutiveFailures: 3,
@@ -105,7 +109,7 @@ export function evaluateHealth(facts, thresholds = HEALTH_THRESHOLDS) {
   for (const search of facts.linkedinSearches || []) {
     if (search.lastStatus !== 'failed') continue;
     const since = Number(search.lastSuccessAt || 0);
-    if (now - since < thresholds.linkedinFailedHours * HOUR) continue;
+    if (now - since < thresholds.linkedinFailedHours * HOUR || Number(search.failedStreak) < thresholds.linkedinFailedStreak) continue;
     add(`linkedin-search:${search.key}`, 'linkedin', 'warn', `חיפוש LinkedIn "${search.key}" נכשל`,
       `${search.lastReason || 'ללא סיבה'}; ${since ? `אין הצלחה מאז ${timeText(since)}` : 'אף פעם לא הצליח'}.`);
   }
@@ -185,8 +189,17 @@ export function notifyMacOS(title, body) {
   return true;
 }
 
-// Stores the findings and queues one WhatsApp alert for those that are new
-// and worth interrupting for (error / warn). Info findings only show on the page.
+// Sleep freezes runs and drops the collector, and the next check, sometimes in
+// a few seconds' dark wake, sees both (2026-11-02 21:56, gone by 22:50).
+const CONFIRMED_FINDING = /^(stuck-run:|whatsapp:collector$|whatsapp:reconnects$)/;
+
+export function alertIsDue(finding, now, thresholds = HEALTH_THRESHOLDS) {
+  if (finding.severity === 'info') return false;
+  return !CONFIRMED_FINDING.test(finding.key) || now - Number(finding.firstSeenAt) >= thresholds.confirmAfterMinutes * 60 * 1000;
+}
+
+// Stores the findings and queues one WhatsApp alert for those worth interrupting
+// for (error / warn) that were not alerted yet. Info findings only show on the page.
 // WhatsApp alerts are sent by the collector, so while it is not connected
 // they cannot arrive (2026-10-14→18 every one waited unsent); desktopNotify
 // (notifyMacOS from the CLI) shows them on the Mac as well.
@@ -194,10 +207,12 @@ export async function runHealthCheck({ store, config, now = Date.now(), notify =
   const facts = await store.listHealthFacts({ now });
   const findings = evaluateHealth(facts);
   const opened = await store.saveHealthFindings(findings, now);
-  const alerting = opened.filter((finding) => finding.severity !== 'info');
+  // A check without alerts, like the page's refresh, leaves them to the next one.
+  const alerting = notify ? (await store.listUnalertedHealthFindings()).filter((finding) => alertIsDue(finding, now)) : [];
+  if (alerting.length) await store.markHealthFindingsAlerted(alerting.map((finding) => finding.key), now);
   const settings = notificationSettings(config);
   let alerted = false;
-  if (notify && settings.enabled && alerting.length) {
+  if (settings.enabled && alerting.length) {
     alerted = await store.enqueueHealthNotification({
       key: `${now}:${alerting.map((finding) => finding.key).join(',')}`.slice(0, 200),
       text: formatHealthAlert(alerting, settings),
@@ -205,7 +220,7 @@ export async function runHealthCheck({ store, config, now = Date.now(), notify =
     });
   }
   let desktop = false;
-  if (notify && desktopNotify && alerting.length && facts.collector?.status !== 'connected') {
+  if (desktopNotify && alerting.length && facts.collector?.status !== 'connected') {
     try {
       desktop = Boolean(desktopNotify('⚠️ jobOps', alerting.map((finding) => finding.title).join(' · ')));
     } catch { /* a failed desktop notification must not fail the check */ }

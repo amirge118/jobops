@@ -33,6 +33,18 @@ export const DEFAULT_LINKEDIN_LIMITS = Object.freeze({
   queueMaxAgeDays: 5,
 });
 
+// The first scan of the day (08:30, see scheduled-scan-service.mjs) has the whole
+// night to cover, and the hourly cap counts the last hour. The queue reader stays
+// out of that hour, and a few minutes on so the scan takes the lock first.
+const MORNING_SCAN_QUIET = Object.freeze({ fromMinute: 7 * 60 + 30, toMinute: 8 * 60 + 35 });
+
+export function inMorningScanQuiet(ms) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' })
+    .formatToParts(ms).map((part) => [part.type, Number(part.value)]));
+  const minute = parts.hour * 60 + parts.minute;
+  return minute >= MORNING_SCAN_QUIET.fromMinute && minute < MORNING_SCAN_QUIET.toMinute;
+}
+
 export function buildSearchUrl({ keywords, location, geoId, tprSeconds, start = 0 }) {
   const url = new URL(LINKEDIN_SEARCH_ENDPOINT);
   if (keywords) url.searchParams.set('keywords', keywords);

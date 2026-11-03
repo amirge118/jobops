@@ -159,8 +159,9 @@ limit, not money.
   messages waiting a day, failed jobs nobody retried. One-off failures that the next run recovers
   from stay quiet.
   Findings show in the "בריאות המערכת" box on the scan page ("בדוק עכשיו" re-checks), and a
-  problem that is *new* sends one WhatsApp message to yourself (`npm run jobs:health-check`). While
-  the WhatsApp collector is down and cannot send it, the Mac shows the alert as a notification.
+  problem that is *new* sends one WhatsApp message to yourself (`npm run jobs:health-check`). What a
+  sleeping Mac can also cause, a stuck run or a dropped collector, alerts only if a check about an hour
+  later still finds it. While the WhatsApp collector is down and cannot send it, the Mac shows the alert as a notification.
 
 For the state of the whole system right now, `/pulse` (`npm run jobs:pulse -- --text` without an
 agent) checks the services, the WhatsApp collector, LinkedIn's requests and refusals, ATS, Codex

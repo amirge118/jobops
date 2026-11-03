@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 import { createJobStore } from '../scripts/jobs/store.mjs';
 import {
   buildTitleIncludeFilter, postedAgeLowerBoundMs,
-  buildLinkedInAreaFilter, buildSearchUrl, classifySearchResponse, createLinkedInBudget, createLinkedInGate, createLinkedInGates, isFallbackPage, retryAfterMs,
+  buildLinkedInAreaFilter, buildSearchUrl, classifySearchResponse, createLinkedInBudget, createLinkedInGate, createLinkedInGates, inMorningScanQuiet, isFallbackPage, retryAfterMs,
   parsePostingPage, parseSearchPage, runLinkedInSearch, scanLinkedIn, searchTerms,
 } from '../scripts/jobs/sources/linkedin.mjs';
 
@@ -572,4 +572,30 @@ test('a search waits out one 429 and retries the page; a second 429 halts it', a
   assert.equal(halted.budget.haltedBy, 'rate_limited');
   assert.equal(halted.result.status, 'failed');
   assert.equal(halted.refusals[0].recovered, false);
+});
+
+test('the queue reader stays out of the hour before the first scan of the day, in Israel time', () => {
+  const at = (time) => Date.parse(`2026-11-03T${time}:00+02:00`);
+  for (const time of ['07:30', '08:00', '08:34']) assert.equal(inMorningScanQuiet(at(time)), true, time);
+  for (const time of ['07:29', '08:35', '10:00', '23:00']) assert.equal(inMorningScanQuiet(at(time)), false, time);
+  assert.equal(inMorningScanQuiet(Date.parse('2026-07-01T08:00:00+03:00')), true, 'summer time');
+});
+
+test('a search counts its failures in a row, and anything else starts the count over', async (context) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-streak-'));
+  context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = createJobStore(path.join(dir, 'jobs.db'));
+  context.after(() => store.close());
+  await store.syncLinkedInSearches([{ key: 'backend', label: 'Backend', keywords: 'backend', location: 'Israel' }], 1);
+  const [{ id, queryHash }] = await store.listLinkedInSearches();
+  const streak = async () => (await store.listHealthFacts({ now: 10 })).linkedinSearches[0].failedStreak;
+  const attempt = (status, attemptedAt) => store.recordLinkedInSearchAttempt({ searchId: id, queryHash, status, attemptedAt });
+  await attempt('failed', 1);
+  assert.equal(await streak(), 1);
+  await attempt('failed', 2);
+  assert.equal(await streak(), 2);
+  await attempt('partial', 3);
+  assert.equal(await streak(), 0);
+  await attempt('failed', 4);
+  assert.equal(await streak(), 1);
 });

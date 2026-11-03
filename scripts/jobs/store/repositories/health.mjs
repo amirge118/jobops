@@ -34,7 +34,7 @@ export function createHealthRepository({ db, store }) {
         hireMeTechResolvedAt: (await db.prepare('SELECT last_timestamp FROM checkpoints WHERE source_key = ?').get('hiremetech:resolved'))?.last_timestamp ?? null,
         linkedinSearches: await db.prepare(`
           SELECT s.search_key AS key, p.last_status AS lastStatus, p.last_reason AS lastReason,
-            p.last_success_at AS lastSuccessAt, p.last_attempt_at AS lastAttemptAt
+            p.last_success_at AS lastSuccessAt, p.last_attempt_at AS lastAttemptAt, p.failed_streak AS failedStreak
           FROM linkedin_searches s
           LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.last_attempt_at = (
             SELECT MAX(last_attempt_at) FROM linkedin_search_progress WHERE search_id = s.id)
@@ -79,6 +79,7 @@ export function createHealthRepository({ db, store }) {
             ON CONFLICT(finding_key) DO UPDATE SET area = excluded.area, severity = excluded.severity, title = excluded.title,
               detail = excluded.detail, last_seen_at = excluded.last_seen_at,
               first_seen_at = CASE WHEN health_findings.resolved_at IS NULL THEN health_findings.first_seen_at ELSE excluded.first_seen_at END,
+              alerted_at = CASE WHEN health_findings.resolved_at IS NULL THEN health_findings.alerted_at ELSE NULL END,
               resolved_at = NULL
           `).run(finding.key, finding.area, finding.severity, String(finding.title).slice(0, 200),
             finding.detail == null ? null : String(finding.detail).slice(0, 500), at, at);
@@ -91,6 +92,20 @@ export function createHealthRepository({ db, store }) {
         await store.setCheckpoint('health_checked_at', at);
       })();
       return opened;
+    },
+
+    async listUnalertedHealthFindings() {
+      return await db.prepare(`
+        SELECT finding_key AS key, severity, title, first_seen_at AS firstSeenAt
+        FROM health_findings WHERE resolved_at IS NULL AND alerted_at IS NULL
+        ORDER BY first_seen_at, finding_key
+      `).all();
+    },
+
+    async markHealthFindingsAlerted(keys, at = Date.now()) {
+      for (const key of keys) {
+        await db.prepare('UPDATE health_findings SET alerted_at = ? WHERE finding_key = ?').run(at, key);
+      }
     },
 
     async getHealthCheckedAt() {
