@@ -568,6 +568,7 @@ function printLinkedInSummary(linkedin) {
     const from = search.window ? new Date(search.window.from).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '?';
     const reason = search.reason ? ` — ${LINKEDIN_REASON_LABELS[search.reason] || search.reason}` : '';
     console.log(`  ${marker} ${search.label}: ${LINKEDIN_STATUS_LABELS[search.status] || search.status}${reason}; חלון מ-${from}, ${search.pages} עמודים, ${search.found} נמצאו, ${search.new} חדשות, ${search.known} מוכרות, ${search.filtered} סוננו${search.stale ? `, ${search.stale} ישנות מהחלון` : ''}.`);
+    if (search.resumedFrom != null) console.log(`    המשיך מתוצאה ${search.resumedFrom}, במקום שבו נעצר בריצה קודמת.`);
     if (search.endedBy === 'no_matches_fallback') console.log('    LinkedIn לא מצא התאמות אמיתיות והחזיר משרות כלליות; הן לא נשמרו.');
     if (search.gap) console.log(`    ⚠ פער שלא כוסה (המחשב היה כבוי זמן רב): ${new Date(search.gap.from).toISOString()} – ${new Date(search.gap.to).toISOString()}`);
     if (search.warning === 'clock_skew') console.log('    ⚠ שעון המחשב חזר אחורה; החלון חושב מחדש מנקודת התחלה.');

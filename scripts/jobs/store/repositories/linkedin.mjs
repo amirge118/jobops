@@ -45,6 +45,8 @@ function mapLinkedInSearch(row) {
     lastReason: row.last_reason ?? null,
     lastSummary: parseJson(row.last_summary_json, null),
     gaps: parseJson(row.gaps_json, []),
+    resumeStart: row.resume_start ?? null,
+    resumeTo: row.resume_to ?? null,
   };
 }
 
@@ -96,7 +98,7 @@ export function createLinkedinRepository({ db, store }) {
     async listLinkedInSearches() {
       return (await db.prepare(`
         SELECT s.*, p.covered_until, p.last_success_at, p.last_attempt_at, p.last_status, p.last_reason,
-               p.last_summary_json, p.gaps_json
+               p.last_summary_json, p.gaps_json, p.resume_start, p.resume_to
         FROM linkedin_searches s
         LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.query_hash = s.query_hash
         ORDER BY s.id
@@ -106,7 +108,7 @@ export function createLinkedinRepository({ db, store }) {
     async getLinkedInSearch(id) {
       const row = await db.prepare(`
         SELECT s.*, p.covered_until, p.last_success_at, p.last_attempt_at, p.last_status, p.last_reason,
-               p.last_summary_json, p.gaps_json
+               p.last_summary_json, p.gaps_json, p.resume_start, p.resume_to
         FROM linkedin_searches s
         LEFT JOIN linkedin_search_progress p ON p.search_id = s.id AND p.query_hash = s.query_hash
         WHERE s.id = ?
@@ -116,7 +118,8 @@ export function createLinkedinRepository({ db, store }) {
 
     // Records one attempt. coveredUntil is only passed when the collection was
     // complete and saved; otherwise the stored coverage is left as it was.
-    async recordLinkedInSearchAttempt({ searchId, queryHash, status, reason = null, summary = null, coveredUntil = null, gap = null, attemptedAt = Date.now() }) {
+    // resume is { start, to }, null to clear it, or undefined to keep what is stored.
+    async recordLinkedInSearchAttempt({ searchId, queryHash, status, reason = null, summary = null, coveredUntil = null, gap = null, resume, attemptedAt = Date.now() }) {
       return await db.transaction(async () => {
         const previous = await db.prepare('SELECT covered_until, gaps_json FROM linkedin_search_progress WHERE search_id = ? AND query_hash = ?')
           .get(Number(searchId), String(queryHash));
@@ -125,8 +128,8 @@ export function createLinkedinRepository({ db, store }) {
         const succeeded = coveredUntil != null;
         await db.prepare(`
           INSERT INTO linkedin_search_progress (
-            search_id, query_hash, covered_until, last_success_at, last_attempt_at, last_status, last_reason, last_summary_json, gaps_json, failed_streak
-          ) VALUES (@searchId, @queryHash, @coveredUntil, @successAt, @attemptedAt, @status, @reason, @summary, @gaps, CASE WHEN @status = 'failed' THEN 1 ELSE 0 END)
+            search_id, query_hash, covered_until, last_success_at, last_attempt_at, last_status, last_reason, last_summary_json, gaps_json, failed_streak, resume_start, resume_to
+          ) VALUES (@searchId, @queryHash, @coveredUntil, @successAt, @attemptedAt, @status, @reason, @summary, @gaps, CASE WHEN @status = 'failed' THEN 1 ELSE 0 END, @resumeStart, @resumeTo)
           ON CONFLICT(search_id, query_hash) DO UPDATE SET
             covered_until = COALESCE(excluded.covered_until, covered_until),
             last_success_at = COALESCE(excluded.last_success_at, last_success_at),
@@ -135,7 +138,9 @@ export function createLinkedinRepository({ db, store }) {
             last_reason = excluded.last_reason,
             last_summary_json = excluded.last_summary_json,
             gaps_json = excluded.gaps_json,
-            failed_streak = CASE WHEN excluded.last_status = 'failed' THEN failed_streak + 1 ELSE 0 END
+            failed_streak = CASE WHEN excluded.last_status = 'failed' THEN failed_streak + 1 ELSE 0 END,
+            resume_start = CASE WHEN @keepResume = 1 THEN resume_start ELSE excluded.resume_start END,
+            resume_to = CASE WHEN @keepResume = 1 THEN resume_to ELSE excluded.resume_to END
         `).run({
           searchId: Number(searchId),
           queryHash: String(queryHash),
@@ -146,6 +151,9 @@ export function createLinkedinRepository({ db, store }) {
           reason: reason == null ? null : String(reason).slice(0, 64),
           summary: summary ? serializeAuditDetails(summary) : null,
           gaps: gaps.length ? JSON.stringify(gaps.slice(-5)) : null,
+          keepResume: resume === undefined ? 1 : 0,
+          resumeStart: resume?.start ?? null,
+          resumeTo: resume?.to ?? null,
         });
       })();
     },

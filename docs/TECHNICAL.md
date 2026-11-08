@@ -259,6 +259,13 @@ them passes `--open`, so unattended matches wait for review on `/decisions` rath
 flood of Chrome tabs while no one is watching. Each agent writes stdout and stderr to
 `logs/scheduled/<key>.log`, so a skipped run (lock, cooldown, quota) or a crash leaves a trace.
 
+**Sharing the cap between searches.** Each search in a run may use an equal share of the requests left in the
+hour, so the search furthest behind cannot leave nothing for the others; what it does not use passes on. A search
+that stops early saves its result offset and when its reading began (`resume_start`, `resume_to`). The next run
+continues there, one page back, instead of re-reading the newest pages. Results are newest first, so what was posted
+since can cause a re-read but not a skip. Finishing covers only up to when the reading began, and the next window
+reads the rest. A saved place older than 12 hours is dropped, and so is one the window has already passed.
+
 **LinkedIn queue reader and the shared hourly cap.** The reader reads nothing from 07:30 to 08:35 Israel time
 (`inMorningScanQuiet`), so the day's first scan has the cap for the night's coverage. `com.jobops.linkedin-queue` runs
 `jobs.mjs --linkedin-queue --wait-for-lock 10` every 30 minutes (`StartInterval` 1800). It is a

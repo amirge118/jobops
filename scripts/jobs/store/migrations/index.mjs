@@ -8,6 +8,7 @@ import { up as userOwnedTables } from './007-user-owned-tables.mjs';
 import { up as profileFiles } from './008-profile-files.mjs';
 import { up as cvInsights } from './009-cv-insights.mjs';
 import { up as healthAlertState } from './010-health-alert-state.mjs';
+import { up as linkedinSearchResume } from './011-linkedin-search-resume.mjs';
 
 // Append-only: a shipped migration never changes, and each runs once per
 // database. A schema or data change is a new entry here, including a new
@@ -23,6 +24,7 @@ export const MIGRATIONS = Object.freeze([
   { version: 8, name: 'profile_files', up: profileFiles },
   { version: 9, name: 'cv_insights', up: cvInsights },
   { version: 10, name: 'health_alert_state', up: healthAlertState },
+  { version: 11, name: 'linkedin_search_resume', up: linkedinSearchResume },
 ]);
 
 export function runMigrations(db, migrations = MIGRATIONS) {

@@ -599,3 +599,134 @@ test('a search counts its failures in a row, and anything else starts the count 
   await attempt('failed', 4);
   assert.equal(await streak(), 1);
 });
+
+// A fake LinkedIn with a fixed list, newest first, ten to a page.
+function fakeResults(total) {
+  const asked = [];
+  const fetchImpl = async (url) => {
+    const params = new URL(url).searchParams;
+    const start = Number(params.get('start') || 0);
+    asked.push({ keywords: params.get('keywords'), start });
+    const ids = Array.from({ length: Math.max(0, Math.min(10, total - start)) }, (_, index) => ({ id: String(4_000_000 + start + index), title: `${params.get('keywords')} Engineer` }));
+    return response(ids.length ? page(ids) : '');
+  };
+  return { asked, fetchImpl };
+}
+
+function countingGate(remaining) {
+  let left = remaining;
+  return { allow: () => left > 0, remaining: () => left, record: () => { left -= 1; }, setLeft: (value) => { left = value; } };
+}
+
+async function storeWithSearches(context, keys, coveredUntil) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobops-li-share-'));
+  context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = createJobStore(path.join(dir, 'jobs.db'));
+  context.after(() => store.close());
+  await store.syncLinkedInSearches(keys.map((key) => ({ key, label: key, keywords: key, location: 'Israel' })));
+  for (const row of await store.listLinkedInSearches()) {
+    await store.recordLinkedInSearchAttempt({ searchId: row.id, queryHash: row.queryHash, status: 'complete', coveredUntil: coveredUntil[row.keywords] });
+  }
+  return store;
+}
+
+const SCAN_NOW = Date.UTC(2026, 10, 4, 12);
+const HOUR_MS = 60 * 60 * 1000;
+const liveConfig = () => ({ sources: { linkedin: { enabled: true, overlapMinutes: 30, maxBackfillHours: 16, limits: { maxPagesPerSearch: 10, maxRequestsPerRun: 50 } } } });
+
+test('a search takes its share of the requests left, and what it does not use passes on', async (context) => {
+  const store = await storeWithSearches(context, ['behind', 'middle', 'cheap'], { behind: SCAN_NOW - 9 * HOUR_MS, middle: SCAN_NOW - 5 * HOUR_MS, cheap: SCAN_NOW - 2 * HOUR_MS });
+  const longLists = { behind: 90, middle: 90, cheap: 5 };
+  const asked = [];
+  const fetchImpl = async (url) => {
+    const params = new URL(url).searchParams;
+    const keywords = params.get('keywords');
+    const start = Number(params.get('start') || 0);
+    asked.push(keywords);
+    const ids = Array.from({ length: Math.max(0, Math.min(10, longLists[keywords] - start)) }, (_, index) => ({ id: `${keywords.length}${500_000 + start + index}`, title: `${keywords} Engineer` }));
+    return response(ids.length ? page(ids) : '');
+  };
+  const result = await scanLinkedIn({ config: liveConfig(), store, now: SCAN_NOW, sleep: noSleep, gate: countingGate(9), fetchImpl });
+  assert.deepEqual(asked, ['behind', 'behind', 'behind', 'middle', 'middle', 'middle', 'cheap', 'cheap'], 'all three read, and the last had its share');
+  const byLabel = Object.fromEntries(result.searches.map((row) => [row.label, row]));
+  assert.equal(byLabel.behind.status, 'partial');
+  assert.equal(byLabel.behind.reason, 'hourly_limit');
+  assert.equal(byLabel.behind.endedBy, 'search_share');
+  assert.equal(byLabel.cheap.status, 'complete', 'a search that needs little is not left without');
+});
+
+test('with no cap there is no share', async (context) => {
+  const store = await storeWithSearches(context, ['only'], { only: SCAN_NOW - 2 * HOUR_MS });
+  const { asked, fetchImpl } = fakeResults(40);
+  await scanLinkedIn({ config: liveConfig(), store, now: SCAN_NOW, sleep: noSleep, gate: null, fetchImpl });
+  assert.equal(asked.length, 5);
+});
+
+test('a search that stopped continues where it stopped, and finishing covers only up to when its reading began', async (context) => {
+  const covered = SCAN_NOW - 6 * HOUR_MS;
+  const store = await storeWithSearches(context, ['ai'], { ai: covered });
+  const { asked, fetchImpl } = fakeResults(55);
+  const run = (now, room) => scanLinkedIn({ config: liveConfig(), store, now, sleep: noSleep, gate: countingGate(room), fetchImpl });
+
+  const first = (await run(SCAN_NOW, 3)).searches[0];
+  assert.equal(first.status, 'partial');
+  assert.equal(first.advanced, false);
+  assert.deepEqual(asked.map(({ start }) => start), [0, 10, 20]);
+  let [row] = await store.listLinkedInSearches();
+  assert.equal(row.resumeStart, 30);
+  assert.equal(row.resumeTo, SCAN_NOW);
+  assert.equal(row.coveredUntil, covered);
+
+  asked.length = 0;
+  const later = SCAN_NOW + 2 * HOUR_MS;
+  const second = (await run(later, 2)).searches[0];
+  assert.deepEqual(asked.map(({ start }) => start), [20, 30], 'one page of overlap, not the first pages again');
+  assert.equal(second.resumedFrom, 20);
+  [row] = await store.listLinkedInSearches();
+  assert.equal(row.resumeStart, 40, 'it moves on');
+  assert.equal(row.resumeTo, SCAN_NOW, 'still the same reading');
+
+  asked.length = 0;
+  const third = (await run(later + 2 * HOUR_MS, 5)).searches[0];
+  assert.deepEqual(asked.map(({ start }) => start), [30, 40, 50, 55]);
+  assert.equal(third.status, 'complete');
+  [row] = await store.listLinkedInSearches();
+  assert.equal(row.coveredUntil, SCAN_NOW, 'what was posted since is for the next window');
+  assert.equal(row.resumeStart, null);
+  assert.equal(row.resumeTo, null);
+
+  asked.length = 0;
+  await run(later + 4 * HOUR_MS, 12);
+  assert.equal(asked[0].start, 0, 'the next reading starts from the top');
+});
+
+test('an attempt that read nothing keeps the place, and a run stopped by a refusal saves how far it got', async (context) => {
+  const store = await storeWithSearches(context, ['ai'], { ai: SCAN_NOW - 6 * HOUR_MS });
+  const { fetchImpl } = fakeResults(55);
+  await scanLinkedIn({ config: liveConfig(), store, now: SCAN_NOW, sleep: noSleep, gate: countingGate(2), fetchImpl });
+  await scanLinkedIn({ config: liveConfig(), store, now: SCAN_NOW + HOUR_MS, sleep: noSleep, gate: countingGate(0), fetchImpl });
+  let [row] = await store.listLinkedInSearches();
+  assert.equal(row.resumeStart, 20);
+  assert.equal(row.lastStatus, 'failed');
+
+  await scanLinkedIn({
+    config: liveConfig(), store, now: SCAN_NOW + 2 * HOUR_MS, sleep: noSleep, gate: countingGate(12),
+    fetchImpl: async (url) => (Number(new URL(url).searchParams.get('start')) < 30 ? fetchImpl(url) : response('', 429)),
+  });
+  [row] = await store.listLinkedInSearches();
+  assert.equal(row.resumeStart, 30);
+  assert.equal(row.coveredUntil, SCAN_NOW - 6 * HOUR_MS);
+});
+
+test('a manual window neither continues a reading nor loses it, unless it covers it', async (context) => {
+  const covered = SCAN_NOW - 6 * HOUR_MS;
+  const store = await storeWithSearches(context, ['ai'], { ai: covered });
+  const { asked, fetchImpl } = fakeResults(55);
+  await scanLinkedIn({ config: liveConfig(), store, now: SCAN_NOW, sleep: noSleep, gate: countingGate(2), fetchImpl });
+  asked.length = 0;
+  await scanLinkedIn({ config: liveConfig(), store, mode: 'manual', manualHours: 1, now: SCAN_NOW + 1000, sleep: noSleep, gate: countingGate(12), fetchImpl });
+  assert.equal(asked[0].start, 0);
+  assert.equal((await store.listLinkedInSearches())[0].resumeStart, 20, 'one hour does not reach the coverage');
+  await scanLinkedIn({ config: liveConfig(), store, mode: 'manual', manualHours: 12, now: SCAN_NOW + 2000, sleep: noSleep, gate: countingGate(12), fetchImpl });
+  assert.equal((await store.listLinkedInSearches())[0].resumeStart, null);
+});

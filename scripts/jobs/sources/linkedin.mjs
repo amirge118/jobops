@@ -5,7 +5,7 @@
 // is an independent Node implementation: it never logs in, never stores a
 // LinkedIn session, and stops on any block instead of working around it.
 
-import { linkedinWindowSettings, nextCoveredUntil, planLinkedInWindow } from '../linkedin-window.mjs';
+import { linkedinWindowSettings, nextCoveredUntil, planLinkedInResume, planLinkedInWindow } from '../linkedin-window.mjs';
 
 export const LINKEDIN_SEARCH_ENDPOINT = 'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search';
 export const LINKEDIN_POSTING_ENDPOINT = 'https://www.linkedin.com/jobs-guest/jobs/api/jobPosting';
@@ -251,6 +251,7 @@ export function createLinkedInGate({ store, limit, postingLimit = null, now = Da
       if (postingLimit === null) return true;
       return await store.countLinkedInRequests({ since: now() - HOUR_MS, kind: 'posting' }) < postingLimit;
     },
+    async remaining() { return Math.max(0, limit - await store.countLinkedInRequests({ since: now() - HOUR_MS })); },
     async record(kind) { await store.recordLinkedInRequest({ kind, at: now() }); },
   };
 }
@@ -298,6 +299,10 @@ export async function runLinkedInSearch({
   fetchImpl = globalThis.fetch,
   sleep = defaultSleep,
   isFirstRequest = () => budget.requests === 0,
+  // The result offset to begin at, when continuing a search that stopped early.
+  startAt = 0,
+  // This search's share of the requests left, so one search cannot use them all.
+  requestShare = Infinity,
 }) {
   const tprSeconds = Math.max(60, Math.ceil((window.to - window.from) / 1000));
   // Local check of LinkedIn's own time filter: a card whose minimum age is
@@ -307,9 +312,10 @@ export async function runLinkedInSearch({
   let stale = 0;
   const cards = [];
   const ids = new Set();
-  let start = 0;
+  let start = startAt;
   let pages = 0;
   let capped = false;
+  const requestsBefore = budget.requests;
   let status = 'complete';
   let reason = null;
   let endedBy = 'end_of_results';
@@ -320,6 +326,7 @@ export async function runLinkedInSearch({
     if (!budget.hasRequests()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'request_limit'; reason = 'request_limit'; break; }
     if (budget.timedOut()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'time_limit'; reason = 'time_limit'; break; }
     if (budget.gate && !await budget.gate.allow()) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'hourly_limit'; reason = 'hourly_limit'; break; }
+    if (budget.requests - requestsBefore >= requestShare) { capped = true; status = pages ? 'partial' : 'failed'; endedBy = 'search_share'; reason = 'hourly_limit'; break; }
     if (start >= MAX_START) { capped = true; status = 'partial'; endedBy = 'result_ceiling'; break; }
 
     if (!isFirstRequest()) await sleep(randomDelay(budget.limits.delayMs));
@@ -386,7 +393,7 @@ export async function runLinkedInSearch({
     start += parsed.cards.length;
   }
 
-  return { status, reason, capped, endedBy, pages, cards, stale, tprSeconds };
+  return { status, reason, capped, endedBy, pages, cards, stale, tprSeconds, nextStart: start };
 }
 
 // Guest job-posting page. The offsite apply URL is only exposed on some
@@ -432,6 +439,14 @@ export function buildLinkedInAreaFilter(areas = DEFAULT_LINKEDIN_AREAS) {
   };
 }
 
+// undefined keeps what is stored: an attempt that read nothing changes nothing.
+// A manual window is outside this reading, and ends it only by covering it.
+function nextResumeOf({ plan, resume, status, advanced, outcome }) {
+  if (plan.mode === 'manual') return status === 'complete' && advanced ? null : undefined;
+  if (status === 'complete' || outcome.endedBy === 'result_ceiling') return null;
+  return outcome.pages > 0 ? { start: outcome.nextStart, to: resume?.coverageTo ?? plan.to } : undefined;
+}
+
 export async function scanLinkedIn({
   config,
   store,
@@ -456,7 +471,8 @@ export async function scanLinkedIn({
   const passesArea = buildLinkedInAreaFilter(linkedin.acceptedAreas || DEFAULT_LINKEDIN_AREAS);
   // Searches share one hourly cap, so whichever runs last gets what is left. In
   // a fixed order the last search stopped at the cap in 31 of 50 runs, and each
-  // stop left it a longer window to read (2026-11-02). Most behind goes first.
+  // stop left it a longer window to read (2026-11-02). Most behind goes first,
+  // within its share of what is left.
   const searches = (await store.listLinkedInSearches())
     .filter((search) => search.enabled)
     .sort((a, b) => (a.coveredUntil ?? 0) - (b.coveredUntil ?? 0));
@@ -472,9 +488,16 @@ export async function scanLinkedIn({
   const candidates = [];
   const results = [];
 
-  for (const search of searches) {
+  for (const [index, search] of searches.entries()) {
     const plan = planLinkedInWindow({ coveredUntil: search.coveredUntil, mode, manualHours, settings: windowSettings, now });
-    const outcome = await runLinkedInSearch({ search, window: plan, budget, fetchImpl, ...(sleep ? { sleep } : {}) });
+    const resume = planLinkedInResume({ plan, resumeStart: search.resumeStart, resumeTo: search.resumeTo, now });
+    // An equal share of what is left. What a search does not use passes to the
+    // next, and the first search can no longer leave nothing for the others.
+    const left = gate?.remaining ? await gate.remaining() : Infinity;
+    const requestShare = Math.max(1, Math.ceil(left / (searches.length - index)));
+    const outcome = await runLinkedInSearch({
+      search, window: plan, budget, fetchImpl, startAt: resume?.start ?? 0, requestShare, ...(sleep ? { sleep } : {}),
+    });
     const counts = { found: outcome.cards.length, new: 0, known: 0, filtered: 0, stale: outcome.stale || 0 };
     const source = `LinkedIn: ${search.label}`;
     for (const card of outcome.cards) {
@@ -507,13 +530,13 @@ export async function scanLinkedIn({
       candidates.push({ ...sighting, url: sighting.canonicalUrl, company: card.company, title: card.title,
         location: card.location, postedAt: card.listedAt, source });
     }
-    results.push({ search, plan, outcome, counts });
+    results.push({ search, plan, resume, outcome, counts });
   }
 
   // An empty first page is only believable when LinkedIn demonstrably
   // answered other searches in this run; otherwise it may be a soft block.
   const endpointAnswered = results.some(({ outcome }) => outcome.pages > 0 || outcome.endedBy === 'no_matches_fallback');
-  const rows = await Promise.all(results.map(async ({ search, plan, outcome, counts }) => {
+  const rows = await Promise.all(results.map(async ({ search, plan, resume, outcome, counts }) => {
     let status = outcome.status;
     let reason = outcome.reason;
     if (status === 'complete' && outcome.endedBy === 'empty_first_page' && !endpointAnswered) {
@@ -528,17 +551,17 @@ export async function scanLinkedIn({
       reason = 'empty_unverified';
     }
     if (outcome.capped && !reason) reason = 'capped';
-    const coveredUntil = nextCoveredUntil({ plan, status, previous: search.coveredUntil });
+    const coveredUntil = nextCoveredUntil({ plan: resume ? { ...plan, to: resume.coverageTo } : plan, status, previous: search.coveredUntil });
     const advanced = coveredUntil != null && coveredUntil !== search.coveredUntil;
     const row = {
       id: search.id, label: search.label, status, reason, endedBy: outcome.endedBy, capped: outcome.capped,
       pages: outcome.pages, window: { from: plan.from, to: plan.to, basis: plan.basis, mode: plan.mode },
-      warning: plan.warning, gap: advanced ? plan.gap : null, advanced, ...counts,
+      warning: plan.warning, gap: advanced ? plan.gap : null, advanced, resumedFrom: resume?.start ?? null, ...counts,
     };
     await store.recordLinkedInSearchAttempt({
       searchId: search.id, queryHash: search.queryHash, status, reason,
       summary: { ...row, id: undefined, label: undefined },
-      coveredUntil: advanced ? coveredUntil : null, gap: row.gap, attemptedAt: now,
+      coveredUntil: advanced ? coveredUntil : null, gap: row.gap, resume: nextResumeOf({ plan, resume, status, advanced, outcome }), attemptedAt: now,
     });
     return row;
   }));

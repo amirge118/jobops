@@ -69,6 +69,21 @@ export function planLinkedInWindow({ coveredUntil = null, mode = 'auto', manualH
   return { mode, from, to: now, basis: 'progress', contiguous: true, gap, warning: null };
 }
 
+// A search that stopped early continues at the offset it reached instead of
+// reading the same newest pages again (2026-11-04: 68 of 80 cards already known,
+// and the search never finished). Results are newest first, so what was posted
+// since only pushes unread ones deeper: starting there may re-read, never skips.
+// A posting taken down pulls them up, which the one page of overlap allows for.
+// Finishing covers only up to when the reading began; the next window takes the rest.
+const RESUME_OVERLAP_CARDS = 10;
+const RESUME_MAX_AGE_MS = 12 * HOUR;
+
+export function planLinkedInResume({ plan, resumeStart = null, resumeTo = null, now = Date.now() }) {
+  if (plan.basis !== 'progress' || !(resumeStart > 0) || !Number.isFinite(resumeTo)) return null;
+  if (now - resumeTo > RESUME_MAX_AGE_MS || resumeTo <= plan.from) return null;
+  return { start: Math.max(0, resumeStart - RESUME_OVERLAP_CARDS), coverageTo: resumeTo };
+}
+
 // Coverage only moves after a complete, persisted collection of a window
 // that connects to the previous coverage. Partial or failed runs never
 // advance it, so the next run retries the same stretch.

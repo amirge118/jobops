@@ -83,7 +83,8 @@ and no third-party application server are in the loop.
   Every LinkedIn request from every run counts toward one hourly cap (12 by default, shared through
   the database), and postings alone stop at 7 an hour so searches always keep part of it. Requests
   are minutes apart, and a queue reader picks up waiting LinkedIn postings every 30 minutes, newest
-  first, stopping 2 postings earlier to leave room for new links.
+  first, stopping 2 postings earlier to leave room for new links. Each search gets an equal share of
+  the requests left, and one that stops early continues from there in the next run.
   `npm run jobs:linkedin-canary` measures what LinkedIn accepts one logged request at a time; the
   evidence and next steps are in [docs/linkedin-reliability-plan.md](docs/linkedin-reliability-plan.md).
 - 💬 **WhatsApp, processed when it is worth it** — the collector stores group messages locally

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  DEFAULT_LINKEDIN_WINDOW, linkedinQueryHash, linkedinWindowSettings, nextCoveredUntil, planLinkedInWindow,
+  DEFAULT_LINKEDIN_WINDOW, linkedinQueryHash, linkedinWindowSettings, nextCoveredUntil, planLinkedInResume, planLinkedInWindow,
 } from '../scripts/jobs/linkedin-window.mjs';
 
 const HOUR = 3_600_000;
@@ -79,4 +79,16 @@ test('window settings fall back to defaults for missing or invalid values', () =
     linkedinWindowSettings({ sources: { linkedin: { overlapMinutes: 30, initialLookbackHours: -1 } } }),
     { ...DEFAULT_LINKEDIN_WINDOW, overlapMinutes: 30 },
   );
+});
+
+test('a stopped search resumes one page back, only while its reading is still recent and in the window', () => {
+  const now = Date.UTC(2026, 10, 4, 12);
+  const plan = { basis: 'progress', from: now - 10 * HOUR };
+  assert.deepEqual(planLinkedInResume({ plan, resumeStart: 40, resumeTo: now - 2 * HOUR, now }), { start: 30, coverageTo: now - 2 * HOUR });
+  assert.equal(planLinkedInResume({ plan, resumeStart: 5, resumeTo: now - 2 * HOUR, now }).start, 0);
+  assert.equal(planLinkedInResume({ plan, now }), null, 'nothing stored');
+  assert.equal(planLinkedInResume({ plan: { basis: 'progress', from: now - 20 * HOUR }, resumeStart: 40, resumeTo: now - 13 * HOUR, now }), null, 'too long ago: too much has moved');
+  assert.equal(planLinkedInResume({ plan, resumeStart: 40, resumeTo: now - 11 * HOUR, now }), null, 'the window already passed it');
+  assert.equal(planLinkedInResume({ plan: { basis: 'manual', from: now - HOUR }, resumeStart: 40, resumeTo: now - 30 * 60_000, now }), null);
+  assert.equal(planLinkedInResume({ plan: { basis: 'clock_reset', from: now - HOUR }, resumeStart: 40, resumeTo: now - 30 * 60_000, now }), null);
 });
